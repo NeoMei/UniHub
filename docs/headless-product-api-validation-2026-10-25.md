@@ -49,3 +49,5 @@ Casdoor在目标机按实际不可变镜像ID登记：`sha256:6e8d821320319a0034
 外发Webhook/Audit provider当前均未配置；报告明确标记none_configured+source_function_test，未声称验证了真实外部接收端。真实审计表、本站Nginx、journal、Docker输出及Casdoor文件日志均检查合成密码、令牌与PKCE标记。公网入口仍只支持HTTPS，内部路由和直接Casdoor signup仍被拒绝。
 
 服务器聚合证据位于 `/opt/unihub/shared/headless-acceptance-20261025/` 的公开结果JSON，目录受root权限保护；私密标记文件不作公开交付。本机无秘密副本在 `.local/server-deployment/headless/`。
+
+升级后完整备份 `/opt/unihub/backups/20261024T165114Z` 同样已完成隔离物理恢复验证。最终真实隐私复核扫描134条审计、20个合成敏感标记，以及Casdoor完整文件日志；未发现标记，外发sink仍明确未配置。验收工具的独占私有文件输出另通过race回归；部署/隐私新增10/7项回归、原部署11项及身份UI资源补丁8项均通过。
