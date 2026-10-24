@@ -34,10 +34,10 @@ Files: `internal/accounts/{store,identity,membership}.go`, `internal/accounts/st
 
 Interfaces: `accounts.New(pool) *Store`; `EnsureIdentity(ctx, Identity{Issuer,Subject,Name,Email}) (User,error)`; `ListAccounts(ctx,userID) ([]Account,error)`; `CreateTeam(ctx,userID,name) (Account,error)`; `Role(ctx,userID,accountID) (string,error)`; invitation creation addressed to an existing UniHub user ID, explicit acceptance by that user; owner/admin manage invitations, owner controls finance-role changes, final owner cannot be removed.
 
-- [ ] Write integration cases against an isolated PostgreSQL schema. Same issuer/subject returns the same user and one personal account; same email/different subject produces separate users. Verify invitation requires acceptance, wrong recipient cannot accept, admin cannot grant finance access, and last owner cannot be removed.
-- [ ] Run the tests and record missing-behavior failures before implementation.
-- [ ] Implement identity creation in one transaction with uniqueness constraints, account membership lookup and locked membership mutations.
-- [ ] Run the account integration tests and `go test -race` for the package.
+- [x] Write integration cases against an isolated PostgreSQL schema. Same issuer/subject returns the same user and one personal account; same email/different subject produces separate users. Verify invitation requires acceptance, wrong recipient cannot accept, admin cannot grant finance access, and last owner cannot be removed.
+- [x] Run the tests and record missing-behavior failures before implementation.
+- [x] Implement identity creation in one transaction with uniqueness constraints, account membership lookup and locked membership mutations.
+- [x] Run the account integration tests and `go test -race` for the package.
 
 ## Task 2: Ledger adapter and money boundaries
 
@@ -55,9 +55,9 @@ type Ledger interface {
 }
 ```
 
-- [ ] Write HTTP contract tests for successful postings, insufficient funds, unknown transport outcomes, reference lookup, large integer decoding, and idempotency conflict; independently test amount parsing with `1000000`, `0`, `-1`, `1.2`, scientific notation, overflow and fractional cents.
-- [ ] Implement the adapter against pinned v2.4.16 routes; set the same deterministic idempotency key and reference on every replay.
-- [ ] Verify against the real local Formance container: deposit `100000000`, two transfers of `80000000`; exactly one can succeed and no account becomes negative.
+- [x] Write HTTP contract tests for successful postings, insufficient funds, unknown transport outcomes, reference lookup, large integer decoding, and idempotency conflict; independently test amount parsing with `1000000`, `0`, `-1`, `1.2`, scientific notation, overflow and fractional cents.
+- [x] Implement the adapter against pinned v2.4.16 routes; set the same deterministic idempotency key and reference on every replay.
+- [x] Verify against the real local Formance container: deposit `100000000`, two transfers of `80000000`; exactly one can succeed and no account becomes negative.
 
 ## Task 3: Durable recharge and transfer service
 
@@ -65,10 +65,10 @@ Files: `internal/wallet/{service,payment,worker}.go`, `internal/database/migrati
 
 Persistence: recharge orders bind account, target product, amount, currency and merchant. Verified payment receipts have unique provider transaction IDs. Operations bind actor, account, immutable payload digest, request key, reference, status and ledger transaction ID. States are CREATED, SUBMITTING, APPLIED, REJECTED, UNKNOWN, CANCELED. Per-account execution uses PostgreSQL advisory locking on a dedicated connection; unresolved operations retain ordering before later operations for that account.
 
-- [ ] Write tests for unauthorized account access, same key/different payload, duplicate payment callbacks, wrong amount/currency/merchant, two orders sharing a payment transaction, concurrent overspend and response lost after ledger commit.
-- [ ] Implement order creation, HMAC-verified sandbox receipt handling and durable operation creation in one database transaction. Browser success never credits money.
-- [ ] Implement recovery with original reference/key; do not report a recharge APPLIED until its ledger posting is known. Authorization is rechecked before a new transfer submits; in-flight operations recover rather than silently cancel.
-- [ ] Exercise crash/retry by reconstructing the service over the same PostgreSQL data; assert a single posting and unchanged financial ownership.
+- [x] Write tests for unauthorized account access, same key/different payload, duplicate payment callbacks, wrong amount/currency/merchant, two orders sharing a payment transaction, concurrent overspend and response lost after ledger commit.
+- [x] Implement order creation, HMAC-verified sandbox receipt handling and durable operation creation in one database transaction. Browser success never credits money.
+- [x] Implement recovery with original reference/key; do not report a recharge APPLIED until its ledger posting is known. Authorization is rechecked before a new transfer submits; in-flight operations recover rather than silently cancel.
+- [x] Exercise crash/retry by reconstructing the service over the same PostgreSQL data; assert a single posting and unchanged financial ownership.
 
 ## Task 4: Verified HTTP API and runnable service
 
@@ -76,19 +76,19 @@ Files: `internal/auth/{oidc,oidc_test}.go`, `internal/httpapi/{server,server_tes
 
 HTTP routes under `/v1`: `/me`, `/accounts`, `/accounts/{id}/members`, `/accounts/{id}/invitations`, `/invitations/{id}/accept`, `/products`, `/accounts/{id}/wallets`, `/accounts/{id}/recharges`, `/accounts/{id}/transfers`, `/accounts/{id}/operations`, `/accounts/{id}/operations/{operation_id}`. Mutations use `Idempotency-Key` for money operations. Payment webhook has its own signature authentication. `/healthz` is public. Sandbox settlement endpoint requires an authenticated account finance role plus explicit sandbox mode; production rejects sandbox mode at startup.
 
-- [ ] Test a signed test issuer: correct access token accepted; wrong issuer/audience, expired token, unsigned token and Casdoor ID/refresh token rejected. Tests may use an in-process issuer; runtime has no trusted-user header or bypass authentication mode.
-- [ ] Test API authorization and request validation, including unknown JSON fields, invalid money, missing idempotency key and cross-account operation lookup.
-- [ ] Implement strict configuration and HTTP body/time limits. Keep OIDC discovery/JWKS verification and all database operations bounded by context/timeouts.
-- [ ] Build and run the API/worker against local services; verify health and unauthenticated denial. Publish documented curl contracts with parameter names, not real credentials.
+- [x] Test a signed test issuer: correct access token accepted; wrong issuer/audience, expired token, unsigned token and Casdoor ID/refresh token rejected. Tests may use an in-process issuer; runtime has no trusted-user header or bypass authentication mode.
+- [x] Test API authorization and request validation, including unknown JSON fields, invalid money, missing idempotency key and cross-account operation lookup.
+- [x] Implement strict configuration and HTTP body/time limits. Keep OIDC discovery/JWKS verification and all database operations bounded by context/timeouts.
+- [x] Build and run the API/worker against local services; verify health and unauthenticated denial. Publish documented curl contracts with parameter names, not real credentials.
 
 ## Task 5: Independent review and acceptance record
 
 Files: `docs/account-wallet-foundation-validation.md`, `README.md`.
 
-- [ ] Have an independent reviewer inspect identity isolation, duplicate/replayed money flows, authorization boundaries and restart recovery.
-- [ ] Address material findings and run relevant regressions, then run `go test -race ./...` and `go vet ./...` plus real PostgreSQL/Formance integration tests.
-- [ ] Record exact passed checks and limits. No claim of Casdoor browser acceptance, real payment acceptance, SuperWagie integration or production readiness without corresponding execution evidence.
-- [ ] Document startup, test configuration, sandbox limitations and the next phase-one slice (subscriptions/credits/user interface and real product integration).
+- [x] Have an independent reviewer inspect identity isolation, duplicate/replayed money flows, authorization boundaries and restart recovery.
+- [x] Address material findings and run relevant regressions, then run `go test -race ./...` and `go vet ./...` plus real PostgreSQL/Formance integration tests.
+- [x] Record exact passed checks and limits. No claim of Casdoor browser acceptance, real payment acceptance, SuperWagie integration or production readiness without corresponding execution evidence.
+- [x] Document startup, test configuration, sandbox limitations and the next phase-one slice (subscriptions/credits/user interface and real product integration).
 
 ## Execution decisions
 
