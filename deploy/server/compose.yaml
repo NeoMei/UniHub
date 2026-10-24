@@ -1,0 +1,69 @@
+name: unihub-server
+
+services:
+  postgres:
+    image: postgres:16.15-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
+    container_name: unihub-server-postgres
+    restart: unless-stopped
+    labels: &managed
+      com.unihub.managed: "true"
+      com.unihub.installation: ${INSTALLATION_ID:?Run server bootstrap first}
+    ports: ["127.0.0.1:55438:5432"]
+    environment:
+      POSTGRES_USER: unihub_admin
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Run server bootstrap first}
+      POSTGRES_DB: postgres
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    networks: [server]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $$POSTGRES_USER -d postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  ledger:
+    image: ghcr.io/formancehq/ledger:v2.4.16@sha256:fc624af4dde0b9fa8b43ae02b7297fc3f15266df7c9806edec794f1420b40e62
+    container_name: unihub-server-ledger
+    restart: unless-stopped
+    labels: *managed
+    command: ["serve", "--worker"]
+    ports: ["127.0.0.1:53068:3068"]
+    environment:
+      POSTGRES_URI: ${LEDGER_POSTGRES_URI:?Run server bootstrap first}
+      AUTO_UPGRADE: "true"
+      OTEL_SERVICE_NAME: unihub-server-ledger
+    networks: [server]
+    depends_on:
+      postgres: {condition: service_healthy}
+  casdoor:
+    image: casbin/casdoor:v4.23.0@sha256:e13c9aada231f7338a03ab0ae7054d0a9480e77283338ab9fc319d88fe2b3ce0
+    container_name: unihub-server-casdoor
+    restart: unless-stopped
+    labels: *managed
+    group_add: ["1000"]
+    ports: ["127.0.0.1:58000:8000"]
+    volumes:
+      - ${UNIHUB_ROOT:?Run server bootstrap first}/shared/casdoor/conf:/conf:ro
+      - ${RELEASE_DIR:?Run server bootstrap first}/casdoor-web:/web/build:ro
+      - ${RELEASE_DIR:?Run server bootstrap first}/casdoor-web/swagger:/swagger:ro
+      - casdoor-logs:/logs
+    networks: [server]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
+      interval: 5s
+      timeout: 3s
+      start_period: 60s
+      retries: 24
+
+networks:
+  server:
+    name: unihub-server
+    external: true
+volumes:
+  postgres:
+    name: unihub-server-postgres
+    external: true
+  casdoor-logs:
+    name: unihub-server-casdoor-logs
+    external: true

@@ -1,0 +1,24 @@
+[Unit]
+Description=UniHub private online full-cluster backup
+After=docker.service
+Requires=docker.service
+ConditionPathExists=/opt/unihub/shared/credentials.json
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/unihub/current
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+ExecStart=/usr/bin/python3 /opt/unihub/current/deploy/server/backup.py
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/unihub/backups
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true

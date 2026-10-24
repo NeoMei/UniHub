@@ -1,0 +1,33 @@
+[Unit]
+Description=UniHub sandbox identity and account console
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+StartLimitIntervalSec=120
+StartLimitBurst=12
+
+[Service]
+Type=simple
+User=unihub
+Group=unihub
+WorkingDirectory=/opt/unihub/current
+EnvironmentFile=/opt/unihub/shared/runtime.env
+ExecStartPre=/opt/unihub/current/bin/unihub migrate
+ExecStart=/opt/unihub/current/bin/unihub serve
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

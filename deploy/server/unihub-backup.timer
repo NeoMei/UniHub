@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily UniHub private cluster backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Asia/Shanghai
+RandomizedDelaySec=300
+Persistent=true
+Unit=unihub-backup.service
+
+[Install]
+WantedBy=timers.target

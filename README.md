@@ -24,6 +24,8 @@ UniHub 统一用户与计费平台，为多个产品提供共用的用户、企�
 - [产品接入核查](docs/integration-findings-2026-10-24.md)
 - [后续扩展方向与第三方项目调研](docs/extension-roadmap-2026-10-24.md)
 - [本地开发与 API 使用](docs/local-development.md)
+- [服务器部署验收](docs/server-deployment-2026-10-24.md)
+- [服务器运维与恢复](deploy/server/README.md)
 - [账户与资金基础实施计划](docs/superpowers/plans/2026-10-24-account-wallet-foundation.md)
 - [基础 API](docs/account-wallet-api.md)
 - [账户基础验收](docs/account-wallet-foundation-validation.md)
