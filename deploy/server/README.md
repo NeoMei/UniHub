@@ -2,6 +2,42 @@
 
 This deployment is a persistent **sandbox**. It uses the approved development-mode guards (`APP_ENV=development`, `SANDBOX_CATALOG=true`, `PAYMENT_MODE=sandbox`) and listens only on loopback. The public console and identity issuer are both `https://unihub.quukk.com`. Do not describe deployment success as real payment/model-provider acceptance.
 
+## Audited backend and gated headless upgrade
+
+The server can register the locally built official-source Casdoor audit backend from `deploy/identity/build.py`. It stores an **actual Docker immutable local image ID**, never an invented repository digest. PostgreSQL and Formance pins remain unchanged. Registering an image checks the source-manifest lock, backend artifact SHA-256, Linux amd64/user1000/entrypoint contract, the official runtime's layer prefix plus exactly two added layers, and `/server` inside a network-isolated read-only container. The existing UI/Swagger/config mounts remain unchanged.
+
+Build the custom image on an authorized build machine and preserve its public `image-context` (server, source manifest and licenses). Transfer the image with `docker save`/`docker load` or an approved registry; preserve the original official runtime reference for base-layer verification. Place the public artifacts under the immutable release, for example `identity-backend/`. No private `.local` tree, users or credentials belongs in the release.
+
+Use the following sequence on the deployment host, substituting an actual release and approved registry file:
+
+```sh
+python3 /opt/unihub/releases/<revision>/deploy/server/bootstrap.py prepare --release /opt/unihub/releases/<revision>
+python3 /opt/unihub/releases/<revision>/deploy/server/bootstrap.py register-identity-image --release /opt/unihub/releases/<revision> --identity-artifacts /opt/unihub/releases/<revision>/identity-backend --image unihub/casdoor:v4.23.0-audit-v1
+python3 /opt/unihub/releases/<revision>/deploy/server/bootstrap.py stage-headless --release /opt/unihub/releases/<revision> --registry /opt/unihub/releases/<revision>/products.approved.json
+python3 /opt/unihub/releases/<revision>/deploy/server/bootstrap.py up --release /opt/unihub/releases/<revision>
+```
+
+`register-identity-image` validates the current installation's labels, Compose project/service, ports, network and mounts before recording `shared/identity-image.json`. During this controlled transition it accepts the currently owned official image or the previously registered custom ID. After `up` verifies the running new image and backend hash, it marks the transition complete and no longer accepts the old image. A different image/binary resets the privacy gate. Custom images use `pull_policy=never`; unregistered initial installations retain the pinned official image with `pull_policy=missing`.
+
+`stage-headless` validates strict public policy, generates independent management/key/per-product secrets **only when adding the capability**, and preserves every existing installation secret and user ID. Subsequent missing headless secrets fail rather than rotate. It adds a non-shared `app-unihub-provisioner` in the `unihub` organization, with no interactive login, public registration, redirects or grant types. Its Basic management credential acts only as an admin of `unihub` under fixed Casdoor's native organization checks, and stays in private root0600 runtime configuration. It is never registered as a public product. Product apps keep authorization_code/PKCE and remain non-shared. Approved registration enables the named product's native registration policy, with username/password required and optional email with no verification; the public nginx `/api/signup` route remains blocked and UniHub's runtime identity gate stays off until acceptance. The managed description and full policy match `scripts/product_client.py`, so its independent readback remains usable. Existing application names/client IDs/secrets/organization/policies are verified; conflicts fail without resetting them.
+
+Public approved policies must use distinct new client/application IDs, separate from `unihub-console`, legacy `superwagie-unihub` and `unihub-provisioner`. See `docs/headless-product-api.md` for fields and scope meanings. The draft may have `password_login`/`registration` true. The bootstrap publishes it as `/opt/unihub/headless-config/products.draft.json` with mode0644 inside a root0755 directory. The nonroot `unihub` service can read the separate active `/opt/unihub/headless-config/products.json`; while the privacy gate is false, the active file forcibly disables both identity flags. Public files contain no secrets and are outside the private mode0700 `shared` tree. Financial scopes still require current user financial RBAC.
+
+Use `products.draft.json` only for a controlled private acceptance server/probe. Verify actual canonical adapter registration, login, nonce/state/PKCE and token exchange against the patched IdP. Inspect the resulting database audit rows, actual enabled external sinks, and proxy/application/container logs for synthetic secret markers. The public UniHub service remains disabled until evidence is accepted. If no webhook/audit exporter is configured, the report must explicitly record that mode and source-function evidence; it must not describe a nonexistent external export as tested.
+
+`enable-headless` consumes a fresh real-service report, verifies the currently owned/running image and `/server` again, validates report/proof-file SHA-256 values and binds the report to the exact staged draft hash. It does not infer acceptance from image labels or source unit tests:
+
+```sh
+python3 /opt/unihub/releases/<revision>/deploy/server/bootstrap.py enable-headless --release /opt/unihub/releases/<revision> --privacy-report /opt/unihub/acceptance/<run>/privacy-report.json
+systemctl restart unihub
+```
+
+The report schema is `schema_version=1`, `installation_id`, `image_id`, `backend_sha256`, `policy_sha256`, UTC `verified_at` no older than24h, boolean `checks` for registration/password_login/pkce_nonce_state/audit_records_redacted/webhook_payloads_redacted/proxy_logs_redacted, and nonempty `evidence_files=[{path,sha256}]` relative to the report directory. Every proof must exist and match. `sink_modes` is preserved in the acceptance state. The gate covers canonical requests created by UniHub's adapter, not all equivalent arbitrary encodings sent directly to Casdoor.
+
+Repeated prepare and unchanged policy staging preserve an accepted gate for the same image/backend/policy. Changed policy or image closes it. `disable-headless` is a separate command with the same root/release flags; restart `unihub` afterward. Neither preparation nor enable/disable commands restart the application automatically. The loopback-only Go listener enables `HEADLESS_TRUST_LOOPBACK_PROXY=true`; nginx replaces `X-Real-IP` with its observed `$remote_addr`, so external supplied IP headers cannot select another rate-limit bucket.
+
+Run `python3 deploy/server/test-headless-deployment.py` plus the existing deployment/identity scripts. For the isolated PostgreSQL policy regression, set `UNIHUB_TEST_DATABASE_URL` in the process environment. It uses a random temporary schema, validates real insert/idempotency/conflict behavior, then removes only that schema. No production server is accessed by these tests.
+
 ## Artifact and ownership contract
 
 Run on Ubuntu 24.04 x86_64 as root with Python 3, Docker Engine/Compose and nginx already installed. No package installer, firewall change, unrelated restart or existing service removal is performed by this bundle. Existing ports 55438, 53068, 58000 and Go 8088 must be available; public HTTPS443 forwards to this host's 8484. This hostname is HTTPS-only: its dedicated port80 vhost closes HTTP connections with nginx444, preventing fallback to another hosted site. Existing wildcard certificate/key are read at `/etc/nginx/ssl/_.quukk.com_chain.pem` and `/etc/nginx/ssl/_.quukk.com_key.key`.

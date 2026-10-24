@@ -162,6 +162,12 @@ func (s *Service) Verify(ctx context.Context, token, model string) (Claims, erro
 	return c, nil
 }
 func (s *Service) Revoke(ctx context.Context, actor, account, id string) error {
+	return s.RevokeForProduct(ctx, actor, account, id, "")
+}
+
+// RevokeForProduct preserves account and actor checks while restricting product
+// clients to their own immutable credential origin. Empty product is console scope.
+func (s *Service) RevokeForProduct(ctx context.Context, actor, account, id, product string) error {
 	tx, e := s.pool.Begin(ctx)
 	if e != nil {
 		return e
@@ -174,12 +180,15 @@ func (s *Service) Revoke(ctx context.Context, actor, account, id string) error {
 	if e != nil {
 		return e
 	}
-	var owner string
-	if e = tx.QueryRow(ctx, `SELECT actor_id FROM model_credentials WHERE id=$1 AND account_id=$2`, id, account).Scan(&owner); e != nil {
+	var owner, origin string
+	if e = tx.QueryRow(ctx, `SELECT actor_id,origin_product_id FROM model_credentials WHERE id=$1 AND account_id=$2`, id, account).Scan(&owner, &origin); e != nil {
 		if errors.Is(e, pgx.ErrNoRows) {
 			return accounts.ErrNotFound
 		}
 		return e
+	}
+	if product != "" && product != origin {
+		return accounts.ErrNotFound
 	}
 	if actor != owner && role != "owner" && role != "billing_admin" {
 		return accounts.ErrForbidden

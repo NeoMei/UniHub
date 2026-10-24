@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Prepare/start only the dedicated UniHub dependency stack. Never prints secrets."""
 import argparse
+from datetime import datetime, timezone, timedelta
+import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
 import secrets
+import re
 import shlex
 import socket
 import subprocess
@@ -12,6 +16,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+import urllib.parse
 
 PUBLIC_URL = 'https://unihub.quukk.com'
 LABEL = 'com.unihub.installation'
@@ -34,6 +39,13 @@ THEME = {'isEnabled': True, 'themeType': 'default', 'colorPrimary': '#087F8C',
 ORG_BRAND = {'displayName': 'UniHub', 'logo': BRAND_LOGO, 'logoDark': BRAND_LOGO,
     'favicon': BRAND_ICON, 'themeData': THEME}
 APP_BRAND = {**ORG_BRAND, 'title': 'UniHub', 'footerHtml': '<span>UniHub · 统一身份与账户中心</span>'}
+AUDITED_COMMIT = '1b91d9d319a127e9b1af88fa7a20bb35c052b9d8'
+AUDITED_ARCHIVE_SHA = '3b2b934c28e5fce5eef124755a793930139b4ca1416ef051ec241152529c316b'
+AUDITED_RECORD_SHA = 'cbc348261a902aa30ce14da39555c3b269d28b904f62ab82e431890ac63f78ed'
+PROVISIONER_APPLICATION = 'app-unihub-provisioner'
+PROVISIONER_CLIENT = 'unihub-provisioner'
+PRIVACY_CHECKS = ('registration', 'password_login', 'pkce_nonce_state', 'audit_records_redacted', 'webhook_payloads_redacted', 'proxy_logs_redacted')
+PRODUCT_SCOPES = {'identity:read','accounts:read','accounts:write','members:read','members:write','catalog:read','subscriptions:read','credits:read','wallets:read','recharges:read','recharges:write','transfers:write','operations:read','orders:read','orders:write','settings:read','settings:write','refunds:write','usage:read','model-credentials:write'}
 
 
 class DeploymentError(Exception):
@@ -132,6 +144,9 @@ def inventory_resources():
 
 
 def validate_resources(inventory, credentials, root):
+    pin = identity_pin(root)
+    if pin and pin.get('installation_id') != credentials['installation_id']:
+        raise DeploymentError('Identity image pin belongs to a different installation.')
     for key, resource in inventory.items():
         kind, name = key.split(':', 1)
         labels = (resource.get('Config', {}).get('Labels') if kind == 'container' else resource.get('Labels')) or {}
@@ -140,9 +155,18 @@ def validate_resources(inventory, credentials, root):
         if kind != 'container':
             continue
         service = name.removeprefix('unihub-server-')
+        allowed_images = {IMAGES[service]}
+        if service == 'casdoor' and pin:
+            allowed_images = {pin['image_id']}
+            if not pin.get('transition_complete', False):
+                allowed_images.add(IMAGES[service])
+                if pin.get('previous_image_id'):
+                    allowed_images.add(pin['previous_image_id'])
+        configured_image = resource.get('Config', {}).get('Image')
         if (labels.get('com.docker.compose.project') != 'unihub-server'
                 or labels.get('com.docker.compose.service') != service
-                or resource.get('Config', {}).get('Image') != IMAGES[service]):
+                or configured_image not in allowed_images
+                or (service == 'casdoor' and configured_image.startswith('sha256:') and resource.get('Image') != configured_image)):
             raise DeploymentError(f'Refusing unexpected container configuration {name}.')
         port, host = {'postgres': ('5432/tcp', '55438'), 'ledger': ('3068/tcp', '53068'), 'casdoor': ('8000/tcp', '58000')}[service]
         bindings = resource.get('HostConfig', {}).get('PortBindings') or {}
@@ -201,18 +225,43 @@ def build_seed(credentials):
         'clientSecret': credentials['superwagie_client_secret'], 'redirectUris': [
             'http://127.0.0.1:57991/api/platform-account/callback',
             'http://localhost:57991/api/platform-account/callback']}
+    applications = [app, product]
+    if credentials.get('headless_management_secret'):
+        applications.append({**app, 'name': PROVISIONER_APPLICATION, 'clientId': PROVISIONER_CLIENT,
+            'clientSecret': credentials['headless_management_secret'], 'organization': 'unihub',
+            'isShared': False, 'disableSignin': True, 'enablePassword': False, 'enableSignUp': False,
+            'grantTypes': [], 'redirectUris': []})
+    for client in credentials.get('headless_clients', []):
+        applications.append(headless_product_application(client,credentials['headless_product_secrets'][client['client_id']]))
     return {'organizations': [{'owner': 'admin', 'name': 'unihub', **ORG_BRAND,
         'defaultAvatar': BRAND_ICON, 'passwordType': 'bcrypt', 'passwordOptions': ['AtLeast8'],
         'defaultApplication': 'app-unihub', 'defaultTokenFormat': 'JWT-Standard',
         'languages': ['en', 'zh'], 'countryCodes': ['CN'], 'accountItems': [
             {'name': 'Name', 'visible': True, 'viewRule': 'Self', 'modifyRule': 'Immutable'},
             {'name': 'Display name', 'visible': True, 'viewRule': 'Self', 'modifyRule': 'Self'}]}],
-        'applications': [app, product],
+        'applications': applications,
         'users': [{'owner': 'unihub', 'name': name, 'id': credentials[name + '_id'],
             'type': 'normal-user', 'password': credentials[name + '_password'],
             'displayName': name.title(), 'email': name + '@example.test', 'isAdmin': False,
             'isForbidden': False, 'isDeleted': False, 'signupApplication': 'app-unihub'}
             for name in ['owner', 'acceptance']]}
+
+
+def headless_product_application(c, secret):
+    password=bool(c.get('password_login') or c.get('registration'))
+    return {'owner':'admin','name':c['application'],'displayName':c['product_id'],
+        'description':'UniHub managed product: '+c['product_id'],'organization':'unihub','cert':'cert-built-in',
+        'category':'Default','type':'All','isShared':False,'clientId':c['client_id'],'clientSecret':secret,
+        'enablePassword':password,'enableSignUp':c.get('registration',False),'disableSelfSignup':not c.get('registration',False),
+        'disableSignin':False,'enableSigninSession':False,'enableAutoSignin':False,'defaultGroup':'','defaultTag':'','providers':[],
+        'signinMethods':[{'name':'Password','displayName':'Password','rule':'All' if password else 'Hide password'}],
+        'signinItems':[{'name':x,'visible':True,'rule':'None'} for x in ['Username','Password','Login button']],
+        'signupItems':[{'name':'Username','visible':True,'required':True,'rule':'None'},
+            {'name':'Password','visible':True,'required':True,'rule':'None'},
+            {'name':'Display name','visible':True,'required':False,'rule':'All'},
+            {'name':'Email','visible':True,'required':False,'rule':'No verification'}],
+        'grantTypes':['authorization_code'],'redirectUris':c['redirect_uris'],'tokenFormat':'JWT-Standard','tokenSigningMethod':'RS256',
+        'expireInHours':1,'cookieExpireInHours':1,'failedSigninLimit':5,'failedSigninFrozenTime':15}
 
 
 def prepare(root, release, inventory):
@@ -261,10 +310,15 @@ def prepare(root, release, inventory):
         'OIDC_CLIENT_SECRET': credentials['client_secret'], 'CONSOLE_STATIC_DIR': str(root / 'current/web/dist'),
         'MODEL_SERVICE_TOKEN': credentials['model_service_token'], 'SANDBOX_CATALOG': 'true',
         'BILLING_OPERATOR_IDS': '', 'OPS_OIDC_AUDIENCE': '', 'PAYMENT_MODE': 'sandbox',
-        'PAYMENT_MERCHANT': 'unihub-sandbox', 'PAYMENT_SIGNING_KEY': credentials['payment_signing_key']}
+        'PAYMENT_MERCHANT': 'unihub-sandbox', 'PAYMENT_SIGNING_KEY': credentials['payment_signing_key'],
+        'HEADLESS_TRUST_LOOPBACK_PROXY': 'true', 'HEADLESS_AUDIT_REDACTION_VERIFIED': 'false'}
+    configure_headless_runtime(root, credentials, runtime)
+    pin = identity_pin(root)
     compose_env = {'UNIHUB_ROOT': str(root), 'RELEASE_DIR': str(release),
         'INSTALLATION_ID': credentials['installation_id'], 'POSTGRES_ADMIN_PASSWORD': credentials['postgres_admin_password'],
-        'LEDGER_POSTGRES_URI': 'postgresql://unihub_ledger:' + credentials['ledger_database_password'] + '@unihub-server-postgres:5432/ledger?sslmode=disable'}
+        'LEDGER_POSTGRES_URI': 'postgresql://unihub_ledger:' + credentials['ledger_database_password'] + '@unihub-server-postgres:5432/ledger?sslmode=disable',
+        'CASDOOR_IMAGE': pin['image_id'] if pin else IMAGES['casdoor'],
+        'CASDOOR_PULL_POLICY': 'never' if pin else 'missing'}
     atomic_write(shared / 'runtime.env', env_text(runtime))
     atomic_write(shared / 'compose.env', env_text(compose_env))
     private_directory(shared / 'casdoor')
@@ -311,6 +365,264 @@ def database_sql(credentials):
         sql.append(f'REVOKE ALL ON DATABASE {database} FROM PUBLIC;')
         sql.append(f'GRANT CONNECT, TEMPORARY ON DATABASE {database} TO {owner};')
     return '\n'.join(sql) + '\n'
+
+
+def file_sha256(path):
+    value = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def identity_pin(root):
+    path = Path(root) / 'shared/identity-image.json'
+    no_symlink(path)
+    if not path.exists():
+        return None
+    pin = json.loads(path.read_text())
+    if (not re.fullmatch(r'sha256:[0-9a-f]{64}', pin.get('image_id', ''))
+            or not re.fullmatch(r'[0-9a-f]{64}', pin.get('backend_sha256', ''))
+            or pin.get('source_commit') != AUDITED_COMMIT):
+        raise DeploymentError('Invalid audited identity image pin.')
+    return pin
+
+
+def register_identity_image(root, artifacts, image, inventory):
+    root, artifacts = Path(root).absolute(), Path(artifacts).absolute()
+    no_symlink(artifacts)
+    credentials = json.loads((root / 'shared/credentials.json').read_text())
+    validate_resources(inventory, credentials, root)
+    manifest_path = artifacts / 'source-manifest.json'
+    no_symlink(manifest_path)
+    manifest = json.loads(manifest_path.read_text())
+    source = manifest.get('source', {})
+    backend = manifest.get('binary_sha256', '')
+    if (source.get('commit') != AUDITED_COMMIT or source.get('archive_sha256') != AUDITED_ARCHIVE_SHA
+            or source.get('patched_record_sha256') != AUDITED_RECORD_SHA
+            or source.get('runtime_image') != IMAGES['casdoor']
+            or manifest.get('privacy_baseline_reproduced') is not True
+            or manifest.get('privacy_patched_source_functions_passed') is not True
+            or manifest.get('binary_target') != 'linux/amd64' or manifest.get('cgo_enabled') is not False
+            or not re.fullmatch(r'[0-9a-f]{64}', backend)):
+        raise DeploymentError('Identity artifacts do not match the reviewed audit backend.')
+    no_symlink(artifacts / 'server')
+    if file_sha256(artifacts / 'server') != backend:
+        raise DeploymentError('Identity backend artifact checksum mismatch.')
+    info = json.loads(run(['docker', 'image', 'inspect', image]))[0]
+    image_id = info.get('Id', '')
+    if (not re.fullmatch(r'sha256:[0-9a-f]{64}', image_id) or info.get('Os') != 'linux'
+            or info.get('Architecture') != 'amd64' or info.get('Config', {}).get('User') != '1000'
+            or info.get('Config', {}).get('Entrypoint') != ['/server']):
+        raise DeploymentError('Identity image has an unexpected immutable runtime contract.')
+    base = json.loads(run(['docker', 'image', 'inspect', IMAGES['casdoor']]))[0]
+    if base.get('Architecture') != 'amd64':
+        # Cross-build inspection on Apple Silicon needs the platform selector;
+        # the actual amd64 server can use the default inspect on older Engines.
+        base = json.loads(run(['docker', 'image', 'inspect', '--platform', 'linux/amd64', IMAGES['casdoor']]))[0]
+    base_layers = base.get('RootFS', {}).get('Layers', [])
+    layers = info.get('RootFS', {}).get('Layers', [])
+    if not base_layers or layers[:len(base_layers)] != base_layers or len(layers) != len(base_layers) + 2:
+        raise DeploymentError('Identity image is not the reviewed two-layer extension of the official runtime.')
+    observed = run(['docker', 'run', '--rm', '--platform', 'linux/amd64', '--network', 'none', '--read-only',
+        '--cap-drop', 'ALL', '--entrypoint', 'sha256sum', image_id, '/server']).split()
+    if not observed or observed[0] != backend:
+        raise DeploymentError('Identity image backend checksum differs from the reviewed artifact.')
+    previous = identity_pin(root)
+    pin = {'schema_version': 1, 'installation_id': credentials['installation_id'], 'image_id': image_id,
+        'backend_sha256': backend, 'source_commit': AUDITED_COMMIT,
+        'source_manifest_sha256': file_sha256(manifest_path), 'transition_complete': False}
+    if previous:
+        if previous['image_id'] == image_id:
+            pin['transition_complete'] = previous.get('transition_complete', False)
+        else:
+            pin['previous_image_id'] = previous['image_id']
+    atomic_write(root / 'shared/identity-image.json', json.dumps(pin, indent=2) + '\n')
+    # A different binary always requires a new real-service privacy acceptance.
+    if not previous or previous['backend_sha256'] != backend or previous['image_id'] != image_id:
+        atomic_write(root / 'shared/headless-audit.json', json.dumps({'enabled': False}) + '\n')
+    return pin
+
+
+def validate_registry(clients):
+    if not isinstance(clients, list) or not clients or len(clients) > 100:
+        raise DeploymentError('Headless registry must be a bounded nonempty client array.')
+    allowed = {'product_id','client_id','application','organization','redirect_uris','origins','scopes','billing_products','password_login','registration'}
+    reserved_clients = {'unihub-console','superwagie-unihub',PROVISIONER_CLIENT}
+    reserved_apps = {'app-unihub','app-superwagie','app-built-in',PROVISIONER_APPLICATION}
+    seen_clients, seen_apps = set(), set()
+    for c in clients:
+        if (not isinstance(c, dict) or set(c) - allowed
+                or not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', c.get('product_id',''))
+                or not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', c.get('client_id',''))
+                or not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', c.get('application',''))
+                or '-org-' in c['client_id'] or c.get('organization') != 'unihub'
+                or c['client_id'] in reserved_clients | seen_clients or c['application'] in reserved_apps | seen_apps
+                or not isinstance(c.get('password_login',False),bool) or not isinstance(c.get('registration',False),bool)):
+            raise DeploymentError('Headless client identity conflicts with a reserved or invalid policy.')
+        for key in ['scopes','billing_products','redirect_uris','origins']:
+            values = c.get(key, [])
+            if not isinstance(values,list) or len(values)>100 or any(not isinstance(v,str) for v in values) or len(set(values))!=len(values):
+                raise DeploymentError('Invalid headless client policy list.')
+        if not c.get('redirect_uris') or set(c.get('scopes',[]))-PRODUCT_SCOPES:
+            raise DeploymentError('Headless client requires exact redirects and reviewed known scopes.')
+        for product in c.get('billing_products',[]):
+            if not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}',product):
+                raise DeploymentError('Invalid headless billing product.')
+        for key in ['redirect_uris','origins']:
+            for value in c.get(key,[]):
+                u = urllib.parse.urlsplit(value)
+                try:
+                    local = u.hostname=='localhost' or ipaddress.ip_address(u.hostname).is_loopback
+                except ValueError:
+                    local = False
+                if (not u.hostname or u.username or u.password or u.fragment or re.search(r'[\s*\\]',urllib.parse.unquote(value))
+                        or (u.scheme!='https' and not (u.scheme=='http' and local))
+                        or (key=='origins' and (u.path or u.query))):
+                    raise DeploymentError('Headless client URL must be an exact HTTPS or loopback address.')
+        seen_clients.add(c['client_id']);seen_apps.add(c['application'])
+    return clients
+
+
+def stage_headless(root, clients):
+    clients = validate_registry(clients)
+    path = Path(root) / 'shared/credentials.json'
+    no_symlink(path)
+    credentials = json.loads(path.read_text())
+    if credentials.get('headless_clients'):
+        if any(not re.fullmatch(r'[0-9a-f]{64}',credentials.get(k,'')) for k in ['headless_management_secret','headless_identity_key']):
+            raise DeploymentError('Existing headless credentials are incomplete; refusing secret regeneration.')
+        for existing in credentials['headless_clients']:
+            if not re.fullmatch(r'[0-9a-f]{64}',credentials.get('headless_product_secrets',{}).get(existing['client_id'],'')):
+                raise DeploymentError('Existing product application secret is missing; refusing rotation.')
+    credentials.setdefault('headless_management_secret', secrets.token_hex(32))
+    credentials.setdefault('headless_identity_key', secrets.token_hex(32))
+    product_secrets = credentials.setdefault('headless_product_secrets', {})
+    for client in clients:
+        product_secrets.setdefault(client['client_id'], secrets.token_hex(32))
+    changed = credentials.get('headless_clients') != clients
+    credentials['headless_clients'] = clients
+    atomic_write(path, json.dumps(credentials, indent=2) + '\n')
+    # Staging a changed registration/login policy always requires re-acceptance.
+    if changed:
+        atomic_write(Path(root) / 'shared/headless-audit.json', json.dumps({'enabled': False}) + '\n')
+
+
+def configure_headless_runtime(root, credentials, runtime):
+    clients = credentials.get('headless_clients', [])
+    if not clients:
+        return
+    validate_registry(clients)
+    for key in ['headless_management_secret','headless_identity_key']:
+        if not re.fullmatch(r'[0-9a-f]{64}',credentials.get(key,'')):
+            raise DeploymentError('Headless credentials are incomplete; no secret was regenerated.')
+    pin = identity_pin(root)
+    state_path = Path(root) / 'shared/headless-audit.json'
+    no_symlink(state_path)
+    state = json.loads(state_path.read_text()) if state_path.exists() else {}
+    policy_text=json.dumps(clients,indent=2)+'\n'
+    policy_sha=hashlib.sha256(policy_text.encode()).hexdigest()
+    enabled = (state.get('enabled') is True and pin and pin.get('transition_complete') is True
+        and state.get('installation_id')==credentials['installation_id'] and state.get('policy_sha256')==policy_sha
+        and state.get('image_id')==pin['image_id'] and state.get('backend_sha256')==pin['backend_sha256'])
+    published = []
+    for client in clients:
+        published.append({**client,'password_login':bool(enabled and client.get('password_login')),'registration':bool(enabled and client.get('registration'))})
+    public = Path(root) / 'headless-config'
+    private_directory(public, 0o755)
+    atomic_write(public / 'products.draft.json',policy_text,0o644)
+    atomic_write(public / 'products.json',json.dumps(published,indent=2)+'\n',0o644)
+    runtime.update({'PRODUCT_CLIENTS_FILE':str(public / 'products.json'), 'HEADLESS_IDENTITY_KEY':credentials['headless_identity_key'],
+        'HEADLESS_MANAGEMENT_CLIENT_ID':PROVISIONER_CLIENT,'HEADLESS_MANAGEMENT_CLIENT_SECRET':credentials['headless_management_secret'],
+        'HEADLESS_AUDIT_REDACTION_VERIFIED':'true' if enabled else 'false'})
+
+
+def headless_applications_sql(credentials):
+    if not credentials.get('headless_clients'):
+        return ''
+    seed = build_seed(credentials)
+    statements=['BEGIN;']
+    apps=[a for a in seed['applications'] if a['name'] not in {'app-unihub','app-superwagie'}]
+    for app in apps:
+        name,client,secret=map(literal,[app['name'],app['clientId'],app['clientSecret']])
+        # Client ID collision or pre-existing broader application fails before an
+        # insertion. Existing secrets and organization ownership are never reset.
+        statements.append(f"DO $$ BEGIN IF EXISTS(SELECT 1 FROM application WHERE client_id={client} AND NOT(owner='admin' AND name={name})) OR EXISTS(SELECT 1 FROM application WHERE owner='admin' AND name={name} AND (organization<>'unihub' OR is_shared=true OR client_id<>{client} OR client_secret<>{secret})) THEN RAISE EXCEPTION 'Headless application ownership or credentials conflict'; END IF; END $$;")
+        fields={'name':app['name'],'client_id':app['clientId'],'client_secret':app['clientSecret'],'organization':'unihub',
+            'is_shared':False,'disable_signin':app['disableSignin'],'enable_password':app['enablePassword'],'enable_sign_up':False,
+            'grant_types':json.dumps(app['grantTypes']),'redirect_uris':json.dumps(app['redirectUris'])}
+        json_fields={'grant_types','redirect_uris'}
+        if app['name'] != PROVISIONER_APPLICATION:
+            mapping={'displayName':'display_name','description':'description','cert':'cert','category':'category','type':'type',
+                'enableSignUp':'enable_sign_up','disableSelfSignup':'disable_self_signup','enableSigninSession':'enable_signin_session',
+                'enableAutoSignin':'enable_auto_signin','defaultGroup':'default_group','defaultTag':'default_tag','providers':'providers',
+                'signinMethods':'signin_methods','signinItems':'signin_items','signupItems':'signup_items','tokenFormat':'token_format',
+                'tokenSigningMethod':'token_signing_method','expireInHours':'expire_in_hours','cookieExpireInHours':'cookie_expire_in_hours',
+                'failedSigninLimit':'failed_signin_limit','failedSigninFrozenTime':'failed_signin_frozen_time'}
+            for source,target in mapping.items():
+                value=app[source]
+                if isinstance(value,list):
+                    value=json.dumps(value);json_fields.add(target)
+                fields[target]=value
+            statements.append(f"DO $$ BEGIN IF EXISTS(SELECT 1 FROM application WHERE owner='admin' AND name={name} AND description IS DISTINCT FROM {literal(app['description'])}) THEN RAISE EXCEPTION 'Existing application is not this managed product'; END IF; END $$;")
+        overlay=literal(json.dumps(fields))+'::jsonb'
+        statements.append(f"INSERT INTO application SELECT (jsonb_populate_record(NULL::application,to_jsonb(template)||{overlay})).* FROM application template WHERE owner='admin' AND name='app-unihub' AND NOT EXISTS(SELECT 1 FROM application WHERE owner='admin' AND name={name});")
+        expectations=[]
+        for key,value in fields.items():
+            if key in {'signup_items','signin_items','signin_methods'}:
+                # Casdoor serializes zero/default fields into nested structs.
+                # Preserve exact order/count and compare all approved fields.
+                items=json.loads(value)
+                expectations.append(f"jsonb_array_length({key}::jsonb)={len(items)}")
+                expectations.extend(f"({key}::jsonb->{index}) @> {literal(json.dumps(item))}::jsonb" for index,item in enumerate(items))
+            elif key in json_fields:
+                expectations.append(key+'::jsonb IS NOT DISTINCT FROM '+literal(value)+'::jsonb')
+            else:
+                expectations.append(key+' IS NOT DISTINCT FROM '+(literal(value) if isinstance(value,str) else str(value).lower()))
+        expected=' AND '.join(expectations)
+        statements.append(f"DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM application WHERE owner='admin' AND {expected}) THEN RAISE EXCEPTION 'Headless application policy verification failed'; END IF; END $$;")
+    return '\n'.join(statements+['COMMIT;'])+'\n'
+
+
+def validate_privacy_evidence(report, credentials, pin, folder):
+    try:
+        stamp=datetime.fromisoformat(report['verified_at'].replace('Z','+00:00'))
+        fresh=timedelta(0)<=datetime.now(timezone.utc)-stamp<=timedelta(hours=24)
+        if (report.get('schema_version')!=1 or report.get('installation_id')!=credentials['installation_id']
+                or report.get('image_id')!=pin['image_id'] or report.get('backend_sha256')!=pin['backend_sha256']
+                or not fresh or not all(report.get('checks',{}).get(k) is True for k in PRIVACY_CHECKS)
+                or not isinstance(report.get('evidence_files'),list) or not report['evidence_files']):
+            raise ValueError()
+        for entry in report['evidence_files']:
+            relative=Path(entry['path'])
+            if relative.is_absolute() or '..' in relative.parts:
+                raise ValueError()
+            path=Path(folder)/relative;no_symlink(path)
+            if not path.is_file() or file_sha256(path)!=entry['sha256']:
+                raise ValueError()
+    except (KeyError,TypeError,ValueError,OSError):
+        raise DeploymentError('Real-service privacy evidence is missing, stale, mismatched or unverified.') from None
+    return report
+
+
+def enable_headless(root, release, report_path, inventory):
+    credentials=json.loads((root/'shared/credentials.json').read_text())
+    validate_resources(inventory,credentials,root)
+    pin=identity_pin(root)
+    container=inventory.get('container:unihub-server-casdoor',{})
+    if not pin or not pin.get('transition_complete') or container.get('Image')!=pin['image_id'] or not container.get('State',{}).get('Running'):
+        raise DeploymentError('Start the registered patched identity image before accepting privacy evidence.')
+    observed=run(['docker','exec','unihub-server-casdoor','sha256sum','/server']).split()
+    if not observed or observed[0]!=pin['backend_sha256']:
+        raise DeploymentError('Running identity backend checksum mismatch.')
+    no_symlink(report_path)
+    report=validate_privacy_evidence(json.loads(report_path.read_text()),credentials,pin,report_path.parent)
+    draft=root/'headless-config/products.draft.json'
+    if report.get('policy_sha256') != file_sha256(draft):
+        raise DeploymentError('Privacy acceptance does not match the staged public client policy.')
+    state={'enabled':True,'installation_id':credentials['installation_id'],'image_id':pin['image_id'],'backend_sha256':pin['backend_sha256'],'verified_at':report['verified_at'],'evidence_sha256':file_sha256(report_path),'sink_modes':report.get('sink_modes',{}),'policy_sha256':report['policy_sha256']}
+    atomic_write(root/'shared/headless-audit.json',json.dumps(state,indent=2)+'\n')
+    prepare(root,release,inventory)
 
 
 def branding_sql():
@@ -384,19 +696,36 @@ def up(root, release, credentials, inventory):
     wait_url('http://127.0.0.1:53068/_info')
     wait_url('http://127.0.0.1:58000/api/health')
     psql(branding_sql(), 'casdoor')
+    if credentials.get('headless_clients'):
+        psql(headless_applications_sql(credentials), 'casdoor')
     with urllib.request.urlopen('http://127.0.0.1:58000/.well-known/openid-configuration', timeout=10) as response:
         discovery = json.load(response)
     if (discovery.get('issuer') != PUBLIC_URL or 'RS256' not in discovery.get('id_token_signing_alg_values_supported', [])
             or any(not discovery.get(key, '').startswith(PUBLIC_URL + '/')
                    for key in ['authorization_endpoint', 'token_endpoint', 'jwks_uri'])):
         raise DeploymentError('Casdoor discovery did not confirm the expected HTTPS issuer and RS256 endpoints.')
+    pin = identity_pin(root)
+    if pin:
+        current = inventory_resources()
+        validate_resources(current, credentials, root)
+        container = current.get('container:unihub-server-casdoor', {})
+        observed = run(['docker','exec','unihub-server-casdoor','sha256sum','/server']).split()
+        if container.get('Image') != pin['image_id'] or not observed or observed[0] != pin['backend_sha256']:
+            raise DeploymentError('Identity upgrade did not confirm the registered immutable image and backend.')
+        pin['transition_complete'] = True
+        pin.pop('previous_image_id', None)
+        atomic_write(root / 'shared/identity-image.json',json.dumps(pin,indent=2)+'\n')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=['prepare', 'up'])
+    parser.add_argument('mode', choices=['prepare', 'up', 'register-identity-image', 'stage-headless', 'enable-headless', 'disable-headless'])
     parser.add_argument('--root', type=Path, default=Path('/opt/unihub'))
     parser.add_argument('--release', type=Path, required=True)
+    parser.add_argument('--identity-artifacts',type=Path,help='Public image-context from the audited backend build')
+    parser.add_argument('--image',help='Existing local custom image tag or immutable image ID')
+    parser.add_argument('--registry',type=Path,help='Reviewed public client policy JSON array')
+    parser.add_argument('--privacy-report',type=Path,help='Real patched-service privacy acceptance JSON')
     args = parser.parse_args()
     if os.geteuid() != 0:
         raise DeploymentError('Server bootstrap must run as root to protect generated configuration.')
@@ -408,6 +737,28 @@ def main():
     if args.mode == 'up':
         up(args.root.absolute(), args.release.absolute(), credentials, inventory)
         print('Dedicated PostgreSQL, ledger and identity dependencies are healthy; HTTPS browser acceptance remains to be checked.', flush=True)
+    elif args.mode == 'register-identity-image':
+        if not args.identity_artifacts or not args.image:
+            raise DeploymentError('Image registration requires --identity-artifacts and --image.')
+        register_identity_image(args.root,args.identity_artifacts,args.image,inventory)
+        prepare(args.root,args.release,inventory)
+        print('Audited local image registered by immutable ID and backend hash; privacy gate remains unverified.')
+    elif args.mode == 'stage-headless':
+        if not args.registry:
+            raise DeploymentError('Headless staging requires --registry.')
+        no_symlink(args.registry)
+        stage_headless(args.root,json.loads(args.registry.read_text()))
+        prepare(args.root,args.release,inventory)
+        print('Headless policy staged with isolated credentials; identity endpoints remain disabled until real-service privacy acceptance.')
+    elif args.mode == 'enable-headless':
+        if not args.privacy_report:
+            raise DeploymentError('Enabling headless identity requires --privacy-report.')
+        enable_headless(args.root.absolute(),args.release.absolute(),args.privacy_report.absolute(),inventory)
+        print('Real-service privacy evidence accepted. Restart only the UniHub service to load the enabled policy.')
+    elif args.mode == 'disable-headless':
+        atomic_write(args.root/'shared/headless-audit.json',json.dumps({'enabled':False})+'\n')
+        prepare(args.root,args.release,inventory)
+        print('Headless identity disabled. Restart only the UniHub service to load the disabled policy.')
 
 
 if __name__ == '__main__':

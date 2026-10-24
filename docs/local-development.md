@@ -2,6 +2,8 @@
 
 当前提供 Go API、八页用户中心、服务端 OIDC 会话、账户与订阅数据库、Formance Ledger 和真实 Casdoor 身份服务。浏览器从 `http://localhost:8088` 使用 `/auth/login` 登录；产品采用独立 Bearer 客户端。
 
+独立产品可完全使用 JSON API，不需要用户中心或登录页面。注册、认证、产品权限、SDK、新产品登记和纯 API 验收见[独立产品接入](headless-product-api.md)。`PUBLIC_URL` 留空时不挂载示例用户中心；公开机器契约始终可通过 `/openapi.yaml` 读取。
+
 ## 环境与启动
 
 需要 Go 1.26.5 或更高、Docker（含 Compose v2）、Python 3、Node.js 22 或更高（用于品牌前端语法校验）。宿主机运行 Go，依赖运行在 Docker 中。

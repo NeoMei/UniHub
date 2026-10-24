@@ -121,3 +121,37 @@ func TestCredentialCannotCrossAccountAndMembershipOrTimeRevocation(t *testing.T)
 		t.Fatal("expired membership issued token")
 	}
 }
+
+func TestProductRevokeCannotCrossOrigin(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if err := database.Migrate(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	a := accounts.New(p)
+	u, err := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://test", Subject: "product-revoke"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	as, err := a.ListAccounts(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(p, a, &catalog{time.Now().Add(time.Hour)})
+	grant, err := s.Issue(ctx, u.ID, as[0].ID, Request{OriginProductID: "superwagie", Models: []string{"test-model"}, TaskID: "revoke-origin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RevokeForProduct(ctx, u.ID, as[0].ID, grant.ID, "agentwiki"); err == nil {
+		t.Fatal("foreign product revoked credential")
+	}
+	if _, err = s.Verify(ctx, grant.Token, "test-model"); err != nil {
+		t.Fatal("rejected revoke changed credential")
+	}
+	if err = s.RevokeForProduct(ctx, u.ID, as[0].ID, grant.ID, "superwagie"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Verify(ctx, grant.Token, "test-model"); err == nil {
+		t.Fatal("own-product revoke failed")
+	}
+}

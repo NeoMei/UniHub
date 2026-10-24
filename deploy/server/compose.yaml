@@ -35,7 +35,8 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
   casdoor:
-    image: casbin/casdoor:v4.23.0@sha256:e13c9aada231f7338a03ab0ae7054d0a9480e77283338ab9fc319d88fe2b3ce0
+    image: ${CASDOOR_IMAGE:?Run server bootstrap first}
+    pull_policy: ${CASDOOR_PULL_POLICY:-missing}
     container_name: unihub-server-casdoor
     restart: unless-stopped
     labels: *managed

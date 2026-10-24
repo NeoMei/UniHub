@@ -16,6 +16,7 @@ import (
 	"unihub/internal/billing"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
+	"unihub/internal/products"
 	"unihub/internal/wallet"
 )
 
@@ -28,6 +29,7 @@ type Options struct {
 	ModelAccess      *modelaccess.Service
 	OperatorVerifier auth.Verifier
 	ProductVerifiers map[string]auth.Verifier
+	ProductAccess    map[string]products.Client
 }
 type api struct {
 	verifier auth.Verifier
@@ -44,6 +46,7 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		respond(w, 200, map[string]string{"status": "ok", "service": "unihub"})
 	})
 	add := func(pattern string, f action) { m.HandleFunc(pattern, s.authenticated(f)) }
+	s.invitationQueryRoutes(add)
 	if o.Billing != nil {
 		s.billingRoutes(m, add)
 	}
@@ -127,12 +130,28 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		if e != nil {
 			return e
 		}
+		a = filterProducts(r, a, func(p wallet.Product) string { return p.ID })
 		return respond(w, 200, a)
 	})
 	add("GET /v1/accounts/{account}/wallets", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		a, e := s.wallet.Balances(r.Context(), u.ID, r.PathValue("account"))
+		var a []wallet.Balance
+		var e error
+		if originProduct(r) != "" {
+			a, e = s.wallet.BalancesForProducts(r.Context(), u.ID, r.PathValue("account"), billingProducts(r))
+		} else {
+			a, e = s.wallet.Balances(r.Context(), u.ID, r.PathValue("account"))
+		}
 		if e != nil {
 			return e
+		}
+		if originProduct(r) != "" {
+			out := []wallet.Balance{}
+			for _, x := range a {
+				if x.ProductID == "" || allowedBillingProduct(r, x.ProductID) {
+					out = append(out, x)
+				}
+			}
+			a = out
 		}
 		return respond(w, 200, a)
 	})
@@ -147,6 +166,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		if e := decode(w, r, &b); e != nil {
 			return e
 		}
+		if e := requireBillingProduct(r, b.ProductID); e != nil {
+			return e
+		}
 		a, e := s.wallet.CreateRecharge(r.Context(), u.ID, r.PathValue("account"), b.ProductID, b.Amount, r.Header.Get("Idempotency-Key"), o.Merchant)
 		if e != nil {
 			return e
@@ -156,6 +178,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 	add("GET /v1/accounts/{account}/recharges/{order}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		a, e := s.wallet.GetOrder(r.Context(), u.ID, r.PathValue("account"), r.PathValue("order"))
 		if e != nil {
+			return e
+		}
+		if e := requireBillingProduct(r, a.ProductID); e != nil {
 			return e
 		}
 		return respond(w, 200, a)
@@ -168,6 +193,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		if e := decode(w, r, &b); e != nil {
 			return e
 		}
+		if e := requireBillingProduct(r, b.ProductID); e != nil {
+			return e
+		}
 		a, e := s.wallet.Transfer(r.Context(), u.ID, r.PathValue("account"), b.ProductID, b.Amount, r.Header.Get("Idempotency-Key"))
 		if e != nil {
 			return e
@@ -175,14 +203,26 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		return respond(w, 202, a)
 	})
 	add("GET /v1/accounts/{account}/operations", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		a, e := s.wallet.Operations(r.Context(), u.ID, r.PathValue("account"))
+		var a []wallet.Operation
+		var e error
+		if originProduct(r) != "" {
+			a, e = s.wallet.ProductOperations(r.Context(), u.ID, r.PathValue("account"), billingProducts(r))
+		} else {
+			a, e = s.wallet.Operations(r.Context(), u.ID, r.PathValue("account"))
+		}
 		if e != nil {
 			return e
 		}
 		return respond(w, 200, a)
 	})
 	add("GET /v1/accounts/{account}/operations/{operation}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		a, e := s.wallet.GetOperation(r.Context(), u.ID, r.PathValue("account"), r.PathValue("operation"))
+		var a wallet.Operation
+		var e error
+		if originProduct(r) != "" {
+			a, e = s.wallet.ProductOperation(r.Context(), u.ID, r.PathValue("account"), r.PathValue("operation"), billingProducts(r))
+		} else {
+			a, e = s.wallet.GetOperation(r.Context(), u.ID, r.PathValue("account"), r.PathValue("operation"))
+		}
 		if e != nil {
 			return e
 		}
@@ -200,6 +240,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		add("POST /v1/accounts/{account}/recharges/{order}/sandbox-settle", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 			order, e := s.wallet.GetOrder(r.Context(), u.ID, r.PathValue("account"), r.PathValue("order"))
 			if e != nil {
+				return e
+			}
+			if e := requireBillingProduct(r, order.ProductID); e != nil {
 				return e
 			}
 			receipt := wallet.Receipt{Merchant: o.Merchant, OrderID: order.ID, TransactionID: "sandbox:" + order.ID, Amount: order.Amount, Currency: order.Currency, Status: "SUCCEEDED"}
@@ -254,7 +297,23 @@ func (s *api) authenticated(next action) http.HandlerFunc {
 			return
 		}
 		if product != "" {
-			if !productRouteAllowed(r.Pattern) {
+			policy, explicit := s.options.ProductAccess[product]
+			if explicit && (policy.ProductID == "" || policy.ClientID != product) {
+				fail(w, 403, "forbidden")
+				return
+			}
+			if (explicit && !productScopeAllowed(r.Pattern, policy)) || (!explicit && !productRouteAllowed(r.Pattern)) {
+				fail(w, 403, "forbidden")
+				return
+			}
+			if explicit {
+				if len(r.Header.Values("Origin")) > 1 || (r.Header.Get("Origin") != "" && !policy.AllowsOrigin(r.Header.Get("Origin"))) {
+					fail(w, 403, "forbidden")
+					return
+				}
+				r = r.WithContext(context.WithValue(r.Context(), productPolicyKey{}, policy))
+				product = policy.ProductID
+			} else if r.Header.Get("Origin") != "" {
 				fail(w, 403, "forbidden")
 				return
 			}

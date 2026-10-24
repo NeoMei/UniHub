@@ -1,0 +1,2904 @@
+"openapi": "3.1.0"
+"info":
+  "title": "UniHub Headless Product API"
+  "version": "0.1.0"
+  "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists."
+"servers":
+  -
+    "url": "http://127.0.0.1:8088"
+    "description": "Local development; use deployment HTTPS service origin in production"
+"security":
+  -
+    "BearerAuth": []
+"paths":
+  "/v1/identity/registrations":
+    "post":
+      "operationId": "registerIdentity"
+      "summary": "registerIdentity"
+      "description": "Requires explicitly enabled client registration. 202 UNKNOWN is unresolved, not registered. Repeat the SAME key and nonsecret metadata only to reconcile; never auto-create using a new key. Passwords go only to IdP and are never stored in UniHub."
+      "security": []
+      "responses":
+        "201":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/RegistrationResult"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "200":
+          "description": "Idempotent readback"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/RegistrationResult"
+        "202":
+          "description": "Registration outcome UNKNOWN"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/RegistrationResult"
+        "405":
+          "$ref": "#/components/responses/Error"
+        "415":
+          "$ref": "#/components/responses/Error"
+        "502":
+          "$ref": "#/components/responses/Error"
+      "parameters":
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/RegistrationRequest"
+  "/v1/identity/authorize/password":
+    "post":
+      "operationId": "authorizePassword"
+      "summary": "authorizePassword"
+      "description": "Product-owned JSON password authorization with S256/state/nonce. Exact registered client, callback and browser Origin. Interaction-required MFA/consent/policy returns 409, never bypassed."
+      "security": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/PasswordAuthorizeResult"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "405":
+          "$ref": "#/components/responses/Error"
+        "415":
+          "$ref": "#/components/responses/Error"
+        "502":
+          "$ref": "#/components/responses/Error"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/PasswordAuthorizeRequest"
+  "/v1/identity/token":
+    "post":
+      "operationId": "exchangeAuthorizationCode"
+      "summary": "exchangeAuthorizationCode"
+      "description": "Single-use, five-minute authorization bound to exact client/redirect/code/verifier. Lost provider result returns authorization_result_unknown; no automatic retry. No refresh token or server logout API."
+      "security": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/TokenSet"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "405":
+          "$ref": "#/components/responses/Error"
+        "415":
+          "$ref": "#/components/responses/Error"
+        "502":
+          "$ref": "#/components/responses/Error"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/TokenRequest"
+  "/v1/me":
+    "get":
+      "operationId": "me"
+      "summary": "me"
+      "description": "Verifies an access token and lazily establishes issuer+subject identity. identity:read also permits this route."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/User"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "accounts:read"
+  "/v1/capabilities":
+    "get":
+      "operationId": "capabilities"
+      "summary": "capabilities"
+      "description": "Registry capability upper bound; does not replace per-account RBAC."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Capabilities"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "accounts:read"
+  "/v1/accounts":
+    "get":
+      "operationId": "accounts"
+      "summary": "accounts"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Account"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "accounts:read"
+    "post":
+      "operationId": "createTeam"
+      "summary": "createTeam"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "201":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Account"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "accounts:write"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "name":
+                  "type": "string"
+              "required":
+                - "name"
+              "additionalProperties": false
+  "/v1/accounts/{account}/members":
+    "get":
+      "operationId": "members"
+      "summary": "members"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Member"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "members:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/invitations":
+    "get":
+      "operationId": "incomingInvitations"
+      "summary": "incomingInvitations"
+      "description": "At most 100 recent valid pending invitations for the exact recipient; no generic pagination."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Invitation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "members:read"
+  "/v1/accounts/{account}/invitations":
+    "get":
+      "operationId": "teamInvitations"
+      "summary": "teamInvitations"
+      "description": "At most 100 valid pending invitations. Team owner/admin only; stale inviter authority excluded."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Invitation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "members:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+    "post":
+      "operationId": "invite"
+      "summary": "invite"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "201":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Invitation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "members:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "user_id":
+                  "type": "string"
+                "role":
+                  "type": "string"
+              "required":
+                - "user_id"
+                - "role"
+              "additionalProperties": false
+  "/v1/invitations/{invitation}/accept":
+    "post":
+      "operationId": "acceptInvitation"
+      "summary": "acceptInvitation"
+      "description": "Only the exact recipient may accept; rechecks current inviter authority."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Account"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "members:write"
+      "parameters":
+        -
+          "name": "invitation"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/members/{member}":
+    "patch":
+      "operationId": "changeMemberRole"
+      "summary": "changeMemberRole"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "204":
+          "description": "No content"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "members:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "member"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "role":
+                  "type": "string"
+              "required":
+                - "role"
+              "additionalProperties": false
+    "delete":
+      "operationId": "removeMember"
+      "summary": "removeMember"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "204":
+          "description": "No content"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "members:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "member"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/products":
+    "get":
+      "operationId": "products"
+      "summary": "products"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Product"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "catalog:read"
+  "/v1/catalog":
+    "get":
+      "operationId": "catalog"
+      "summary": "catalog"
+      "description": "Published environment-saleable offers restricted to BillingProducts; defaults to own product."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Offer"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "catalog:read"
+  "/v1/accounts/{account}/subscriptions":
+    "get":
+      "operationId": "subscriptions"
+      "summary": "subscriptions"
+      "description": "Approved product resources only. Finance routes also require owner or billing_admin; members may read subscription entitlements."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Subscription"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "subscriptions:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/orders":
+    "get":
+      "operationId": "orders"
+      "summary": "orders"
+      "description": "Approved product resources only. Finance routes also require owner or billing_admin; members may read subscription entitlements."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Order"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "orders:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+    "post":
+      "operationId": "purchase"
+      "summary": "purchase"
+      "description": "Offer ownership checked before purchase/resume. No amount supplied by caller. Order payment/fulfillment status must be evaluated separately."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "202":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Order"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "orders:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "offer_id":
+                  "type": "string"
+              "required":
+                - "offer_id"
+              "additionalProperties": false
+  "/v1/accounts/{account}/settings":
+    "get":
+      "operationId": "settings"
+      "summary": "settings"
+      "description": "Approved product resources only. Finance routes also require owner or billing_admin; members may read subscription entitlements."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Authorization"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "settings:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+    "put":
+      "operationId": "setAuthorization"
+      "summary": "setAuthorization"
+      "description": "Funding/renewal consent requires current finance role; version checked, used amount server-controlled."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Authorization"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "settings:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/AuthorizationRequest"
+  "/v1/accounts/{account}/wallets":
+    "get":
+      "operationId": "wallets"
+      "summary": "wallets"
+      "description": "Approved product resources only. Finance routes also require owner or billing_admin; members may read subscription entitlements."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Balance"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "wallets:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/operations":
+    "get":
+      "operationId": "operations"
+      "summary": "operations"
+      "description": "Approved product resources only. Finance routes also require owner or billing_admin; members may read subscription entitlements."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "array"
+                "items":
+                  "$ref": "#/components/schemas/Operation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "operations:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/credits":
+    "get":
+      "operationId": "credits"
+      "summary": "credits"
+      "description": "All real account shared llmrouter pool batches; product DTO omits product/order/source/subscription details. Console retains full Batch DTO. Ledger quantities authoritative; spendable requires current validity and !frozen."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "anyOf":
+                  -
+                    "type": "array"
+                    "items":
+                      "$ref": "#/components/schemas/PublicCreditBatch"
+                  -
+                    "type": "array"
+                    "items":
+                      "$ref": "#/components/schemas/ConsoleCreditBatch"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "credits:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/resources":
+    "get":
+      "operationId": "resources"
+      "summary": "resources"
+      "description": "Approved subscriptions. credits only with credits:read. wallets only with wallets:read plus finance role; omitted for members, never fake zero. as_of is completion time, not an atomic cross-system snapshot."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Resources"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "subscriptions:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/recharges":
+    "post":
+      "operationId": "createRecharge"
+      "summary": "createRecharge"
+      "description": "Products may recharge only approved product wallets. Empty product_id unified recharge is denied to product tokens until immutable origin attribution exists. Real channel unconfigured returns 503; sandbox creates an unpaid order."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "201":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Recharge"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "recharges:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "product_id":
+                  "type": "string"
+                "amount":
+                  "$ref": "#/components/schemas/IntegerString"
+              "required":
+                - "product_id"
+                - "amount"
+              "additionalProperties": false
+  "/v1/accounts/{account}/recharges/{order}":
+    "get":
+      "operationId": "getRecharge"
+      "summary": "getRecharge"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Recharge"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "recharges:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "order"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/transfers":
+    "post":
+      "operationId": "transfer"
+      "summary": "transfer"
+      "description": "Same account unified cash -> approved product cash; no product-to-product transfer. 202 is queued, only APPLIED confirms ledger result."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "202":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "transfers:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "product_id":
+                  "type": "string"
+                "amount":
+                  "$ref": "#/components/schemas/IntegerString"
+              "required":
+                - "product_id"
+                - "amount"
+              "additionalProperties": false
+  "/v1/accounts/{account}/operations/{operation}":
+    "get":
+      "operationId": "getOperation"
+      "summary": "getOperation"
+      "description": "Only immutable approved product-target commands; unknown historical unified attribution is excluded."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "operations:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "operation"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/recharges/{order}/sandbox-settle":
+    "post":
+      "operationId": "sandboxSettleRecharge"
+      "summary": "sandboxSettleRecharge"
+      "description": "TEST ONLY. Explicit sandbox payment simulation; never a real payment and never automatically invoked by SDK."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "202":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "recharges:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "order"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+  "/v1/accounts/{account}/quotes":
+    "post":
+      "operationId": "quoteUpgrade"
+      "summary": "quoteUpgrade"
+      "description": "Both subscription and offer must belong to approved products before any effect."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "201":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Quote"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "orders:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "subscription_id":
+                  "type": "string"
+                "offer_id":
+                  "type": "string"
+              "required":
+                - "subscription_id"
+                - "offer_id"
+              "additionalProperties": false
+  "/v1/accounts/{account}/quotes/{quote}/accept":
+    "post":
+      "operationId": "acceptQuote"
+      "summary": "acceptQuote"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "202":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Order"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "orders:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "quote"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties": {}
+              "required": []
+              "additionalProperties": false
+  "/v1/accounts/{account}/orders/{order}/refund":
+    "post":
+      "operationId": "refund"
+      "summary": "refund"
+      "description": "Source order checked before freeze/refund. 409 refund_requires_review may have frozen source batches; read original order rather than retrying with a new key."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "202":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Order"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "refunds:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "order"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties": {}
+              "required": []
+              "additionalProperties": false
+  "/v1/accounts/{account}/calls":
+    "get":
+      "operationId": "calls"
+      "summary": "calls"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/CallPage"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "usage:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "from"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+            "format": "date-time"
+          "description": "Inclusive RFC3339; defaults to to-30 days."
+        -
+          "name": "to"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+            "format": "date-time"
+          "description": "Exclusive RFC3339; defaults to now. Max window 90 days."
+        -
+          "name": "model"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "origin_product_id"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": "Product origin forced from verified client; explicit different product is 403."
+        -
+          "name": "limit"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 50
+          "description": ""
+        -
+          "name": "cursor"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": "Opaque signed live traversal cursor, bound to filter/actor/account/current role. Omitted time bounds restored on continuation. Process restart expires cursor."
+  "/v1/accounts/{account}/usage/summary":
+    "get":
+      "operationId": "usageSummary"
+      "summary": "usageSummary"
+      "description": "Exact query snapshot totals. Member/admin see self; owner/billing_admin see account for same product. charged finance-only; no provider cost. UNKNOWN and MISSING_USAGE never counted as settled consumption. Separate calls/summary requests have distinct snapshots."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/UsageSummary"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "usage:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "from"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+            "format": "date-time"
+          "description": "Inclusive RFC3339; defaults to to-30 days."
+        -
+          "name": "to"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+            "format": "date-time"
+          "description": "Exclusive RFC3339; defaults to now. Max window 90 days."
+        -
+          "name": "model"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "origin_product_id"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": "Product origin forced from verified client; explicit different product is 403."
+  "/v1/accounts/{account}/calls/{call}":
+    "get":
+      "operationId": "getCall"
+      "summary": "getCall"
+      "description": ""
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/CallView"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "usage:read"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "call"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "origin_product_id"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": "Product origin forced from verified client; explicit different product is 403."
+  "/v1/accounts/{account}/model-credentials":
+    "post":
+      "operationId": "issueModelCredential"
+      "summary": "issueModelCredential"
+      "description": "Origin defaults to verified product; mismatch denied. Requires current membership and active own-product subscription. Short-lived token only for llmrouter, never user login or settlement."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "201":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ModelCredential"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "model-credentials:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "origin_product_id":
+                  "type": "string"
+                "models":
+                  "type": "array"
+                  "items":
+                    "type": "string"
+                "task_id":
+                  "type": "string"
+              "required":
+                - "models"
+                - "task_id"
+              "additionalProperties": false
+  "/v1/accounts/{account}/model-credentials/{credential}":
+    "delete":
+      "operationId": "revokeModelCredential"
+      "summary": "revokeModelCredential"
+      "description": "Credential origin checked under account lock; actor/finance RBAC still required."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "204":
+          "description": "No content"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "model-credentials:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "credential"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+"components":
+  "securitySchemes":
+    "BearerAuth":
+      "type": "http"
+      "scheme": "bearer"
+      "bearerFormat": "OIDC access token"
+      "description": "Exact distinct client audience; console/ops/service audiences separate. Scope requirements are x-product-scopes registry upper bounds AND domain RBAC."
+  "parameters":
+    "IdempotencyKey":
+      "name": "Idempotency-Key"
+      "in": "header"
+      "required": true
+      "schema":
+        "type": "string"
+        "minLength": 1
+        "maxLength": 128
+      "description": "Caller-generated stable key; preserve original key/result after ambiguity. Never automatically retry using a new key."
+  "responses":
+    "Error":
+      "description": "Structured failure: 400 invalid_request/invalid_grant; 401 unauthenticated; 402 insufficient funds/credits; 403 forbidden; 404 unavailable object; 409 conflict/operation_pending/refund_requires_review/interaction_required; 429 rate_limited; 503 unavailable/payment_not_configured/authorization_result_unknown. Uncertainty is not success."
+      "content":
+        "application/json":
+          "schema":
+            "$ref": "#/components/schemas/Error"
+  "schemas":
+    "IntegerString":
+      "type": "string"
+      "pattern": "^(0|[1-9][0-9]*)$"
+      "description": "Canonical nonnegative decimal integer string; never a JSON number. CNY/6 cash and CREDIT/6 credits are distinct assets."
+    "Error":
+      "type": "object"
+      "properties":
+        "error":
+          "type": "string"
+        "interaction":
+          "type": "object"
+          "properties":
+            "kind":
+              "type": "string"
+            "supported":
+              "const": false
+          "required":
+            - "kind"
+            - "supported"
+          "additionalProperties": false
+      "required":
+        - "error"
+      "additionalProperties": false
+    "User":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "name":
+          "type": "string"
+        "email":
+          "type": "string"
+      "required":
+        - "id"
+        - "name"
+        - "email"
+      "additionalProperties": false
+    "Account":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "kind":
+          "enum":
+            - "personal"
+            - "team"
+        "name":
+          "type": "string"
+        "role":
+          "enum":
+            - "owner"
+            - "admin"
+            - "billing_admin"
+            - "member"
+      "required":
+        - "id"
+        - "kind"
+        - "name"
+        - "role"
+      "additionalProperties": false
+    "Member":
+      "type": "object"
+      "properties":
+        "user_id":
+          "type": "string"
+        "name":
+          "type": "string"
+        "email":
+          "type": "string"
+        "role":
+          "type": "string"
+      "required":
+        - "user_id"
+        - "name"
+        - "email"
+        - "role"
+      "additionalProperties": false
+    "Invitation":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "recipient_id":
+          "type": "string"
+        "role":
+          "type": "string"
+      "required":
+        - "id"
+        - "account_id"
+        - "recipient_id"
+        - "role"
+      "additionalProperties": false
+    "Product":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "name":
+          "type": "string"
+      "required":
+        - "id"
+        - "name"
+      "additionalProperties": false
+    "Balance":
+      "type": "object"
+      "properties":
+        "product_id":
+          "type": "string"
+        "asset":
+          "const": "CNY/6"
+        "amount":
+          "$ref": "#/components/schemas/IntegerString"
+      "required":
+        - "product_id"
+        - "asset"
+        - "amount"
+      "additionalProperties": false
+    "Operation":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "kind":
+          "type": "string"
+        "status":
+          "enum":
+            - "CREATED"
+            - "SUBMITTING"
+            - "UNKNOWN"
+            - "APPLIED"
+            - "REJECTED"
+            - "CANCELED"
+        "ledger_transaction_id":
+          "type": "string"
+        "error_code":
+          "type": "string"
+        "created_at":
+          "type": "string"
+          "format": "date-time"
+      "required":
+        - "id"
+        - "account_id"
+        - "kind"
+        - "status"
+        - "created_at"
+      "additionalProperties": false
+    "Recharge":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "product_id":
+          "type": "string"
+        "amount":
+          "$ref": "#/components/schemas/IntegerString"
+        "currency":
+          "type": "string"
+        "merchant":
+          "type": "string"
+        "operation_id":
+          "type": "string"
+      "required":
+        - "id"
+        - "account_id"
+        - "product_id"
+        - "amount"
+        - "currency"
+        - "merchant"
+      "additionalProperties": false
+    "RegistrationRequest":
+      "type": "object"
+      "properties":
+        "client_id":
+          "type": "string"
+        "username":
+          "type": "string"
+          "pattern": "^[a-z][a-z0-9_-]{1,63}$"
+        "password":
+          "type": "string"
+          "format": "password"
+          "minLength": 12
+          "maxLength": 128
+          "description": "At least 12 characters, ASCII upper/lower/digit; UTF-8 total <=72 bytes for reviewed bcrypt policy. No username/email-local reuse. Current organization rules apply."
+          "writeOnly": true
+        "email":
+          "type": "string"
+        "display_name":
+          "type": "string"
+          "maxLength": 80
+      "required":
+        - "client_id"
+        - "username"
+        - "password"
+      "additionalProperties": false
+    "RegistrationResult":
+      "type": "object"
+      "properties":
+        "registration_id":
+          "type": "string"
+        "status":
+          "enum":
+            - "CREATED"
+            - "UNKNOWN"
+        "login_required":
+          "type": "boolean"
+        "retry_after":
+          "type": "integer"
+      "required":
+        - "registration_id"
+        - "status"
+      "additionalProperties": false
+    "PasswordAuthorizeRequest":
+      "type": "object"
+      "properties":
+        "client_id":
+          "type": "string"
+        "redirect_uri":
+          "type": "string"
+          "format": "uri"
+        "scope":
+          "const": "openid profile email"
+        "state":
+          "type": "string"
+          "minLength": 32
+          "maxLength": 256
+        "nonce":
+          "type": "string"
+          "minLength": 32
+          "maxLength": 256
+        "code_challenge_method":
+          "const": "S256"
+        "code_challenge":
+          "type": "string"
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        "username":
+          "type": "string"
+        "password":
+          "type": "string"
+          "format": "password"
+          "writeOnly": true
+      "required":
+        - "client_id"
+        - "redirect_uri"
+        - "scope"
+        - "state"
+        - "nonce"
+        - "code_challenge_method"
+        - "code_challenge"
+        - "username"
+        - "password"
+      "additionalProperties": false
+    "PasswordAuthorizeResult":
+      "type": "object"
+      "properties":
+        "authorization_id":
+          "type": "string"
+        "code":
+          "type": "string"
+          "pattern": "^[0-9a-f]{64}$"
+        "state":
+          "type": "string"
+        "expires_in":
+          "type": "integer"
+      "required":
+        - "authorization_id"
+        - "code"
+        - "state"
+        - "expires_in"
+      "additionalProperties": false
+    "TokenRequest":
+      "type": "object"
+      "properties":
+        "grant_type":
+          "const": "authorization_code"
+        "authorization_id":
+          "type": "string"
+          "minLength": 43
+          "maxLength": 43
+        "client_id":
+          "type": "string"
+        "redirect_uri":
+          "type": "string"
+          "format": "uri"
+        "code":
+          "type": "string"
+        "code_verifier":
+          "type": "string"
+          "pattern": "^[A-Za-z0-9._~-]{43,128}$"
+      "required":
+        - "grant_type"
+        - "authorization_id"
+        - "client_id"
+        - "redirect_uri"
+        - "code"
+        - "code_verifier"
+      "additionalProperties": false
+    "TokenSet":
+      "type": "object"
+      "properties":
+        "access_token":
+          "type": "string"
+        "id_token":
+          "type": "string"
+        "token_type":
+          "const": "Bearer"
+        "scope":
+          "const": "openid profile email"
+        "expires_in":
+          "type": "integer"
+      "required":
+        - "access_token"
+        - "id_token"
+        - "token_type"
+        - "scope"
+        - "expires_in"
+      "additionalProperties": false
+    "Offer":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "product_id":
+          "type": "string"
+        "name":
+          "type": "string"
+        "account_kind":
+          "enum":
+            - "personal"
+            - "team"
+            - "both"
+        "kind":
+          "enum":
+            - "membership"
+            - "addon"
+        "period":
+          "type": "string"
+        "price":
+          "$ref": "#/components/schemas/IntegerString"
+        "monthly_credit":
+          "$ref": "#/components/schemas/IntegerString"
+        "entitlements":
+          "type": "object"
+          "additionalProperties":
+            "type": "string"
+        "rank":
+          "type": "integer"
+        "validity_months":
+          "type": "integer"
+        "upgrade_rule":
+          "type": "string"
+        "refund_rule":
+          "type": "string"
+        "status":
+          "type": "string"
+        "sandbox":
+          "type": "boolean"
+      "required":
+        - "id"
+        - "product_id"
+        - "name"
+        - "account_kind"
+        - "kind"
+        - "period"
+        - "price"
+        - "monthly_credit"
+        - "entitlements"
+        - "rank"
+        - "validity_months"
+        - "upgrade_rule"
+        - "refund_rule"
+        - "status"
+        - "sandbox"
+      "additionalProperties": false
+    "Authorization":
+      "type": "object"
+      "properties":
+        "product_id":
+          "type": "string"
+        "purpose":
+          "enum":
+            - "funding"
+            - "renewal"
+        "enabled":
+          "type": "boolean"
+        "version":
+          "type": "integer"
+        "max_per_operation":
+          "$ref": "#/components/schemas/IntegerString"
+        "max_total":
+          "$ref": "#/components/schemas/IntegerString"
+        "used":
+          "$ref": "#/components/schemas/IntegerString"
+        "expires_at":
+          "type": "string"
+          "format": "date-time"
+        "actor_id":
+          "type": "string"
+      "required":
+        - "product_id"
+        - "purpose"
+        - "enabled"
+        - "version"
+        - "max_per_operation"
+        - "max_total"
+        - "used"
+        - "expires_at"
+        - "actor_id"
+      "additionalProperties": false
+    "AuthorizationRequest":
+      "type": "object"
+      "properties":
+        "product_id":
+          "type": "string"
+        "purpose":
+          "enum":
+            - "funding"
+            - "renewal"
+        "enabled":
+          "type": "boolean"
+        "version":
+          "type": "integer"
+        "max_per_operation":
+          "$ref": "#/components/schemas/IntegerString"
+        "max_total":
+          "$ref": "#/components/schemas/IntegerString"
+        "expires_at":
+          "type": "string"
+          "format": "date-time"
+      "required":
+        - "product_id"
+        - "purpose"
+        - "enabled"
+        - "version"
+      "additionalProperties": false
+    "Usage":
+      "type": "object"
+      "properties":
+        "input":
+          "$ref": "#/components/schemas/IntegerString"
+        "output":
+          "$ref": "#/components/schemas/IntegerString"
+        "cache_read":
+          "$ref": "#/components/schemas/IntegerString"
+        "cache_write":
+          "$ref": "#/components/schemas/IntegerString"
+        "reasoning":
+          "$ref": "#/components/schemas/IntegerString"
+      "required":
+        - "input"
+        - "output"
+        - "cache_read"
+        - "cache_write"
+        - "reasoning"
+      "additionalProperties": false
+    "QueryScope":
+      "type": "object"
+      "properties":
+        "account_id":
+          "type": "string"
+        "origin_product_id":
+          "type": "string"
+        "actor_id":
+          "type": "string"
+        "visibility":
+          "enum":
+            - "actor"
+            - "account"
+      "required":
+        - "account_id"
+        - "visibility"
+      "additionalProperties": false
+    "CallFilter":
+      "type": "object"
+      "properties":
+        "from":
+          "type": "string"
+          "format": "date-time"
+        "to":
+          "type": "string"
+          "format": "date-time"
+        "model":
+          "type": "string"
+        "origin_product_id":
+          "type": "string"
+      "required": []
+      "additionalProperties": false
+    "Payments":
+      "type": "object"
+      "properties":
+        "mode":
+          "enum":
+            - "sandbox"
+            - "unconfigured"
+        "real_payments_configured":
+          "const": false
+      "required":
+        - "mode"
+        - "real_payments_configured"
+      "additionalProperties": false
+    "CreditPool":
+      "type": "object"
+      "properties":
+        "asset":
+          "const": "CREDIT/6"
+        "pool":
+          "const": "llmrouter"
+        "spendable":
+          "$ref": "#/components/schemas/IntegerString"
+        "reserved":
+          "$ref": "#/components/schemas/IntegerString"
+        "frozen":
+          "$ref": "#/components/schemas/IntegerString"
+      "required":
+        - "asset"
+        - "pool"
+        - "spendable"
+        - "reserved"
+        - "frozen"
+      "additionalProperties": false
+    "Capabilities":
+      "type": "object"
+      "properties":
+        "kind":
+          "enum":
+            - "console"
+            - "product"
+            - "legacy_product"
+        "product_id":
+          "type": "string"
+        "client_id":
+          "type": "string"
+        "scopes":
+          "type": "array"
+          "items":
+            "type": "string"
+        "sandbox":
+          "type": "boolean"
+        "real_payments_configured":
+          "const": false
+        "unified_wallet_recharge":
+          "type": "boolean"
+        "product_wallet_recharge":
+          "type": "boolean"
+        "refresh_token":
+          "const": false
+        "server_logout":
+          "const": false
+        "model_pool":
+          "const": "llmrouter"
+        "amount_encoding":
+          "const": "decimal_integer_string"
+      "required":
+        - "kind"
+        - "product_id"
+        - "client_id"
+        - "scopes"
+        - "sandbox"
+        - "real_payments_configured"
+        - "unified_wallet_recharge"
+        - "product_wallet_recharge"
+        - "refresh_token"
+        - "server_logout"
+        - "model_pool"
+        - "amount_encoding"
+      "additionalProperties": false
+    "Subscription":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "product_id":
+          "type": "string"
+        "offer":
+          "$ref": "#/components/schemas/Offer"
+        "version":
+          "type": "integer"
+        "anchor":
+          "type": "string"
+          "format": "date-time"
+        "paid_through":
+          "type": "string"
+          "format": "date-time"
+        "status":
+          "type": "string"
+      "required":
+        - "id"
+        - "account_id"
+        - "product_id"
+        - "offer"
+        - "version"
+        - "anchor"
+        - "paid_through"
+        - "status"
+      "additionalProperties": false
+    "Order":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "actor_id":
+          "type": "string"
+        "product_id":
+          "type": "string"
+        "kind":
+          "type": "string"
+        "payment_status":
+          "type": "string"
+        "fulfillment_status":
+          "type": "string"
+        "subscription_id":
+          "type": "string"
+        "refund_status":
+          "type": "string"
+        "refund_actor_id":
+          "type": "string"
+        "refund_key":
+          "type": "string"
+        "refund_reason":
+          "type": "string"
+        "amount":
+          "$ref": "#/components/schemas/IntegerString"
+        "product_funding":
+          "$ref": "#/components/schemas/IntegerString"
+        "unified_funding":
+          "$ref": "#/components/schemas/IntegerString"
+        "grant_amount":
+          "$ref": "#/components/schemas/IntegerString"
+        "start":
+          "type": "string"
+          "format": "date-time"
+        "end":
+          "type": "string"
+          "format": "date-time"
+        "period_start":
+          "type": "string"
+          "format": "date-time"
+        "period_end":
+          "type": "string"
+          "format": "date-time"
+        "created_at":
+          "type": "string"
+          "format": "date-time"
+        "offer":
+          "$ref": "#/components/schemas/Offer"
+        "funding_authorization_version":
+          "type": "integer"
+        "renewal_authorization_version":
+          "type": "integer"
+      "required":
+        - "id"
+        - "account_id"
+        - "actor_id"
+        - "product_id"
+        - "kind"
+        - "payment_status"
+        - "fulfillment_status"
+        - "amount"
+        - "product_funding"
+        - "unified_funding"
+        - "grant_amount"
+        - "start"
+        - "end"
+        - "period_start"
+        - "period_end"
+        - "created_at"
+        - "offer"
+      "additionalProperties": false
+    "Quote":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "subscription_id":
+          "type": "string"
+        "subscription_version":
+          "type": "integer"
+        "offer":
+          "$ref": "#/components/schemas/Offer"
+        "amount":
+          "$ref": "#/components/schemas/IntegerString"
+        "grant_amount":
+          "$ref": "#/components/schemas/IntegerString"
+        "period_start":
+          "type": "string"
+          "format": "date-time"
+        "expires_at":
+          "type": "string"
+          "format": "date-time"
+        "created_at":
+          "type": "string"
+          "format": "date-time"
+      "required":
+        - "id"
+        - "account_id"
+        - "subscription_id"
+        - "subscription_version"
+        - "offer"
+        - "amount"
+        - "grant_amount"
+        - "period_start"
+        - "expires_at"
+        - "created_at"
+      "additionalProperties": false
+    "PublicCreditBatch":
+      "type": "object"
+      "properties":
+        "original":
+          "$ref": "#/components/schemas/IntegerString"
+        "available":
+          "$ref": "#/components/schemas/IntegerString"
+        "reserved":
+          "$ref": "#/components/schemas/IntegerString"
+        "consumed":
+          "$ref": "#/components/schemas/IntegerString"
+        "expired":
+          "$ref": "#/components/schemas/IntegerString"
+        "withdrawn":
+          "$ref": "#/components/schemas/IntegerString"
+        "starts_at":
+          "type": "string"
+          "format": "date-time"
+        "expires_at":
+          "type": "string"
+          "format": "date-time"
+        "created_at":
+          "type": "string"
+          "format": "date-time"
+        "id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "asset":
+          "const": "CREDIT/6"
+        "pool":
+          "const": "llmrouter"
+        "frozen":
+          "type": "boolean"
+      "required":
+        - "original"
+        - "available"
+        - "reserved"
+        - "consumed"
+        - "expired"
+        - "withdrawn"
+        - "starts_at"
+        - "expires_at"
+        - "created_at"
+        - "id"
+        - "account_id"
+        - "asset"
+        - "pool"
+        - "frozen"
+      "additionalProperties": false
+    "ConsoleCreditBatch":
+      "type": "object"
+      "properties":
+        "original":
+          "$ref": "#/components/schemas/IntegerString"
+        "available":
+          "$ref": "#/components/schemas/IntegerString"
+        "reserved":
+          "$ref": "#/components/schemas/IntegerString"
+        "consumed":
+          "$ref": "#/components/schemas/IntegerString"
+        "expired":
+          "$ref": "#/components/schemas/IntegerString"
+        "withdrawn":
+          "$ref": "#/components/schemas/IntegerString"
+        "starts_at":
+          "type": "string"
+          "format": "date-time"
+        "expires_at":
+          "type": "string"
+          "format": "date-time"
+        "created_at":
+          "type": "string"
+          "format": "date-time"
+        "id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "frozen":
+          "type": "boolean"
+        "product_id":
+          "type": "string"
+        "order_id":
+          "type": "string"
+        "subscription_id":
+          "type": "string"
+        "source_key":
+          "type": "string"
+        "kind":
+          "type": "string"
+      "required":
+        - "original"
+        - "available"
+        - "reserved"
+        - "consumed"
+        - "expired"
+        - "withdrawn"
+        - "starts_at"
+        - "expires_at"
+        - "created_at"
+        - "id"
+        - "account_id"
+        - "frozen"
+        - "product_id"
+        - "order_id"
+        - "source_key"
+        - "kind"
+      "additionalProperties": false
+    "CallView":
+      "type": "object"
+      "properties":
+        "scope":
+          "$ref": "#/components/schemas/QueryScope"
+        "financial_details":
+          "type": "boolean"
+        "asset":
+          "const": "CREDIT/6"
+        "call_id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "actor_id":
+          "type": "string"
+        "origin_product_id":
+          "type": "string"
+        "model":
+          "type": "string"
+        "status":
+          "type": "string"
+        "created_at":
+          "type":
+            - "string"
+            - "null"
+          "format": "date-time"
+        "time_source":
+          "type": "string"
+        "task_id":
+          "type": "string"
+        "held":
+          "$ref": "#/components/schemas/IntegerString"
+        "charged":
+          "$ref": "#/components/schemas/IntegerString"
+        "usage":
+          "$ref": "#/components/schemas/Usage"
+      "required":
+        - "scope"
+        - "financial_details"
+        - "asset"
+        - "call_id"
+        - "account_id"
+        - "actor_id"
+        - "origin_product_id"
+        - "model"
+        - "status"
+        - "created_at"
+        - "time_source"
+      "additionalProperties": false
+    "CallPage":
+      "type": "object"
+      "properties":
+        "scope":
+          "$ref": "#/components/schemas/QueryScope"
+        "filter":
+          "$ref": "#/components/schemas/CallFilter"
+        "financial_details":
+          "type": "boolean"
+        "items":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/CallView"
+        "next_cursor":
+          "type": "string"
+        "has_more":
+          "type": "boolean"
+        "total":
+          "$ref": "#/components/schemas/IntegerString"
+        "unknown_time":
+          "$ref": "#/components/schemas/IntegerString"
+        "as_of":
+          "type": "string"
+          "format": "date-time"
+        "accuracy":
+          "const": "exact_for_query_snapshot"
+        "consistency":
+          "const": "live"
+      "required":
+        - "scope"
+        - "filter"
+        - "financial_details"
+        - "items"
+        - "has_more"
+        - "total"
+        - "unknown_time"
+        - "as_of"
+        - "accuracy"
+        - "consistency"
+      "additionalProperties": false
+    "UsageSummary":
+      "type": "object"
+      "properties":
+        "calls_total":
+          "$ref": "#/components/schemas/IntegerString"
+        "settled_calls":
+          "$ref": "#/components/schemas/IntegerString"
+        "pending_calls":
+          "$ref": "#/components/schemas/IntegerString"
+        "missing_usage_calls":
+          "$ref": "#/components/schemas/IntegerString"
+        "unknown_calls":
+          "$ref": "#/components/schemas/IntegerString"
+        "rejected_calls":
+          "$ref": "#/components/schemas/IntegerString"
+        "released_calls":
+          "$ref": "#/components/schemas/IntegerString"
+        "charged":
+          "$ref": "#/components/schemas/IntegerString"
+        "unknown_time":
+          "$ref": "#/components/schemas/IntegerString"
+        "scope":
+          "$ref": "#/components/schemas/QueryScope"
+        "filter":
+          "$ref": "#/components/schemas/CallFilter"
+        "financial_details":
+          "type": "boolean"
+        "by_status":
+          "type": "object"
+          "additionalProperties":
+            "$ref": "#/components/schemas/IntegerString"
+        "asset":
+          "const": "CREDIT/6"
+        "usage":
+          "$ref": "#/components/schemas/Usage"
+        "usage_complete":
+          "type": "boolean"
+        "as_of":
+          "type": "string"
+          "format": "date-time"
+        "accuracy":
+          "const": "exact_for_query_snapshot"
+        "consistency":
+          "const": "live"
+      "required":
+        - "calls_total"
+        - "settled_calls"
+        - "pending_calls"
+        - "missing_usage_calls"
+        - "unknown_calls"
+        - "rejected_calls"
+        - "released_calls"
+        - "unknown_time"
+        - "scope"
+        - "filter"
+        - "financial_details"
+        - "by_status"
+        - "asset"
+        - "usage"
+        - "usage_complete"
+        - "as_of"
+        - "accuracy"
+        - "consistency"
+      "additionalProperties": false
+    "Resources":
+      "type": "object"
+      "properties":
+        "account_id":
+          "type": "string"
+        "product_id":
+          "type": "string"
+        "subscriptions":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/Subscription"
+        "credits":
+          "$ref": "#/components/schemas/CreditPool"
+        "wallets":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/Balance"
+        "payments":
+          "$ref": "#/components/schemas/Payments"
+        "as_of":
+          "type": "string"
+          "format": "date-time"
+      "required":
+        - "account_id"
+        - "product_id"
+        - "subscriptions"
+        - "payments"
+        - "as_of"
+      "additionalProperties": false
+    "ModelCredential":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "audience":
+          "const": "llmrouter"
+        "actor_id":
+          "type": "string"
+        "account_id":
+          "type": "string"
+        "origin_product_id":
+          "type": "string"
+        "models":
+          "type": "array"
+          "items":
+            "type": "string"
+        "task_id":
+          "type": "string"
+        "expires_at":
+          "type": "string"
+          "format": "date-time"
+        "token":
+          "type": "string"
+      "required":
+        - "id"
+        - "audience"
+        - "actor_id"
+        - "account_id"
+        - "origin_product_id"
+        - "models"
+        - "task_id"
+        - "expires_at"
+        - "token"
+      "additionalProperties": false

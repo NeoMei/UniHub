@@ -4,6 +4,8 @@
 
 UniHub 统一用户与计费平台，为多个产品提供共用的用户、企业团队、会员订阅、钱包和模型额度服务。
 
+UniHub 的核心是独立后台 JSON API。接入产品自己实现所有页面、会话体验与功能判断，通过独立客户端调用注册、认证、充值、订单、权益、余额与用量服务；不依赖 UniHub 用户中心。现有用户中心是可选的示例客户端。服务端仍校验身份、产品授权范围和账户角色，保护资金与资源归属。
+
 ## 命名约定
 
 - 项目显示名：**UniHub**
@@ -28,6 +30,9 @@ UniHub 统一用户与计费平台，为多个产品提供共用的用户、企�
 - [服务器运维与恢复](deploy/server/README.md)
 - [账户与资金基础实施计划](docs/superpowers/plans/2026-10-24-account-wallet-foundation.md)
 - [基础 API](docs/account-wallet-api.md)
+- [独立产品接入与 TypeScript SDK](docs/headless-product-api.md)
+- [OpenAPI 契约](api/openapi.yaml)（运行中的服务提供 `/openapi.yaml`）
+- [独立产品 API 验收](docs/headless-product-api-validation-2026-10-25.md)
 - [账户基础验收](docs/account-wallet-foundation-validation.md)
 - [订阅、额度与控制台 API](docs/subscriptions-credits-api.md)
 - [本阶段验收与剩余范围](docs/subscriptions-credits-validation.md)
@@ -39,7 +44,9 @@ UniHub 统一用户与计费平台，为多个产品提供共用的用户、企�
 
 已实现账户、资金与订阅额度的本地闭环：Casdoor 登录、个人/团队账户与角色、测试充值、产品钱包和统一钱包、订阅购买、升级、加量包、按月发放模型额度、独立的续费/补款授权、退款核实与故障恢复。PostgreSQL 保存业务状态；现金与模型额度数量均以 Formance 为准。
 
-用户中心已提供概览、会员、模型额度、加量包、钱包、订单、团队和设置八个页面。界面使用已确认的 UniHub Logo 与主题，浏览器通过服务端 OIDC 会话登录。商品价格可配置；当前发布的示例商品明确标记为测试套餐。
+后台已补齐纯 JSON 注册与密码认证、PKCE 换取令牌、独立产品 scope/Origin、团队邀请查询、资源快照和调用/用量报表，并提供零依赖 TypeScript SDK 与新产品登记工具。身份开关需要受控配置及真实审计脱敏验收；MFA 等尚未支持的交互返回明确错误。
+
+可选用户中心提供概览、会员、模型额度、加量包、钱包、订单、团队和设置八个页面。界面使用已确认的 UniHub Logo 与主题，浏览器通过服务端 OIDC 会话登录。商品价格可配置；当前发布的示例商品明确标记为测试套餐。
 
 ```sh
 make dev-setup

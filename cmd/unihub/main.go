@@ -10,14 +10,17 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	publicapi "unihub/api"
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
 	"unihub/internal/billing"
 	"unihub/internal/console"
 	"unihub/internal/database"
 	"unihub/internal/httpapi"
+	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
+	"unihub/internal/products"
 	"unihub/internal/wallet"
 )
 
@@ -88,6 +91,15 @@ func run() error {
 			return e
 		}
 	}
+	for id := range c.ProductAccess {
+		productVerifiers[id], e = auth.NewOIDC(startup, c.Issuer, id)
+		if e != nil {
+			return e
+		}
+	}
+	if e = ensureConfiguredProducts(startup, pool, c.ProductAccess); e != nil {
+		return e
+	}
 	var operatorVerifier auth.Verifier
 	if c.OperatorAudience != "" {
 		operatorVerifier, e = auth.NewOIDC(startup, c.Issuer, c.OperatorAudience)
@@ -95,7 +107,7 @@ func run() error {
 			return e
 		}
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers})
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir})
 		if err != nil {
@@ -103,6 +115,12 @@ func run() error {
 		}
 		handler = browser.Handler(handler)
 	}
+	identity, err := identityapi.New(startup, pool, identityapi.Options{Issuer: c.Issuer, ManagementClientID: c.IdentityManagementClientID, ManagementClientSecret: c.IdentityManagementSecret, SigningKey: c.IdentityKey, Clients: c.ProductAccess, Production: c.Production, AuditRedactionVerified: c.IdentityAuditVerified, TrustLoopbackProxy: c.IdentityTrustLoopbackProxy})
+	if err != nil {
+		return err
+	}
+	handler = products.CORS(identity.Handler(handler), c.ProductAccess)
+	handler = publicapi.Handler(handler)
 	server := &http.Server{Addr: c.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	done := make(chan struct{})
 	go func() { defer close(done); work(ctx, w, b) }()

@@ -1,0 +1,10 @@
+--- a/object/record.go
++++ b/object/record.go
+@@ -40,5 +40,7 @@ var secretRecordKeys = []string{
+ 	"originalToken", "originalRefreshToken", "totpSecret", "masterVerificationCode",
+ 	"code_verifier", "passcode", "recoveryCode", "recoveryCodes",
++	// UniHub: redact authentication request bindings before audit/webhook sinks.
++	"nonce", "state", "code", "code_challenge",
+ }
+ 
+ // secretRecordKeyPatterns match the per-provider OAuth tokens kept in a user's properties

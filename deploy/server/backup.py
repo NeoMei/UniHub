@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tarfile
 
-from bootstrap import DeploymentError, IMAGES, atomic_write, inventory_resources, no_symlink, private_directory, read_env, validate_resources
+from bootstrap import DeploymentError, IMAGES, atomic_write, identity_pin, inventory_resources, no_symlink, private_directory, read_env, validate_resources
 
 
 def sha256(path):
@@ -57,16 +57,23 @@ def backup(root, destination):
             source = root / relative
             no_symlink(source)
             archive.add(source, arcname=relative, recursive=True)
+        for relative in ['shared/identity-image.json','shared/headless-audit.json','headless-config']:
+            source=root/relative
+            if source.exists():
+                no_symlink(source)
+                archive.add(source,arcname=relative,recursive=True)
         archive.add(release / 'deploy/server', arcname='release/deploy/server', recursive=True)
         for name in ['manifest.json', 'release-manifest.json', 'REVISION']:
             if (release / name).is_file():
                 archive.add(release / name, arcname='release/' + name)
     config.chmod(0o600)
+    pin=identity_pin(root)
+    images={**IMAGES,'casdoor':pin['image_id'] if pin else IMAGES['casdoor']}
     manifest = {'schema_version': 1, 'created_at': datetime.now(timezone.utc).isoformat(),
         'installation_id': credentials['installation_id'], 'release': release.name,
         'format': 'PostgreSQL 16 physical tar with WAL (pg_basebackup -X fetch)',
         'databases': ['unihub', 'ledger', 'casdoor'], 'identity_keys': 'Casdoor certificate/key tables included in full cluster',
-        'images': IMAGES, 'files': {name: sha256(destination / name) for name in ['cluster.tar', 'configuration.tar']}}
+        'images': images, 'files': {name: sha256(destination / name) for name in ['cluster.tar', 'configuration.tar']}}
     atomic_write(destination / 'manifest.json', json.dumps(manifest, indent=2) + '\n')
     (destination / 'INCOMPLETE').unlink()
     return destination

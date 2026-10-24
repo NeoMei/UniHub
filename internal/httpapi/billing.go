@@ -12,6 +12,7 @@ import (
 
 func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 	b := s.options.Billing
+	s.productQueryRoutes(add)
 	addOps := func(pattern string, fn action) {
 		m.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if s.options.OperatorVerifier == nil || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || len(r.Header.Values("Authorization")) != 1 {
@@ -28,6 +29,7 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
+		v = filterProducts(r, v, func(o billing.Offer) string { return o.ProductID })
 		return respond(w, 200, v)
 	})
 	add("GET /v1/accounts/{account}/subscriptions", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
@@ -35,19 +37,30 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
+		v = filterProducts(r, v, func(o billing.Subscription) string { return o.ProductID })
 		return respond(w, 200, v)
 	})
 	add("GET /v1/accounts/{account}/orders", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		v, e := b.Orders(r.Context(), u.ID, r.PathValue("account"))
+		var v []billing.Order
+		var e error
+		if originProduct(r) != "" {
+			v, e = b.ProductOrders(r.Context(), u.ID, r.PathValue("account"), billingProducts(r))
+		} else {
+			v, e = b.Orders(r.Context(), u.ID, r.PathValue("account"))
+		}
 		if e != nil {
 			return e
 		}
+		v = filterProducts(r, v, func(o billing.Order) string { return o.ProductID })
 		return respond(w, 200, v)
 	})
 	add("GET /v1/accounts/{account}/credits", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		v, e := b.Batches(r.Context(), u.ID, r.PathValue("account"))
 		if e != nil {
 			return e
+		}
+		if originProduct(r) != "" {
+			return respond(w, 200, publicCreditBatches(v))
 		}
 		return respond(w, 200, v)
 	})
@@ -56,6 +69,7 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
+		v = filterProducts(r, v, func(o billing.Authorization) string { return o.ProductID })
 		return respond(w, 200, v)
 	})
 	add("POST /v1/accounts/{account}/orders", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
@@ -63,6 +77,9 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 			OfferID string `json:"offer_id"`
 		}
 		if e := decode(w, r, &body); e != nil {
+			return e
+		}
+		if e := s.authorizeOffer(r, body.OfferID); e != nil {
 			return e
 		}
 		v, e := b.Purchase(r.Context(), u.ID, r.PathValue("account"), billing.PurchaseRequest{OfferID: body.OfferID, Key: r.Header.Get("Idempotency-Key")})
@@ -79,6 +96,18 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		if e := decode(w, r, &body); e != nil {
 			return e
 		}
+		if e := s.authorizeOffer(r, body.OfferID); e != nil {
+			return e
+		}
+		if originProduct(r) != "" {
+			sub, e := b.GetSubscription(r.Context(), u.ID, r.PathValue("account"), body.SubscriptionID)
+			if e != nil {
+				return e
+			}
+			if e = requireBillingProduct(r, sub.ProductID); e != nil {
+				return e
+			}
+		}
 		v, e := b.QuoteUpgrade(r.Context(), u.ID, r.PathValue("account"), body.SubscriptionID, body.OfferID)
 		if e != nil {
 			return e
@@ -89,6 +118,15 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		var body struct{}
 		if e := decode(w, r, &body); e != nil {
 			return e
+		}
+		if originProduct(r) != "" {
+			q, e := b.GetQuote(r.Context(), u.ID, r.PathValue("account"), r.PathValue("quote"))
+			if e != nil {
+				return e
+			}
+			if e = requireBillingProduct(r, q.Offer.ProductID); e != nil {
+				return e
+			}
 		}
 		v, e := b.AcceptUpgrade(r.Context(), u.ID, r.PathValue("account"), r.PathValue("quote"), r.Header.Get("Idempotency-Key"))
 		if e != nil {
@@ -109,6 +147,9 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		if e := decode(w, r, &body); e != nil {
 			return e
 		}
+		if e := requireBillingProduct(r, body.ProductID); e != nil {
+			return e
+		}
 		v, e := b.SetAuthorization(r.Context(), u.ID, r.PathValue("account"), billing.Authorization{ProductID: body.ProductID, Purpose: body.Purpose, Enabled: body.Enabled, Version: body.Version, MaxPerOperation: body.MaxPerOperation, MaxTotal: body.MaxTotal, ExpiresAt: body.ExpiresAt})
 		if e != nil {
 			return e
@@ -119,6 +160,15 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		var body struct{}
 		if e := decode(w, r, &body); e != nil {
 			return e
+		}
+		if originProduct(r) != "" {
+			o, e := b.GetOrder(r.Context(), u.ID, r.PathValue("account"), r.PathValue("order"))
+			if e != nil {
+				return e
+			}
+			if e = requireBillingProduct(r, o.ProductID); e != nil {
+				return e
+			}
 		}
 		v, e := b.RequestRefund(r.Context(), u.ID, r.PathValue("account"), r.PathValue("order"), r.Header.Get("Idempotency-Key"))
 		if e != nil {

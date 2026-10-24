@@ -15,8 +15,11 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		if e := decode(w, r, &body); e != nil {
 			return e
 		}
-		if product, ok := r.Context().Value(productIdentityKey{}).(string); ok && body.OriginProductID != product {
-			return accounts.ErrForbidden
+		if product := originProduct(r); product != "" {
+			if body.OriginProductID != "" && body.OriginProductID != product {
+				return accounts.ErrForbidden
+			}
+			body.OriginProductID = product
 		}
 		v, e := a.Issue(r.Context(), u.ID, r.PathValue("account"), body)
 		if e != nil {
@@ -25,7 +28,7 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		return respond(w, 201, v)
 	})
 	add("DELETE /v1/accounts/{account}/model-credentials/{credential}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		if e := a.Revoke(r.Context(), u.ID, r.PathValue("account"), r.PathValue("credential")); e != nil {
+		if e := a.RevokeForProduct(r.Context(), u.ID, r.PathValue("account"), r.PathValue("credential"), originProduct(r)); e != nil {
 			return e
 		}
 		w.WriteHeader(204)

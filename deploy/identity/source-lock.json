@@ -1,0 +1,20 @@
+{
+  "repository": "https://github.com/casdoor/casdoor",
+  "tag": "v4.23.0",
+  "commit": "1b91d9d319a127e9b1af88fa7a20bb35c052b9d8",
+  "archive_url": "https://codeload.github.com/casdoor/casdoor/tar.gz/1b91d9d319a127e9b1af88fa7a20bb35c052b9d8",
+  "archive_sha256": "3b2b934c28e5fce5eef124755a793930139b4ca1416ef051ec241152529c316b",
+  "runtime_image": "casbin/casdoor:v4.23.0@sha256:e13c9aada231f7338a03ab0ae7054d0a9480e77283338ab9fc319d88fe2b3ce0",
+  "files": {
+    "object/record.go": "80d4052a9bf98a4b5e227b992e68d933611328e1bf70f4fd02b6438fa9f5eb76",
+    "util/path.go": "99c6449c3a19b701720750db307a3a9e08cba737fb5fae64a4f69b83253ed74c",
+    "routers/record.go": "812e9e8c7a3101ab05c87d2c9f078cf69a779c8a963b4e34f56933901f0b8935",
+    "conf/app.conf": "39a73cf5396d770b0aeba662efd6a41acd8046f902754fb3afb69e4d149fb972",
+    "object/audit_provider.go": "cd2a3c9115edf3874c22bebba0355eeb89e977e9db7c3d209e74604a8fd56f66",
+    "go.mod": "a6ed4c29087221d44c33f5e0cc0e935c927411073c5286e243b27d928cd2dff9",
+    "go.sum": "98f035cd0401014d9c287a19302647be0c0624383746bcf035a36660b0f629a1",
+    "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "Dockerfile": "ba3d77475de67621f6b20ff0e5bc8048316f6ce0c69fa89ddf46b94d28681179"
+  },
+  "patched_record_sha256": "cbc348261a902aa30ce14da39555c3b269d28b904f62ab82e431890ac63f78ed"
+}

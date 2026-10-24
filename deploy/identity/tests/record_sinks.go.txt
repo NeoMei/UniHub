@@ -1,0 +1,23 @@
+// Copyright 2026 UniHub contributors. Licensed under Apache-2.0.
+// Only external I/O is substituted. NewRecord/AddRecord/maskSecrets/FilterQuery
+// are extracted verbatim from the locked official source for these tests.
+package object
+
+var sinkOrder []string
+var sinkRecords []Record
+
+func resetSinks() { sinkOrder = nil; sinkRecords = nil }
+func SendWebhooks(record *Record) error {
+	sinkOrder = append(sinkOrder, "webhook")
+	sinkRecords = append(sinkRecords, *record)
+	return nil
+}
+func addRecord(record *Record) (int64, error) {
+	sinkOrder = append(sinkOrder, "database")
+	sinkRecords = append(sinkRecords, *record)
+	return 1, nil
+}
+func sendAuditRecord(record *Record) {
+	sinkOrder = append(sinkOrder, "audit")
+	sinkRecords = append(sinkRecords, *record)
+}

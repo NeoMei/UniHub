@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
+	"unihub/internal/products"
 )
 
 type config struct {
@@ -14,6 +17,11 @@ type config struct {
 	OperatorAudience                                              string
 	OperatorIDs                                                   []string
 	ProductClients                                                map[string]string
+	ProductAccess                                                 map[string]products.Client
+	IdentityKey                                                   []byte
+	IdentityManagementClientID, IdentityManagementSecret          string
+	IdentityAuditVerified                                         bool
+	IdentityTrustLoopbackProxy                                    bool
 	Production, SandboxCatalog                                    bool
 	Sandbox                                                       bool
 	SigningKey                                                    []byte
@@ -57,6 +65,56 @@ func readConfig(get func(string) string) (config, error) {
 			c.ProductClients[product] = audience
 			usedAudiences[audience] = true
 		}
+	}
+	c.ProductAccess = map[string]products.Client{}
+	if file := get("PRODUCT_CLIENTS_FILE"); file != "" {
+		f, err := os.Open(file)
+		if err != nil {
+			return c, fmt.Errorf("product registry is unavailable")
+		}
+		info, statErr := f.Stat()
+		if statErr != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			f.Close()
+			return c, fmt.Errorf("product registry must be a bounded regular file")
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+		f.Close()
+		if readErr != nil || len(raw) > 1<<20 {
+			return c, fmt.Errorf("product registry is unavailable")
+		}
+		c.ProductAccess, err = products.Parse(raw)
+		if err != nil {
+			return c, fmt.Errorf("invalid product client policy")
+		}
+		for id := range c.ProductAccess {
+			if usedAudiences[id] {
+				return c, fmt.Errorf("product client audiences must be separate from legacy, console and operators")
+			}
+			usedAudiences[id] = true
+		}
+	}
+	c.IdentityKey = []byte(get("HEADLESS_IDENTITY_KEY"))
+	c.IdentityManagementClientID = get("HEADLESS_MANAGEMENT_CLIENT_ID")
+	c.IdentityManagementSecret = get("HEADLESS_MANAGEMENT_CLIENT_SECRET")
+	audit := get("HEADLESS_AUDIT_REDACTION_VERIFIED")
+	if audit != "" && audit != "false" && audit != "true" {
+		return c, fmt.Errorf("HEADLESS_AUDIT_REDACTION_VERIFIED must be true or false")
+	}
+	c.IdentityAuditVerified = audit == "true"
+	proxy := get("HEADLESS_TRUST_LOOPBACK_PROXY")
+	if proxy != "" && proxy != "true" && proxy != "false" {
+		return c, fmt.Errorf("HEADLESS_TRUST_LOOPBACK_PROXY must be true or false")
+	}
+	c.IdentityTrustLoopbackProxy = proxy == "true"
+	enabledIdentity := false
+	for _, client := range c.ProductAccess {
+		enabledIdentity = enabledIdentity || client.PasswordLogin || client.Registration
+	}
+	if len(c.IdentityKey) > 0 && len(c.IdentityKey) < 32 {
+		return c, fmt.Errorf("HEADLESS_IDENTITY_KEY requires at least 32 bytes")
+	}
+	if enabledIdentity && (len(c.IdentityKey) < 32 || c.IdentityManagementClientID == "" || c.IdentityManagementSecret == "" || !c.IdentityAuditVerified) {
+		return c, fmt.Errorf("headless identity requires private management configuration and verified upstream audit privacy")
 	}
 	if c.ModelServiceToken != "" && len(c.ModelServiceToken) < 32 {
 		return c, fmt.Errorf("MODEL_SERVICE_TOKEN requires at least 32 bytes")

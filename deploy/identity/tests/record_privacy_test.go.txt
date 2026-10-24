@@ -1,0 +1,129 @@
+// Copyright 2026 UniHub contributors. Licensed under Apache-2.0.
+package object
+
+import (
+	"encoding/json"
+	"net/http/httptest"
+	"net/url"
+	"reflect"
+	"strings"
+	"testing"
+
+	beegocontext "github.com/beego/beego/v2/server/web/context"
+)
+
+var privacyKeys = []string{"password", "nonce", "state", "code", "code_challenge", "code_verifier"}
+
+func TestNewRecordRedactsURLAndBodyBeforeEverySink(t *testing.T) {
+	for _, format := range []string{"json", "form", "multipart"} {
+		t.Run(format, func(t *testing.T) {
+			body := privacyBody(format)
+			query := url.Values{"application": {"test-app"}, "client_id": {"public-client"}, "redirect_uri": {"https://product.example/callback"}, "safe": {"kept"}, "code_challenge_method": {"S256"}}
+			for _, key := range privacyKeys {
+				query.Add(key, "sensitive-"+key)
+				query.Add(key, "second-"+key)
+			}
+			req := httptest.NewRequest("POST", "/api/login?"+query.Encode(), strings.NewReader(body))
+			req.Header.Set("Accept-Language", "zh-CN")
+			req.RemoteAddr = "192.0.2.1:1234"
+			ctx := beegocontext.NewContext()
+			ctx.Reset(httptest.NewRecorder(), req)
+			ctx.Input.RequestBody = []byte(body)
+			ctx.Input.SetData("json", map[string]any{"status": "ok", "msg": "unchanged", "data": "response-secret-never-retained"})
+			record, err := NewRecord(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertPrivate(t, record)
+			uri, err := url.Parse(record.RequestUri)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if uri.Path != "/api/login" || uri.Query().Get("client_id") != "public-client" || uri.Query().Get("application") != "test-app" || uri.Query().Get("code_challenge_method") != "S256" || uri.Query().Get("safe") != "kept" {
+				t.Fatalf("safe URI fields changed: %s", record.RequestUri)
+			}
+			if record.Method != "POST" || record.Action != "login" || record.StatusCode != 200 || record.Language != "zh-CN" || record.Response != `{status:"ok", msg:"unchanged"}` || record.Name != "fixture-id" || record.CreatedTime != "2026-10-25T00:00:00Z" || record.ClientIp != "192.0.2.1:1234" {
+				t.Fatalf("nonsecret record fields changed: %+v", record)
+			}
+			if !strings.Contains(record.Object, "safe") || !strings.Contains(record.Object, "kept") {
+				t.Fatal("nonsecret body discarded")
+			}
+			before := *record
+			resetSinks()
+			if !AddRecord(record) {
+				t.Fatal("AddRecord did not persist")
+			}
+			if !reflect.DeepEqual(sinkOrder, []string{"webhook", "database", "audit"}) {
+				t.Fatalf("unexpected sink order: %v", sinkOrder)
+			}
+			for _, observed := range sinkRecords {
+				assertPrivate(t, &observed)
+				if observed.Object != before.Object || observed.RequestUri != before.RequestUri || observed.Action != before.Action || observed.Method != before.Method || observed.Response != before.Response {
+					t.Fatal("record changed before sink")
+				}
+			}
+		})
+	}
+}
+
+func TestAddRecordAlsoMasksBodiesCreatedOutsideNewRecord(t *testing.T) {
+	for _, format := range []string{"json", "form", "multipart"} {
+		record := &Record{Method: "POST", Action: "login", Object: privacyBody(format), RequestUri: "/api/login?safe=kept", Organization: "test-org"}
+		resetSinks()
+		if !AddRecord(record) {
+			t.Fatal("not persisted")
+		}
+		for _, observed := range sinkRecords {
+			assertPrivate(t, &observed)
+			if observed.Owner != "test-org" || observed.Organization != "test-org" {
+				t.Fatal("organization attribution changed")
+			}
+		}
+	}
+}
+func TestExistingPasswordAndTokenMaskingRetained(t *testing.T) {
+	value := `{"oldPassword":"sensitive-password","access_token":"sensitive-token","safe":"kept"}`
+	got := maskSecrets(value)
+	if strings.Contains(got, "sensitive-") || !strings.Contains(got, `"safe":"kept"`) {
+		t.Fatalf("existing secret policy regressed: %s", got)
+	}
+}
+func privacyBody(format string) string {
+	switch format {
+	case "json":
+		body := map[string]any{"safe": "kept", "application": "test-app"}
+		for _, key := range privacyKeys {
+			body[key] = "sensitive-" + key
+		}
+		data, _ := json.Marshal(body)
+		return string(data)
+	case "form":
+		body := url.Values{"safe": {"kept"}, "application": {"test-app"}}
+		for _, key := range privacyKeys {
+			body.Set(key, "sensitive-"+key)
+		}
+		return body.Encode()
+	default:
+		var body strings.Builder
+		for _, key := range append(append([]string{}, privacyKeys...), "safe") {
+			value := "sensitive-" + key
+			if key == "safe" {
+				value = "kept"
+			}
+			body.WriteString("--boundary\r\nContent-Disposition: form-data; name=\"" + key + "\"\r\n\r\n" + value + "\r\n")
+		}
+		body.WriteString("--boundary--\r\n")
+		return body.String()
+	}
+}
+func assertPrivate(t *testing.T, record *Record) {
+	t.Helper()
+	for _, key := range privacyKeys {
+		if strings.Contains(record.RequestUri, "sensitive-"+key) || strings.Contains(record.RequestUri, "second-"+key) || strings.Contains(record.Object, "sensitive-"+key) {
+			t.Errorf("audit retains sensitive %s", key)
+		}
+	}
+	if strings.Contains(record.Response, "response-secret-never-retained") {
+		t.Error("authentication response data retained")
+	}
+}
