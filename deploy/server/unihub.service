@@ -1,5 +1,5 @@
 [Unit]
-Description=UniHub sandbox identity and account console
+Description=UniHub sandbox identity and billing API service
 Wants=network-online.target docker.service
 After=network-online.target docker.service
 StartLimitIntervalSec=120

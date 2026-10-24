@@ -35,4 +35,26 @@ class AuditVerificationTests(unittest.TestCase):
   import sys
   with self.assertRaises(m.AuditError):m.command([sys.executable,'-c','print("x"*1024)'],max_bytes=100)
 
+ def test_casdoor_file_archive_scans_every_regular_file_and_enforces_total_bound(self):
+  import io,tarfile
+  def archive(items):
+   out=io.BytesIO()
+   with tarfile.open(fileobj=out,mode='w') as tar:
+    for name,value in items:
+     info=tarfile.TarInfo(name);info.size=len(value);tar.addfile(info,io.BytesIO(value))
+   return out.getvalue()
+  raw=archive([('casdoor.log',b'ordinary log'),('nested/error.log',b'second log')])
+  proof=m.casdoor_file_archive(raw,['synthetic-private'],max_bytes=100)
+  self.assertEqual(proof['files_scanned'],2);self.assertEqual(proof['bytes_read'],22);self.assertTrue(proof['markers_absent'])
+  with self.assertRaises(m.AuditError):m.casdoor_file_archive(raw,['synthetic-private'],max_bytes=10)
+  with self.assertRaises(m.AuditError):m.casdoor_file_archive(archive([('casdoor.log',b'synthetic-private')]),['synthetic-private'])
+
+ def test_casdoor_file_archive_refuses_symlinks_hardlinks_and_outside_paths(self):
+  import io,tarfile
+  for name,kind in [('../outside',tarfile.REGTYPE),('/absolute',tarfile.REGTYPE),('nested/link',tarfile.SYMTYPE),('hardlink',tarfile.LNKTYPE)]:
+   out=io.BytesIO()
+   with tarfile.open(fileobj=out,mode='w') as tar:
+    info=tarfile.TarInfo(name);info.type=kind;info.linkname='/private/secret' if kind!=tarfile.REGTYPE else '';tar.addfile(info)
+   with self.assertRaises(m.AuditError):m.casdoor_file_archive(out.getvalue(),['synthetic-private'])
+
 if __name__=='__main__':unittest.main()

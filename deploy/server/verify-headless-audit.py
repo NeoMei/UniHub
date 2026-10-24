@@ -9,13 +9,15 @@ from datetime import datetime,timedelta,timezone
 import gzip
 import hashlib
 import importlib.util
+import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path,PurePosixPath
 import re
 import subprocess
 import sys
 import tempfile
+import tarfile
 import urllib.parse
 
 MAX_BYTES=64*1024*1024
@@ -36,17 +38,50 @@ def bounded_json(path,limit=MAX_JSON):
  try:return json.loads(path.read_text())
  except (ValueError,OSError):raise AuditError('Evidence JSON is invalid') from None
 
-def command(args,*,input=None,max_bytes=MAX_BYTES):
+def command_bytes(args,*,input=None,max_bytes=MAX_BYTES,clean_stderr=False):
  # Anonymous private files avoid holding arbitrary provider/log output in RAM;
  # exceeding the bound fails acceptance, never silently truncates the scan.
  with tempfile.TemporaryFile() as out,tempfile.TemporaryFile() as err:
   try:result=subprocess.run(args,input=input.encode() if isinstance(input,str) else input,stdout=out,stderr=err,timeout=90,check=False)
   except (subprocess.SubprocessError,OSError):raise AuditError('Read-only inspection failed; diagnostics withheld') from None
   sizes=[stream.tell() for stream in [out,err]]
-  if result.returncode or sum(sizes)>max_bytes:raise AuditError('Inspection failed or complete output exceeds the scan bound; nothing accepted')
+  if result.returncode or sum(sizes)>max_bytes or (clean_stderr and sizes[1]):raise AuditError('Inspection failed or complete output exceeds the scan bound; nothing accepted')
   out.seek(0);err.seek(0)
-  try:return out.read().decode('utf8')+err.read().decode('utf8')
-  except UnicodeError:raise AuditError('Inspection output is not complete UTF-8 text') from None
+  return out.read()+err.read()
+
+def command(args,*,input=None,max_bytes=MAX_BYTES):
+ try:return command_bytes(args,input=input,max_bytes=max_bytes).decode('utf8')
+ except UnicodeError:raise AuditError('Inspection output is not complete UTF-8 text') from None
+
+def casdoor_file_archive(raw,markers,*,max_bytes=MAX_BYTES):
+ """Inspect a docker-cp tar stream in memory; never extract archive paths."""
+ total=0;count=0;entries=0
+ try:
+  with tarfile.open(fileobj=io.BytesIO(raw),mode='r:') as archive:
+   for member in archive:
+    entries+=1;path=PurePosixPath(member.name)
+    if entries>10000 or path.is_absolute() or '..' in path.parts or '\\' in member.name or not member.name or member.issym() or member.islnk():raise AuditError('Casdoor log archive contains an unsafe or linked path')
+    if member.isdir():continue
+    if not member.isfile() or member.size<0:raise AuditError('Casdoor log archive contains a non-regular file')
+    total+=member.size
+    if total>max_bytes:raise AuditError('Complete Casdoor file logs exceed 64 MiB scan bound; nothing accepted')
+    stream=archive.extractfile(member)
+    if stream is None:raise AuditError('Casdoor log file cannot be read completely')
+    content=stream.read(member.size+1)
+    if len(content)!=member.size:raise AuditError('Casdoor log archive contains an incomplete file')
+    try:text=content.decode('utf8')
+    except UnicodeError:raise AuditError('Casdoor file log is not complete UTF-8 text') from None
+    no_markers(text,markers);count+=1
+ except (tarfile.TarError,ValueError,OSError):raise AuditError('Casdoor log archive could not be scanned completely') from None
+ if count==0:raise AuditError('Configured Casdoor file log sink contains no regular files to verify')
+ return {'files_scanned':count,'bytes_read':total,'markers_absent':True,'complete_files':True,'scope':'all_regular_files_under_/logs','time_filter':'entire_files_unique_probe_markers'}
+
+def casdoor_file_proof(markers):
+ # Check the fixed source directory before daemon-side copy. Docker cp does not
+ # follow symlinks without -L; all archive entries are independently validated.
+ command(['docker','exec','unihub-server-casdoor','sh','-c','test -d /logs && test ! -L /logs'],max_bytes=4096)
+ archive=command_bytes(['docker','cp','unihub-server-casdoor:/logs/.','-'],max_bytes=MAX_BYTES+16*1024*1024,clean_stderr=True)
+ return casdoor_file_archive(archive,markers)
 
 def no_markers(text,markers):
  # Scan raw, JSON escaped and decoded query representations. Values themselves
@@ -155,8 +190,9 @@ def verify(root,release,markers_path,result_path,since,output):
  try:journal_count=sum(1 for line in journals.splitlines() if json.loads(line))
  except ValueError:raise AuditError('Journald output is incomplete or invalid') from None
  logs=command(['docker','logs','--since',since.isoformat(),'--timestamps','unihub-server-casdoor']);no_markers(logs,markers)
+ file_logs=casdoor_file_proof(markers)
  checks={name:True for name in bundle.PRIVACY_CHECKS}
- aggregate={'schema_version':1,'since':since.isoformat(),'as_of':now.isoformat(),'identity_probe':identity,'audit':audit,'proxy':proxy,'journald':{'lines_scanned':journal_count,'markers_absent':True,'complete_window':True},'casdoor_docker_logs':{'lines_scanned':len(logs.splitlines()),'markers_absent':True,'complete_window':True},'source_function_test':source,'sink_modes':{'webhooks':'none_configured+source_function_test','audit_providers':'none_configured+source_function_test'},'private_markers_checked':len(markers),'raw_sink_data_saved':False}
+ aggregate={'schema_version':1,'since':since.isoformat(),'as_of':now.isoformat(),'identity_probe':identity,'audit':audit,'proxy':proxy,'journald':{'lines_scanned':journal_count,'markers_absent':True,'complete_window':True},'casdoor_docker_logs':{'lines_scanned':len(logs.splitlines()),'markers_absent':True,'complete_window':True},'casdoor_file_logs':file_logs,'source_function_test':source,'sink_modes':{'webhooks':'none_configured+source_function_test','audit_providers':'none_configured+source_function_test'},'private_markers_checked':len(markers),'raw_sink_data_saved':False}
  if output in [Path(markers_path).absolute(),Path(result_path).absolute(),root/'shared/credentials.json',policy]:raise AuditError('Evidence output cannot replace private inputs or runtime policy')
  output.parent.mkdir(parents=True,exist_ok=True);evidence=output.with_name(output.stem+'-aggregate.json');bundle.no_symlink(evidence)
  bundle.atomic_write(evidence,json.dumps(aggregate,indent=2)+'\n',0o600)

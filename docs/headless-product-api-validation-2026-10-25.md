@@ -36,4 +36,16 @@ Casdoor审计补丁只扩展固定版本的敏感字段名单，不改认证逻�
 
 升级前完整物理备份：`/opt/unihub/backups/20261024T163918Z`；已通过真实固定PG镜像隔离恢复、checksums、pg_verifybackup、三个数据库owner及身份签名密钥存在性验证。完整异地应用恢复仍不在此次证明范围。
 
-服务器新版本及公网验收将在实际完成后追加；目前此段不表示已经部署成功。
+已部署至 `/opt/unihub/releases/20261025-headless-v1`，`current` 已切换，`unihub.service` 及三依赖健康。实现版本为 `5c9d4c4`，公网私有路径拒绝断言修正为 `5a38aab`。公开机器契约：[OpenAPI](https://unihub.quukk.com/openapi.yaml)。
+
+Casdoor在目标机按实际不可变镜像ID登记：`sha256:6e8d821320319a0034dc610eaaceb7180ec658a2bee7d97afaf64e441211d66c`，`/server` SHA256为 `3f385dc9a19577835113fcbab5843bd0053207f315ee787e9749bbe0ac90e5d9`；没有把本地镜像冒充已发布仓库digest。严格校验归属、镜像和运行二进制后，只对规范身份适配器路径核验真实审计/日志，才开启注册与认证。
+
+已登记独立客户端 `superwagie-headless`（应用 `app-superwagie-headless`），精确回调为 SuperWagie 现有loopback路径；同产品旧客户端保持原权限。新客户端获准自身及llmrouter商品/钱包，仍须当前账户角色。该登记不表示SuperWagie已替换其现有接入实现。
+
+通过公网HTTPS完成相同的JSON注册→认证→充值→购买→团队→资源查询流程，并由独立受信llmrouter身份在loopback执行合成模型预占和结算。结果为现金 `9000000`、额度 `999996`、1个已结算调用和收费 `4`，HTML页面加载为零。公网SDK另从本机实际认证并读回一致结果。公网私有结算路由由nginx拒绝；首次脚本把这个HTML拒绝页误判为JSON协议失败，已修正为仅接受预期错误断言的代理拒绝，所有成功产品请求仍必须为JSON。仅清理该次合成验收来源的两条注册限流桶后重新验收，没有关闭或放宽运行时限流。
+
+重启 `unihub.service` 后，原access token继续通过验证，资金/额度读回一致且未重复发放；升级前备份中的全部原有凭据逐项一致。普通owner账号与身份admin账号未重置。新增用户与财务对象均为独立合成测试账户，原交付owner账户保留。
+
+外发Webhook/Audit provider当前均未配置；报告明确标记none_configured+source_function_test，未声称验证了真实外部接收端。真实审计表、本站Nginx、journal、Docker输出及Casdoor文件日志均检查合成密码、令牌与PKCE标记。公网入口仍只支持HTTPS，内部路由和直接Casdoor signup仍被拒绝。
+
+服务器聚合证据位于 `/opt/unihub/shared/headless-acceptance-20261025/` 的公开结果JSON，目录受root权限保护；私密标记文件不作公开交付。本机无秘密副本在 `.local/server-deployment/headless/`。

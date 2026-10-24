@@ -63,8 +63,10 @@ def backup(root, destination):
                 no_symlink(source)
                 archive.add(source,arcname=relative,recursive=True)
         archive.add(release / 'deploy/server', arcname='release/deploy/server', recursive=True)
-        for name in ['manifest.json', 'release-manifest.json', 'REVISION']:
+        for name in ['manifest.json', 'release-manifest.json', 'headless-release-manifest.json', 'REVISION',
+                     'products.approved.json', 'identity/image-context/source-manifest.json']:
             if (release / name).is_file():
+                no_symlink(release / name)
                 archive.add(release / name, arcname='release/' + name)
     config.chmod(0o600)
     pin=identity_pin(root)
