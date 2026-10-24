@@ -1,0 +1,8 @@
+/* Public branding only; Casdoor's theme and protocol identifiers are unchanged. */
+html.dark img[src="/assets/unihub/unihub-logo-v1.png"],
+html.dark img[src$="/assets/unihub/unihub-logo-v1.png"] {
+  background: #f3f8fa;
+  border-radius: 8px;
+  padding: 4px 6px;
+  box-sizing: border-box;
+}

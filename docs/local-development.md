@@ -1,10 +1,10 @@
 # 本地开发
 
-这一切片提供 Go bearer API、账户数据库、Formance Ledger 和真实 Casdoor 身份服务。前端及 BFF 会话属于下一切片；API 当前没有 `/auth/login` 或 cookie 登录。
+这一切片提供 Go bearer API、账户数据库、Formance Ledger 和真实 Casdoor 身份服务。业务用户中心前端及 BFF 会话属于下一切片；API 当前没有 `/auth/login` 或 cookie 登录。
 
 ## 环境与启动
 
-需要 Go 1.26.5 或更高、Docker（含 Compose v2）、Python 3。宿主机运行 Go，依赖运行在 Docker 中。
+需要 Go 1.26.5 或更高、Docker（含 Compose v2）、Python 3、Node.js 22 或更高（用于品牌前端语法校验）。宿主机运行 Go，依赖运行在 Docker 中。
 
 ```sh
 make dev-setup
@@ -26,7 +26,7 @@ make api
 
 所有容器发布端口都绑定 `127.0.0.1`。内部网络名为 `unihub-dev`，PostgreSQL 持久卷为 `unihub-dev-postgres`；两者在 Compose 中声明为 external，由初始化脚本在需要时创建。数据库分别为 `unihub`、`ledger`、`casdoor`；Casdoor 使用独立数据库角色 `casdoor`。
 
-`make dev-setup` 可重复执行：保留原配置与密码、创建缺少的数据库、复用现有同名容器、启动缺少的服务。它不会停止或删除容器。脚本等待 Formance 信息接口及 Casdoor discovery 就绪；逻辑账本 `unihub` 由 Go 服务启动时创建/读回。
+`make dev-setup` 可重复执行：保留原配置与密码、创建缺少的数据库、复用现有同名容器、启动缺少的服务。当本项目 Compose 管理的 Casdoor 容器缺少品牌前端只读挂载时，仅重建该服务容器；保留数据库、配置、密钥及日志卷，PostgreSQL/Ledger 仍复用。脚本等待 Formance 信息接口及 Casdoor discovery 就绪；逻辑账本 `unihub` 由 Go 服务启动时创建/读回。
 
 ## 本地配置与凭据
 
@@ -36,6 +36,7 @@ make api
 - `.local/credentials.json`：两个普通测试用户 `alice`、`bob` 的随机密码、Casdoor 管理员密码和应用 client secret。用本地编辑器查看；初始化过程不在终端打印秘密。
 - `.local/casdoor/conf/app.conf`：PostgreSQL、issuer、管理员初始化密码。
 - `.local/casdoor/conf/init_data.json`：`unihub` 组织、`app-unihub` 应用和测试用户。
+- `.local/casdoor/web`：从固定镜像准备的 UniHub 品牌前端，只读挂载；不含认证秘密。
 - `.local/access-token`：完成 PKCE 登录后保存的短期 access token。
 
 `.local` 目录仅当前用户可访问；Casdoor 配置目录/文件额外允许当前用户组读取，通过容器 supplemental group 支持镜像 uid 1000。不要复制这些文件进版本库。
@@ -54,6 +55,8 @@ Casdoor 应用配置为非共享应用、`JWT-Standard`、`RS256` 证书、clien
 
 初始化脚本包含一次窄范围兼容修复：原始 `app-unihub` 的非空登录项列表缺少 `Login button` 时追加可见按钮，同时修复本地 seed；已有该行时不操作，不覆盖显式隐藏按钮的设置，不变更账号、密码或密钥。
 
+品牌更新使用限定列的幂等迁移：`app-unihub`、`app-built-in` 及其组织显示为 UniHub，使用本项目 Logo、favicon、页脚与青色主题。原上游默认头像/主页按已知默认值更新，自定义值保留。详见[品牌规范](../branding/README.md)。
+
 ## 浏览器 PKCE 登录及 API 调用
 
 保持 API 运行，在另一终端执行：
@@ -62,7 +65,7 @@ Casdoor 应用配置为非共享应用、`JWT-Standard`、`RS256` 证书、clien
 make dev-login
 ```
 
-该命令启动只监听 loopback 的临时 callback，创建随机 state、PKCE verifier/S256 challenge，然后打开 Casdoor 登录页。在页面使用 `.local/credentials.json` 中的 Alice 或 Bob 账号。浏览器完成登录后，脚本严格检查 callback state 和 issuer，将一次性 code 与 verifier 发送至 token endpoint；仅保存响应的 **access token**。它会尝试访问 `/v1/me`，运行中的 API 拒绝 token 时不会保存；API 未启动则明确报告验签验收仍未完成。脚本不把 token 放进浏览器页面或终端输出。
+该命令启动只监听 loopback 的临时 callback，创建随机 state、PKCE verifier/S256 challenge，然后打开 UniHub 登录页。在页面使用 `.local/credentials.json` 中的 Alice 或 Bob 账号。浏览器完成登录后，脚本严格检查 callback state 和 issuer，将一次性 code 与 verifier 发送至 token endpoint；仅保存响应的 **access token**。它会尝试访问 `/v1/me`，运行中的 API 拒绝 token 时不会保存；API 未启动则明确报告验签验收仍未完成。脚本不把 token 放进浏览器页面或终端输出。
 
 这个 helper 是本地 CLI 流程，client secret 留在本地进程；它不是 BFF，不建立浏览器业务会话，不使用 implicit/password grant，不启用可信用户 header。PKCE 回调等待五分钟。再次登录可覆盖本地短期 token；切换账号时先退出 Casdoor 登录会话，或在另一浏览器会话中打开授权链接。
 

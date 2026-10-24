@@ -1,0 +1,475 @@
+{
+  "version": 1,
+  "image": "casbin/casdoor:v4.23.0@sha256:e13c9aada231f7338a03ab0ae7054d0a9480e77283338ab9fc319d88fe2b3ce0",
+  "upstream": "https://github.com/casdoor/casdoor/tree/v4.23.0",
+  "notes": [
+    "Only reviewed UI values and default branding references are modified.",
+    "Translation keys, protocol tags, provider type IDs, SDK/product names and upstream URLs remain unchanged.",
+    "Each upstream file is locked to SHA-256; each exact replacement and translation display transformation checks its reviewed count."
+  ],
+  "files": [
+    {
+      "path": "index.html",
+      "sha256": "1acefa09edd797400970985ab123049963fc02606dd0199044073a8b592cdf0a",
+      "replacements": [
+        {
+          "old": "<!-- routers/static_filter.go rewrites this exact URL to the organization's own\n         favicon, so the first paint is already branded; keep it byte-identical -->",
+          "new": "<!-- UniHub first-paint branding; the configured organization uses the same public assets. -->",
+          "count": 1
+        },
+        {
+          "old": "https://cdn.casbin.org/img/favicon.png",
+          "new": "/assets/unihub/unihub-icon-v1.png",
+          "count": 2
+        },
+        {
+          "old": "https://cdn.casbin.org/site/casdoor/manifest.json",
+          "new": "/assets/unihub/manifest.webmanifest",
+          "count": 1
+        },
+        {
+          "old": "<meta name=\"theme-color\" content=\"#000000\" />",
+          "new": "<meta name=\"theme-color\" content=\"#087F8C\" />",
+          "count": 1
+        },
+        {
+          "old": "Casdoor - An open-source Identity and Access Management (IAM) / Single-Sign-On (SSO) platform",
+          "new": "UniHub — 统一身份与账户中心",
+          "count": 1
+        },
+        {
+          "old": "<title>Casdoor</title>",
+          "new": "<title>UniHub</title>",
+          "count": 1
+        },
+        {
+          "old": "Casdoor failed to load",
+          "new": "UniHub failed to load",
+          "count": 2
+        },
+        {
+          "old": "Casdoor is taking too long to load",
+          "new": "UniHub is taking too long to load",
+          "count": 1
+        },
+        {
+          "old": "Your browser may be too old to run Casdoor.",
+          "new": "Your browser may be too old to run UniHub.",
+          "count": 1
+        },
+        {
+          "old": "  </head>",
+          "new": "    <link rel=\"stylesheet\" href=\"/assets/unihub/branding.css\" />\n  </head>",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "assets/index-cnXxJbP8.js",
+      "sha256": "45984cce442a701eb94a8d0c73ad6847aa599925b29ce5948c5273858bfcf61d",
+      "replacements": [
+        {
+          "old": "You can learn more about the use of UniHub at https://casdoor.org/.",
+          "new": "Manage your accounts and connected applications with UniHub.",
+          "count": 1
+        },
+        {
+          "old": "`${V}/img/casdoor-logo_1185x256_dark.png`",
+          "new": "\"/assets/unihub/unihub-logo-v1.png\"",
+          "count": 1
+        },
+        {
+          "old": "`${V}/img/casdoor-logo_1185x256.png`",
+          "new": "\"/assets/unihub/unihub-logo-v1.png\"",
+          "count": 2
+        },
+        {
+          "old": "e.endsWith(\"/img/casdoor-logo_1185x256.png\")",
+          "new": "(e.endsWith(\"/img/casdoor-logo_1185x256.png\")||e.endsWith(\"/assets/unihub/unihub-logo-v1.png\"))",
+          "count": 1
+        },
+        {
+          "old": "\"https://cdn.casdoor.com/static/favicon.png\"",
+          "new": "\"/assets/unihub/unihub-icon-v1.png\"",
+          "count": 1
+        },
+        {
+          "old": "alt:(s==null?void 0:s.displayName)||\"Casdoor\"",
+          "new": "alt:(s==null?void 0:s.displayName)||\"UniHub\"",
+          "count": 1
+        },
+        {
+          "old": "href:\"https://casdoor.org\",target:\"_blank\",rel:\"noreferrer\",children:c.jsx(\"img\",{src:Eh([e?\"dark\":\"light\"]),alt:\"Casdoor\"",
+          "new": "href:\"/\",target:\"_blank\",rel:\"noreferrer\",children:c.jsx(\"img\",{src:Eh([e?\"dark\":\"light\"]),alt:\"UniHub\"",
+          "count": 1
+        },
+        {
+          "old": "Powered by <a target=\"_blank\" href=\"https://casdoor.org\" rel=\"noreferrer\"><img style=\"display: inline-block; height: 20px; width: auto; padding-bottom: 3px\" alt=\"Casdoor\" src=\"${V}/img/casdoor-logo_1185x256.png\"/></a>",
+          "new": "<a href=\"/\"><img style=\"display: inline-block; height: 24px; width: auto\" alt=\"UniHub\" src=\"/assets/unihub/unihub-logo-v1.png\"/></a>",
+          "count": 1
+        },
+        {
+          "old": "<h3>Casbin Organization</h3>",
+          "new": "<h3>UniHub</h3>",
+          "count": 2
+        },
+        {
+          "old": "<img src=\"${V}/img/casdoor-logo_1185x256.png\" alt=\"Casdoor Logo\" width=\"300\">",
+          "new": "<img src=\"${window.location.origin}/assets/unihub/unihub-logo-v1.png\" alt=\"UniHub\" width=\"300\">",
+          "count": 2
+        },
+        {
+          "old": "<p>Casbin Team</p>",
+          "new": "<p>UniHub</p>",
+          "count": 2
+        },
+        {
+          "old": "<p>Casdoor is a brand operated by Casbin organization. For more info please refer to <a href=\"https://casdoor.org\">https://casdoor.org</a></p>",
+          "new": "<p>UniHub — Unified accounts and billing.</p>",
+          "count": 2
+        },
+        {
+          "old": "<p>You have been invited into Casdoor</p>",
+          "new": "<p>You have been invited into UniHub</p>",
+          "count": 1
+        },
+        {
+          "old": "Authorization:\"Authorization\"",
+          "new": "Authorization:\"Permissions\"",
+          "count": 1
+        }
+      ],
+      "display_values": [
+        {
+          "start": "const FC={",
+          "end": "},h0={",
+          "expected_changed": 34,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        },
+        {
+          "start": "const $4={",
+          "end": "},Oh=[",
+          "expected_changed": 19,
+          "expected_preserved": 0,
+          "welcome_lowercase": true
+        }
+      ]
+    },
+    {
+      "path": "assets/data-BF_GP6zm.js",
+      "sha256": "01df8f8d81337a62d53a300896a970b896963400cbe37e85242906ed2bba70a1",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 30,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-BZI22Ms2.js",
+      "sha256": "aea8a122dc02cfc2dc73d34b079a0bf04b70a3d6c69cc004b74289a89d7af912",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 29,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-Bdx6ynzh.js",
+      "sha256": "0d2bd081425aa0419c423df9242c50c758b7b437d336a41f968e5791323c6887",
+      "replacements": [
+        {
+          "old": "Authorization:\"Casbin权限管理\"",
+          "new": "Authorization:\"权限管理\"",
+          "count": 1
+        }
+      ],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 34,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-Bkj73s4N.js",
+      "sha256": "bfc0164805fb510f7f8911f9d5a8f9f353b7cb640a621bb0c54536b6cda9ad57",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 29,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-C03YgcNr.js",
+      "sha256": "1f371f1aade04825b778c106905ca2890ef3dfffdd3786096a22473563f9d171",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 30,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-C3XLx-1m.js",
+      "sha256": "75281d98d7d9e04340941047e49e6f75ee59b30a09206da1cb5ca533e32f87b9",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 30,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-CaPE06Il.js",
+      "sha256": "b4a22ac6d561efd3d366f2ebe040dee8bf995641bae2116e68214b1d3c73816f",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 27,
+          "expected_preserved": 3,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-D-h0drDq.js",
+      "sha256": "2267ca626ce01f43237c22f275355155e7f74d805680db2b5aebb6ad3c55900c",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 30,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-DSjMfN6E.js",
+      "sha256": "15dc45fd6bb755e825090066f170d4a11c9bcdb5408e89c6d4ca2a71e4f4392e",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 29,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/data-RIKuPA5v.js",
+      "sha256": "998cba112c62e6d65616c8dd6bdac99434c784a4944684c71e2698b3ffccbbdc",
+      "replacements": [],
+      "display_values": [
+        {
+          "start": "",
+          "end": "",
+          "expected_changed": 28,
+          "expected_preserved": 4,
+          "preserve_keys": [
+            "Certificate - Tooltip",
+            "Marketplace description",
+            "Get the free Casdoor Authenticator app",
+            "Scan the QR code with Casdoor Authenticator to sync these MFA accounts to your phone"
+          ],
+          "preserve_values_containing": [
+            "Casdoor SDK",
+            "Casdoor Authenticator"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "assets/AuthLayout-DDZkpTNt.js",
+      "sha256": "1b4d3645b99ca50bb2bc3dbb45e9e7bf5aacb2ea4f257d60893ebe1438c0f8aa",
+      "replacements": [
+        {
+          "old": "??\"Casdoor\"",
+          "new": "??\"UniHub\"",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "path": "AuthCallbackHandler.js",
+      "sha256": "296430f9eed61bb8bf0f18c96a5b724ff30c88882e963cc467726eaa527a6445",
+      "replacements": [
+        {
+          "old": "Now you can visit apps protected by Casdoor.",
+          "new": "Now you can visit apps connected to UniHub.",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "assets/LoginPage-CW3yaKA4.js",
+      "sha256": "ae2ac423df91595398dc22ec1779636d9cc4e755cc685ace8d7caf3eea93ddee",
+      "replacements": [
+        {
+          "old": "Now you can visit apps protected by Casdoor.",
+          "new": "Now you can visit apps connected to UniHub.",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "assets/defaults-D9C0R43P.js",
+      "sha256": "a4a1f5821d8ca79ac22d5bd6870463d41564726646f555f36958b10d841db256",
+      "replacements": [
+        {
+          "old": "`${d}/img/casdoor-logo_1185x256.png`",
+          "new": "\"/assets/unihub/unihub-logo-v1.png\"",
+          "count": 2
+        },
+        {
+          "old": "\"Casdoor Summit 2022\"",
+          "new": "\"UniHub Demo\"",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "assets/ProviderEditPage-Cuby7BQ1.js",
+      "sha256": "f8597146a0ff6ae456566c26d8f041d7579de0945d66098e4798ab0a59ebd475",
+      "replacements": [
+        {
+          "old": "\"Casdoor Verification Code\"",
+          "new": "\"UniHub Verification Code\"",
+          "count": 1
+        },
+        {
+          "old": "You have requested a verification code at Casdoor.",
+          "new": "You have requested a verification code at UniHub.",
+          "count": 1
+        },
+        {
+          "old": "You have invited to join Casdoor.",
+          "new": "You have been invited to join UniHub.",
+          "count": 1
+        }
+      ]
+    }
+  ]
+}

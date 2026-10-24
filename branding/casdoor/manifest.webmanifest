@@ -1,0 +1,12 @@
+{
+  "name": "UniHub",
+  "short_name": "UniHub",
+  "description": "统一身份与账户中心",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f8fa",
+  "theme_color": "#087F8C",
+  "icons": [
+    { "src": "/assets/unihub/unihub-icon-v1.png", "sizes": "any", "type": "image/png", "purpose": "any" }
+  ]
+}
