@@ -150,6 +150,7 @@ class DeploymentTests(unittest.TestCase):
                 self.send_response(200)
                 self.send_header('Set-Cookie', 'casdoor_session_id=fixture; Path=/')
                 self.end_headers()
+                self.wfile.write(self.path.encode())
             def log_message(self, *args):
                 pass
         upstream = HTTPServer(('127.0.0.1', 0), Identity)
@@ -199,6 +200,18 @@ class DeploymentTests(unittest.TestCase):
         with response:
             flags = {part.strip().lower() for part in response.headers['Set-Cookie'].split(';')[1:]}
             self.assertTrue({'secure', 'httponly', 'samesite=lax'} <= flags)
+        for path in ['/login/built-in?from=%2Fusers', '/users', '/users/', '/users/unihub/owner',
+                     '/organizations', '/organizations/', '/organizations/unihub/users',
+                     '/applications', '/applications/', '/applications/admin/app-unihub']:
+            with self.subTest(identity_path=path):
+                with urllib.request.urlopen(f'https://127.0.0.1:{tls_port}{path}', context=context, timeout=2) as page:
+                    self.assertEqual(page.status, 200)
+                    self.assertEqual(page.read().decode(), path)
+        for path in ['/users-other', '/organizations-other', '/applications-other']:
+            with self.subTest(console_path=path):
+                with self.assertRaises(urllib.error.HTTPError) as failure:
+                    urllib.request.urlopen(f'https://127.0.0.1:{tls_port}{path}', context=context, timeout=2)
+                self.assertEqual(failure.exception.code, 502)
         with self.assertRaises(urllib.error.HTTPError) as failure:
             urllib.request.urlopen(f'https://127.0.0.1:{tls_port}/auth/callback?code=PRIVATE_CODE&state=PRIVATE_STATE', context=context, timeout=2)
         self.assertEqual(failure.exception.code, 502)

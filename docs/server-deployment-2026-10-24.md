@@ -44,3 +44,11 @@
 部署工具通过11项测试（含真实nginx TLS/Cookie/日志/HTTP拒绝验证），同域身份资源补丁8项测试；Linux二进制与TypeScript/Vite构建成功。本轮未修改Go账务逻辑，沿用此前真实PG/Formance race验收。
 
 升级、备份、回滚及初始账户操作见 [服务器操作说明](../deploy/server/README.md)。数据库迁移可能只向前，回滚二进制不等于回滚数据。部署源及发布包应一起保留。
+
+## 管理员与普通用户测试入口
+
+后续按用户要求交付两个既有账号：身份管理后台 `built-in/admin` 与业务普通用户 `unihub/owner`，没有重置密码或扩大普通用户权限。管理员使用 `https://unihub.quukk.com/login/built-in?from=%2Fusers&silentSignin=1`，普通用户使用主站。初始密码保存在本机忽略目录 `.local/server-deployment/test-accounts.json`（0600），不写入本文。
+
+已补齐 nginx 对 `/users`、`/organizations`、`/applications` 及其子路径的身份前端分流；原认证、Cookie、禁注册及内部接口限制保留。11项部署测试通过（含真实nginx路径及相近非匹配路径验证）。真实HTTPS接口验证 admin 登录、isAdmin=true且可读用户列表；owner 登录、isAdmin=false且用户列表请求被服务端拒绝。真实浏览器 admin 密码登录进入用户列表，刷新仍可用。普通会话访问同页显示未授权，不能因换登录URL自动获得管理员身份。建议两个角色使用分开的浏览器会话进行对照测试。
+
+此入口为身份管理后台；UniHub 独立的计费运营可视化后台仍在后续范围。
