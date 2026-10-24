@@ -46,7 +46,12 @@ class Client:
                 except Exception: code = 'non-json'
                 raise RuntimeError(f'{method} {path.split("?")[0]}: HTTP {status} ({code})')
             if not raw: return None
-            if 'application/json' not in content_type: raise RuntimeError('non-JSON response')
+            if 'application/json' not in content_type:
+                # A blocked private route may be rejected by the HTTPS proxy
+                # before the JSON application. Only explicit error assertions
+                # accept that denial; every successful product call is JSON.
+                if status >= 400: return {'error':'proxy_denied'}
+                raise RuntimeError('non-JSON success response')
             result = json.loads(raw)
             if self.origin and status < 400 and response.headers.get('Access-Control-Allow-Origin') != self.origin:
                 raise RuntimeError('missing exact product CORS response')
