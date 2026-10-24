@@ -23,6 +23,7 @@ make api
 | Casdoor | `casbin/casdoor:v4.23.0`，固定 digest | `http://localhost:58000` |
 | UniHub API | 本仓库 Go 源码 | `http://127.0.0.1:8088` |
 | 临时 PKCE callback | `make dev-login` 创建 | `http://localhost:8089/callback` |
+| 身份 API 文档 | 与身份服务同源，保留上游 API 定义 | `http://localhost:58000/swagger/index.html` |
 
 所有容器发布端口都绑定 `127.0.0.1`。内部网络名为 `unihub-dev`，PostgreSQL 持久卷为 `unihub-dev-postgres`；两者在 Compose 中声明为 external，由初始化脚本在需要时创建。数据库分别为 `unihub`、`ledger`、`casdoor`；Casdoor 使用独立数据库角色 `casdoor`。
 
@@ -56,6 +57,8 @@ Casdoor 应用配置为非共享应用、`JWT-Standard`、`RS256` 证书、clien
 初始化脚本包含一次窄范围兼容修复：原始 `app-unihub` 的非空登录项列表缺少 `Login button` 时追加可见按钮，同时修复本地 seed；已有该行时不操作，不覆盖显式隐藏按钮的设置，不变更账号、密码或密钥。
 
 品牌更新使用限定列的幂等迁移：`app-unihub`、`app-built-in` 及其组织显示为 UniHub，使用本项目 Logo、favicon、页脚与青色主题。原上游默认头像/主页按已知默认值更新，自定义值保留。详见[品牌规范](../branding/README.md)。
+
+`make test-branding` 运行无 Docker 依赖的品牌发布回归；完整镜像验证使用 `python3 scripts/prepare-branding.py --check --json`。API 文档和应用前端分别只读挂载，品牌升级需要补充挂载时会重建身份容器并结束其浏览器登录会话，数据库和密钥仍保留。品牌复核及全新身份数据库验证见[三轮审查记录](branding-audit-2026-10-24.md)。
 
 ## 浏览器 PKCE 登录及 API 调用
 

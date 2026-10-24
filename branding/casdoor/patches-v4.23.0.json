@@ -61,6 +61,11 @@
           "old": "  </head>",
           "new": "    <link rel=\"stylesheet\" href=\"/assets/unihub/branding.css\" />\n  </head>",
           "count": 1
+        },
+        {
+          "old": "      <div id=\"casdoor-boot-fallback\" role=\"status\" aria-label=\"Loading\">",
+          "new": "      <div id=\"casdoor-boot-fallback\" role=\"status\" aria-label=\"Loading\">\n        <img src=\"/assets/unihub/unihub-logo-v1.png\" alt=\"UniHub\" width=\"185\" style=\"width:185px;height:auto;margin-bottom:24px;background:#f3f8fa;border-radius:8px;padding:4px 6px;box-sizing:border-box\" />",
+          "count": 1
         }
       ]
     },
@@ -136,6 +141,16 @@
         {
           "old": "Authorization:\"Authorization\"",
           "new": "Authorization:\"Permissions\"",
+          "count": 1
+        },
+        {
+          "old": "className:\"flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center\",children:[c.jsx(\"h1\",",
+          "new": "className:\"flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center\",children:[c.jsx(\"img\",{src:\"/assets/unihub/unihub-logo-v1.png\",alt:\"UniHub\",width:185,className:\"h-auto w-[185px] object-contain\"}),c.jsx(\"h1\",",
+          "count": 1
+        },
+        {
+          "old": "`${E0()}/swagger`:Qd(\"/swagger\")",
+          "new": "`${E0()}/swagger/index.html`:Qd(\"/swagger/index.html\")",
           "count": 1
         }
       ],
@@ -409,6 +424,11 @@
           "old": "??\"Casdoor\"",
           "new": "??\"UniHub\"",
           "count": 2
+        },
+        {
+          "old": "className:\"flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center\",children:[s.jsx(re,",
+          "new": "className:\"flex min-h-screen flex-col items-center justify-center gap-4 px-4 text-center\",children:[s.jsx(\"img\",{src:\"/assets/unihub/unihub-logo-v1.png\",alt:\"UniHub\",width:185,className:\"h-auto w-[185px] object-contain\"}),s.jsx(re,",
+          "count": 1
         }
       ]
     },
@@ -447,6 +467,11 @@
           "old": "\"Casdoor Summit 2022\"",
           "new": "\"UniHub Demo\"",
           "count": 1
+        },
+        {
+          "old": "avatar:(e==null?void 0:e.defaultAvatar)??`${d}/img/casbin.svg`",
+          "new": "avatar:(e==null?void 0:e.defaultAvatar)??\"/assets/unihub/unihub-icon-v1.png\"",
+          "count": 1
         }
       ]
     },
@@ -467,6 +492,70 @@
         {
           "old": "You have invited to join Casdoor.",
           "new": "You have been invited to join UniHub.",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "assets/AuthCallback-BeiVUEUT.js",
+      "sha256": "f12c1a442a423a607792fb8a74dbcde7112e1c070f6b16409edcc31c1bf02b29",
+      "replacements": [
+        {
+          "old": "Now you can visit apps protected by Casdoor.",
+          "new": "Now you can visit apps connected to UniHub.",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "assets/OrganizationListPage-CBooeiQH.js",
+      "sha256": "98cd02cfe95e78fdfa700a6951d00f879172ae5da71ba341873fe736491b6c25",
+      "replacements": [
+        {
+          "old": "websiteUrl:\"https://door.casdoor.com\"",
+          "new": "websiteUrl:window.location.origin",
+          "count": 1
+        },
+        {
+          "old": "favicon:`${s}/img/favicon.png`",
+          "new": "favicon:\"/assets/unihub/unihub-icon-v1.png\"",
+          "count": 1
+        },
+        {
+          "old": "defaultAvatar:`${s}/img/casbin.svg`",
+          "new": "defaultAvatar:\"/assets/unihub/unihub-icon-v1.png\"",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "assets/WebhookEditPage-todb2OK7.js",
+      "sha256": "369671e5cd3402ffe8aee1602f481e7c27a614dea47d94655f13fc6f737da4c7",
+      "replacements": [
+        {
+          "old": "logo:`${y}/img/casdoor-logo_1185x256.png`",
+          "new": "logo:`${window.location.origin}/assets/unihub/unihub-logo-v1.png`",
+          "count": 1
+        },
+        {
+          "old": "avatar:\"https://cdn.casbin.com/usercontent/admin/avatar/1596241359.png\"",
+          "new": "avatar:`${window.location.origin}/assets/unihub/unihub-icon-v1.png`",
+          "count": 1
+        },
+        {
+          "old": "permanentAvatar:\"https://cdn.casbin.com/casdoor/avatar/casbin/admin.png\"",
+          "new": "permanentAvatar:`${window.location.origin}/assets/unihub/unihub-icon-v1.png`",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "assets/SystemInfoPage-CGYLufDq.js",
+      "sha256": "ac34e3a8462250e54f8fe24e4be2bdd3de1dc201d9ec6ee3bf2e67fb6d0904d8",
+      "replacements": [
+        {
+          "old": "id:\"about-card\",children:[e.jsx(f,{className:\"pb-3\",children:e.jsx(p,{className:\"text-base\",children:t.t(\"system:About Casdoor\")})}),e.jsxs(j,{className:\"space-y-1 text-sm\",children:[",
+          "new": "id:\"about-card\",children:[e.jsx(f,{className:\"pb-3\",children:e.jsx(p,{className:\"text-base\",children:t.t(\"system:About Casdoor\")})}),e.jsxs(j,{className:\"space-y-1 text-sm\",children:[e.jsx(\"p\",{className:\"font-medium\",children:\"上游身份引擎 / Upstream identity engine: Casdoor\"}),",
           "count": 1
         }
       ]

@@ -18,6 +18,7 @@ UniHub 统一用户与计费平台，为多个产品提供共用的用户、企�
 - [领域术语](CONTEXT.md)
 - [品牌与界面规范](branding/README.md)
 - [品牌界面验收](docs/branding-validation-2026-10-24.md)
+- [品牌任务三轮审查与补漏](docs/branding-audit-2026-10-24.md)
 - [首版设计](docs/superpowers/specs/2026-10-24-unihub-design.md)
 - [设计审查](docs/design-review-2026-10-24.md)
 - [产品接入核查](docs/integration-findings-2026-10-24.md)

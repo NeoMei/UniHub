@@ -1,0 +1,150 @@
+{
+  "version": 1,
+  "image": "casbin/casdoor:v4.23.0@sha256:e13c9aada231f7338a03ab0ae7054d0a9480e77283338ab9fc319d88fe2b3ce0",
+  "notes": [
+    "Swagger is a separate upstream static root and is mounted read-only alongside the application frontend.",
+    "Only the index display shell and info.title/info.description metadata change; the API schema, OAuth callback, upstream libraries, source maps and notices remain byte-identical.",
+    "The standalone topbar image is replaced after rendering; visible Swagger UI and Casdoor attribution remains."
+  ],
+  "metadata": {
+    "title": "UniHub 身份 API",
+    "description": "UniHub identity API, provided by the upstream Casdoor identity service. Documentation rendered with Swagger UI."
+  },
+  "files": [
+    {
+      "path": "swagger/index.html",
+      "sha256": "2be176d8b0e92809d75853b0f342056452f9cf706728362d415ebb3a3aa30630",
+      "replacements": [
+        {
+          "old": "<title>Swagger UI</title>",
+          "new": "<title>UniHub 身份 API</title>",
+          "count": 1
+        },
+        {
+          "old": "href=\"./favicon-32x32.png\"",
+          "new": "href=\"/assets/unihub/unihub-icon-v1.png\"",
+          "count": 1
+        },
+        {
+          "old": "href=\"./favicon-16x16.png\"",
+          "new": "href=\"/assets/unihub/unihub-icon-v1.png\"",
+          "count": 1
+        },
+        {
+          "old": "      body\n",
+          "new": "      .swagger-ui .topbar { background: #f3f8fa; }\n      .swagger-ui .topbar-wrapper > a { padding: 4px 8px; }\n      .swagger-ui .topbar-wrapper img { max-width: 185px; object-fit: contain; }\n      .unihub-api-attribution { margin: 24px auto; padding: 0 20px; max-width: 1460px; color: #52666b; font: 14px/1.6 system-ui, sans-serif; }\n      .unihub-api-attribution a { color: #087f8c; }\n\n      body\n",
+          "count": 1
+        },
+        {
+          "old": "    <div id=\"swagger-ui\"></div>",
+          "new": "    <div id=\"swagger-ui\"></div>\n    <p class=\"unihub-api-attribution\">UniHub 身份 API · Identity service: <a href=\"https://github.com/casdoor/casdoor\" rel=\"noreferrer\">Casdoor</a> · Documentation: <a href=\"https://swagger.io/tools/swagger-ui/\" rel=\"noreferrer\">Swagger UI</a> · <a href=\"./swagger.json\">JSON</a> · <a href=\"./swagger.yml\">YAML</a></p>",
+          "count": 1
+        },
+        {
+          "old": "      // Begin Swagger UI call region",
+          "new": "      // Replace only the upstream topbar display image; retain Swagger UI behavior.\n      function applyUniHubBranding() {\n        const logo = document.querySelector('.swagger-ui .topbar-wrapper img[alt=\"Swagger UI\"]');\n        if (!logo) return false;\n        logo.src = \"/assets/unihub/unihub-logo-v1.png\";\n        logo.alt = \"UniHub\";\n        logo.width = 185;\n        const link = logo.closest(\"a\");\n        if (link) { link.href = \"/\"; link.setAttribute(\"aria-label\", \"UniHub\"); }\n        return true;\n      }\n      const brandingObserver = new MutationObserver(function() {\n        if (applyUniHubBranding()) brandingObserver.disconnect();\n      });\n      brandingObserver.observe(document.getElementById(\"swagger-ui\"), {childList: true, subtree: true});\n      // Begin Swagger UI call region",
+          "count": 1
+        },
+        {
+          "old": "url: \"swagger.json\"",
+          "new": "validatorUrl: null,\n        url: \"./swagger.json\"",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "swagger/swagger.json",
+      "sha256": "740971f5fc9134e7049242e7eb7244d38205fe09347a2f0ce71205f6a9c12289",
+      "replacements": [
+        {
+          "old": "\"title\": \"Casdoor RESTful API\"",
+          "new": "\"title\": \"UniHub 身份 API\"",
+          "count": 1
+        },
+        {
+          "old": "\"description\": \"Swagger Docs of Casdoor Backend API\"",
+          "new": "\"description\": \"UniHub identity API, provided by the upstream Casdoor identity service. Documentation rendered with Swagger UI.\"",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "path": "swagger/swagger.yml",
+      "sha256": "10aaed4d728f7332edbac3e9e5015d6946f3aa5fc5d683ff0ab345986ea52d21",
+      "replacements": [
+        {
+          "old": "  title: Casdoor RESTful API\n",
+          "new": "  title: UniHub 身份 API\n",
+          "count": 1
+        },
+        {
+          "old": "  description: Swagger Docs of Casdoor Backend API\n",
+          "new": "  description: UniHub identity API, provided by the upstream Casdoor identity service. Documentation rendered with Swagger UI.\n",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "preserve_files": [
+    {
+      "path": "swagger/favicon-16x16.png",
+      "sha256": "af24ad604dd7b3bcda8f975ab973075f4a2f70a4087944a12f8ef8b63a3e07c2"
+    },
+    {
+      "path": "swagger/favicon-32x32.png",
+      "sha256": "3ed612f41e050ca5e7000cad6f1cbe7e7da39f65fca99c02e99e6591056e5837"
+    },
+    {
+      "path": "swagger/oauth2-redirect.html",
+      "sha256": "9560ee58a315c89f92c40f7bdad62788598575d380c4991d93c7e2b0f2caa836"
+    },
+    {
+      "path": "swagger/swagger-ui-bundle.js",
+      "sha256": "1f5a1b52e72c9b8b8552fd4c1d94d3be6822ea264b7d628689b85b2d4fdc41dd"
+    },
+    {
+      "path": "swagger/swagger-ui-bundle.js.map",
+      "sha256": "969f5edfb863f46d3856aafc7013c78a1b79faa8202a7182fe648e2830651ab6"
+    },
+    {
+      "path": "swagger/swagger-ui-es-bundle-core.js",
+      "sha256": "ec4fd6e19f14bf854593d6e4638f362cd52a1288281f2a67d5543d29a3e2276a"
+    },
+    {
+      "path": "swagger/swagger-ui-es-bundle-core.js.map",
+      "sha256": "0d189e8b223a27cdcd7678c29171e45598c8d61b23010640d323c54efcc0fedd"
+    },
+    {
+      "path": "swagger/swagger-ui-es-bundle.js",
+      "sha256": "e00a6a36dcff5064126505b70476a5d978d3f02e08436b6e6ab9fdb6ae8f134a"
+    },
+    {
+      "path": "swagger/swagger-ui-es-bundle.js.map",
+      "sha256": "c506ac6e4e4397c57ddc12e25de2bc307aadb31774fd7d34d7ececc938dfbc04"
+    },
+    {
+      "path": "swagger/swagger-ui-standalone-preset.js",
+      "sha256": "d860ddd9d6a11a25ebdec583e4eb92e67f4d4384ca78e9f261b889ae9202e9f0"
+    },
+    {
+      "path": "swagger/swagger-ui-standalone-preset.js.map",
+      "sha256": "dc67710944bfc6f9c7390c69f3f81dfa51444cc6c027c788c37e1909c6bb82f6"
+    },
+    {
+      "path": "swagger/swagger-ui.css",
+      "sha256": "7f40ecf1323f1faad1f4c6f3c3fd92478cc3135eeccb3a8861d3acad6b61f285"
+    },
+    {
+      "path": "swagger/swagger-ui.css.map",
+      "sha256": "54c6fd4245c520560167e977c9ac3c4ef5938f0df3f3cdbc31fb158e6a90c3d7"
+    },
+    {
+      "path": "swagger/swagger-ui.js",
+      "sha256": "24492ce70f196cde5d1724828ec2c7d7c3e25f73223f89b3815393a9f7424372"
+    },
+    {
+      "path": "swagger/swagger-ui.js.map",
+      "sha256": "262658e248ed27f8eed5d7e8acd5242f54bf6e3293701a242e693c91465813bf"
+    }
+  ]
+}

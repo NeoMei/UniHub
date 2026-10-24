@@ -1,6 +1,6 @@
 # UniHub 品牌界面验收
 
-2026-10-24，用户确认采用青色 U 与中心节点组成的 UniHub Logo。正式资产及使用规则见[品牌规范](../branding/README.md)。
+2026-10-24，用户确认采用青色 U 与中心节点组成的 UniHub Logo。本文记录初次验收；后续补漏及最终结论见[三轮审查记录](branding-audit-2026-10-24.md)。正式资产及使用规则见[品牌规范](../branding/README.md)。
 
 ## 已实现
 
@@ -17,7 +17,7 @@
 | --- | --- |
 | `make dev-setup` | 本工作区身份容器增加只读前端挂载；PostgreSQL、Ledger 容器与数据卷保留 |
 | 重复 setup | 正确识别 Docker Desktop `/host_mnt` 映射，三个服务均复用，成功退出 |
-| 生成脚本重复执行 | `changed=false`；当前内容版本 `383c7fa966f0d019` |
+| 生成脚本重复执行 | `changed=false`；初次验收内容版本 `383c7fa966f0d019` |
 | 静态校验 | 17 个上游补丁文件指纹和匹配数量通过，221 个 JavaScript 文件语法及 2,577 个本地资源引用通过 |
 | 漂移保护 | 源文件指纹、替换数量不符时拒绝发布（隔离验证） |
 | 资源读回 | 两个 PNG 均 HTTP 200，响应与项目资产逐字节一致；manifest 名称为 UniHub；新旧版本模块可读取 |

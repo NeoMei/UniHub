@@ -1,4 +1,4 @@
-.PHONY: dev-setup dev-prepare dev-login deps-up deps-stop deps-status api worker migrate test test-integration build
+.PHONY: dev-setup dev-prepare dev-login deps-up deps-stop deps-status api worker migrate test test-branding test-integration build
 
 dev-setup deps-up:
 	./scripts/dev-setup.sh
@@ -27,6 +27,9 @@ migrate:
 
 test:
 	go test ./...
+
+test-branding:
+	python3 scripts/test-branding.py
 
 test-integration:
 	@set -a; . ./.local/dev.env; set +a; UNIHUB_TEST_DATABASE_URL="$$DATABASE_URL" UNIHUB_TEST_LEDGER_URL="$$LEDGER_URL" go test -race -count=1 -timeout 90s ./...

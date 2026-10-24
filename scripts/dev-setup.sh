@@ -403,9 +403,14 @@ def start_service(service):
             sys.exit(f'{name} must publish only its documented loopback port. Resolve it explicitly; no container was replaced.')
         if service == 'casdoor':
             mounts = {mount['Destination']: mount for mount in existing.get('Mounts', [])}
-            web_mount = mounts.get('/web/build', {})
-            expected_web = str((local / 'casdoor' / 'web').resolve())
-            if web_mount.get('Type') != 'bind' or not mount_source_matches(web_mount.get('Source'), expected_web) or web_mount.get('RW') is not False:
+            expected_mounts = {'/web/build': local / 'casdoor' / 'web',
+                '/swagger': local / 'casdoor' / 'web' / 'swagger'}
+            needs_frontend_mounts = any(
+                mounts.get(destination, {}).get('Type') != 'bind'
+                or not mount_source_matches(mounts.get(destination, {}).get('Source'), expected_source)
+                or mounts.get(destination, {}).get('RW') is not False
+                for destination, expected_source in expected_mounts.items())
+            if needs_frontend_mounts:
                 labels = existing['Config'].get('Labels') or {}
                 conf_mount = mounts.get('/conf', {})
                 expected_conf = str(conf_dir.resolve())
@@ -416,9 +421,9 @@ def start_service(service):
                         or conf_mount.get('RW') is not False):
                     sys.exit(f'{name} is not this workspace\'s Compose-managed sign-in service. Resolve the container conflict explicitly; no container was replaced.')
                 # Only the stateless sign-in container needs the new readonly
-                # frontend mount. Its database, config and log volume persist.
+                # frontend mounts. Its database, config and log volume persist.
                 run(compose + ['up', '-d', '--no-deps', '--force-recreate', 'casdoor'], env=process_env)
-                print('Updated the UniHub sign-in frontend mount; PostgreSQL and ledger containers were preserved.', flush=True)
+                print('Updated the UniHub sign-in and API documentation frontend mounts; PostgreSQL and ledger containers were preserved.', flush=True)
                 return
         if not existing['State']['Running']:
             run(['docker', 'start', name], quiet=True)

@@ -24,6 +24,7 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 PATCH_ROOT = ROOT / "branding" / "casdoor"
 MANIFEST = PATCH_ROOT / "patches-v4.23.0.json"
+SWAGGER_MANIFEST = PATCH_ROOT / "swagger-patches-v4.23.0.json"
 # A pair consumes both key and value, so words inside keys and quoted values
 # cannot become a second match. This is restricted to reviewed, hash-locked
 # dictionary/tour spans, never applied to arbitrary JavaScript source.
@@ -94,7 +95,7 @@ def patch_display_values(text, rule, label):
     return text[:start] + patched + text[end:]
 
 
-def patch_tree(build, manifest):
+def apply_file_patches(build, manifest):
     report = []
     for entry in manifest["files"]:
         path = build / entry["path"]
@@ -108,11 +109,68 @@ def patch_tree(build, manifest):
             text = checked_replace(text, replacement["old"], replacement["new"],
                                    replacement["count"], f"{entry['path']} replacement {index + 1}")
         notice = "Modified by UniHub: display branding only; upstream licenses and protocol identifiers retained."
-        text = ("<!-- " + notice + " -->\n" if path.suffix == ".html" else "/* " + notice + " */\n") + text
+        if path.suffix == ".html":
+            text = "<!-- " + notice + " -->\n" + text
+        elif path.suffix in {".js", ".css"}:
+            text = "/* " + notice + " */\n" + text
         patched = text.encode("utf-8")
         path.write_bytes(patched)
         report.append({"path": entry["path"], "original_sha256": digest(original),
                        "branded_sha256": digest(patched)})
+    return report
+
+
+def swagger_metadata(document, suffix):
+    """Separate the two display values from all untouched API schema content."""
+    if suffix == ".json":
+        schema = json.loads(document)
+        info = schema["info"]
+        metadata = {key: info.pop(key) for key in ("title", "description")}
+        return metadata, schema
+    # The hash-locked YAML uses two plain, single-line info scalars. Comparing
+    # every other byte is stricter than semantic equality and needs no YAML
+    # dependency; reject changed shape instead of guessing at arbitrary YAML.
+    info = re.search(r"(?m)^info:\n(?P<body>(?:[ \t].*\n)+)", document)
+    if info is None:
+        raise RuntimeError("Swagger YAML info block does not match the reviewed shape")
+    body = info.group("body")
+    metadata = {}
+    for key in ("title", "description"):
+        pattern = re.compile(r"(?m)^  " + key + r": ([^\r\n]*)\n")
+        matches = list(pattern.finditer(body))
+        if len(matches) != 1:
+            raise RuntimeError(f"Swagger YAML info.{key} is not one reviewed scalar")
+        metadata[key] = matches[0].group(1)
+        body = pattern.sub("", body)
+    return metadata, document[:info.start("body")] + body + document[info.end("body"):]
+
+
+def patch_swagger(build, manifest):
+    before = {}
+    for entry in manifest["files"]:
+        path = build / entry["path"]
+        if path.suffix in {".json", ".yml"}:
+            before[entry["path"]] = swagger_metadata(path.read_text(), path.suffix)
+    verify_swagger_preservation(build, manifest)
+    report = apply_file_patches(build, manifest)
+    for relative, (old_metadata, old_schema) in before.items():
+        path = build / relative
+        metadata, schema = swagger_metadata(path.read_text(), path.suffix)
+        if schema != old_schema or metadata != manifest["metadata"]:
+            raise RuntimeError(f"{relative}: changes must be limited to info.title and info.description")
+        if any(metadata[key] == old_metadata[key] for key in metadata):
+            raise RuntimeError(f"{relative}: expected Swagger display metadata was not changed")
+    return report
+
+
+def verify_swagger_preservation(build, manifest):
+    for entry in manifest["preserve_files"]:
+        if digest((build / entry["path"]).read_bytes()) != entry["sha256"]:
+            raise RuntimeError(f"{entry['path']}: upstream Swagger library or license changed")
+
+
+def patch_tree(build, manifest):
+    report = apply_file_patches(build, manifest)
     asset_dir = build / "assets" / "unihub"
     asset_dir.mkdir()
     for name in ("manifest.webmanifest", "branding.css"):
@@ -171,7 +229,7 @@ def version_frontend(build, manifest):
         return basename_map[match.group(0)]
 
     for relative, path in originals.items():
-        if path.suffix not in {".html", ".js", ".css"}:
+        if relative.parts[0] == "swagger" or path.suffix not in {".html", ".js", ".css"}:
             continue
         text = names.sub(rewrite, path.read_text())
         path.write_text(text)
@@ -186,6 +244,22 @@ def version_frontend(build, manifest):
     return revision, mapping
 
 
+def version_swagger(build, revision):
+    """Version the changed API metadata while keeping upstream libraries intact."""
+    index = build / "swagger" / "index.html"
+    text = index.read_text()
+    mapping = {}
+    for name, expected in (("swagger.json", 2), ("swagger.yml", 1)):
+        versioned = Path(name).stem + ".unihub-" + revision + Path(name).suffix
+        text = checked_replace(text, "./" + name, "./" + versioned, expected,
+                               "Swagger documentation reference " + name)
+        relative, published = "swagger/" + name, "swagger/" + versioned
+        shutil.copyfile(build / relative, build / published)
+        mapping[relative] = published
+    index.write_text(text)
+    return mapping
+
+
 def verify_frontend(build, mapping):
     """Reject malformed modules and missing local imports before publication."""
     node = shutil.which("node")
@@ -193,6 +267,7 @@ def verify_frontend(build, mapping):
         raise RuntimeError("Node.js is required to validate the prepared frontend JavaScript")
     js_files = [build / path for path in mapping.values() if path.endswith(".js")]
     js_files += [path for path in build.glob("*.js")]
+    js_files += [path for path in (build / "swagger").glob("*.js")]
 
     def check_js(path):
         result = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
@@ -201,14 +276,26 @@ def verify_frontend(build, mapping):
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(check_js, js_files))
+    inline_count = 0
+    for relative in ("index.html", "swagger/index.html"):
+        for script in re.finditer(r"<script\b[^>]*>(.*?)</script>", (build / relative).read_text(), re.DOTALL):
+            if not script.group(1).strip():
+                continue
+            result = subprocess.run([node, "--check"], input=script.group(1), capture_output=True, text=True)
+            if result.returncode:
+                raise RuntimeError(f"Inline JavaScript syntax validation failed for {relative}: {result.stderr.strip()}")
+            inline_count += 1
     # Imported asset literals cover static imports, dynamic import() expressions,
     # CSS dependencies, and Vite's preload tables. Only local asset-shaped URLs
     # are selected; runtime API strings and external links are outside this check.
     asset_literal = re.compile(r'''["']((?:\./|/assets/|assets/)[^"'\s]+\.(?:js|css|woff2)(?:\?[^"'\s]*)?)["']''')
     reference_count = 0
-    for relative in ["index.html", *mapping.values()]:
+    for relative in ["index.html", "swagger/index.html", *mapping.values()]:
         path = build / relative
-        for match in asset_literal.finditer(path.read_text()):
+        literal = asset_literal
+        if relative == "swagger/index.html":
+            literal = re.compile(r'''["']((?:\./|/assets/)[^"'\s]+\.(?:js|css|png|json|yml)(?:\?[^"'\s]*)?)["']''')
+        for match in literal.finditer(path.read_text()):
             url = urlsplit(match.group(1)).path
             if url.startswith("/"):
                 target = build / url.lstrip("/")
@@ -219,7 +306,8 @@ def verify_frontend(build, mapping):
             if not target.is_file():
                 raise RuntimeError(f"Missing frontend asset reference in {relative}: {url}")
             reference_count += 1
-    return {"javascript_files": len(js_files), "local_asset_references": reference_count}
+    return {"javascript_files": len(js_files), "inline_javascript_blocks": inline_count,
+            "local_asset_references": reference_count, "swagger_schema_metadata_only": True}
 
 
 def publish(build, output):
@@ -231,17 +319,18 @@ def publish(build, output):
     old = tree_files(output) if output.exists() else {}
     new = tree_files(build)
     # Open tabs can still import a lazy chunk from an earlier revision. Retain
-    # only our strictly named public JS/CSS revisions, while removing unrelated
-    # stale files. Retained revisions do not make identical preparations differ.
-    revision_name = re.compile(r"[A-Za-z0-9_-]+\.unihub-[0-9a-f]{16}\.(?:js|css)\Z")
+    # only our strictly named public JS/CSS and Swagger metadata revisions,
+    # while removing unrelated stale files. Identical preparations still agree.
+    revision_name = re.compile(r"[A-Za-z0-9_-]+\.unihub-[0-9a-f]{16}\.(?:js|css|json|yml)\Z")
     retained = {relative for relative in old.keys() - new.keys()
-                if relative.parts[0] == "assets" and revision_name.fullmatch(relative.name)}
+                if relative.parts[0] in {"assets", "swagger"} and revision_name.fullmatch(relative.name)}
     changed = old.keys() - retained != new.keys()
     output.mkdir(mode=0o755, parents=True, exist_ok=True)
     output.chmod(0o755)
     # Publish the complete graph first and the HTML entry point last, so a page
     # loaded during a rebuild cannot point to a module that has not arrived yet.
-    for relative, source in sorted(new.items(), key=lambda item: (str(item[0]) == "index.html", str(item[0]))):
+    for relative, source in sorted(new.items(), key=lambda item: (
+            item[0].name == "index.html", str(item[0]) == "index.html", str(item[0]))):
         destination = output / relative
         if relative in old and destination.read_bytes() == source.read_bytes():
             destination.chmod(0o644)
@@ -273,7 +362,10 @@ def main():
     parser.add_argument("--check", action="store_true", help="Validate a fresh copy without publishing")
     args = parser.parse_args()
     manifest = json.loads(MANIFEST.read_text())
+    swagger_manifest = json.loads(SWAGGER_MANIFEST.read_text())
     image = manifest["image"]
+    if swagger_manifest["image"] != image:
+        raise RuntimeError("Frontend and Swagger manifests must use the same pinned image")
     if "@sha256:" not in image:
         raise RuntimeError("Branding source image must be pinned by digest")
     inspect = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True)
@@ -295,10 +387,15 @@ def main():
             build.mkdir()
             container = command(["docker", "create", "--network", "none", image])
             command(["docker", "cp", container + ":/web/build/.", str(build)])
+            (build / "swagger").mkdir()
+            command(["docker", "cp", container + ":/swagger/.", str(build / "swagger")])
             command(["docker", "rm", container])
             container = None
             report = patch_tree(build, manifest)
-            revision, mapping = version_frontend(build, manifest)
+            report += patch_swagger(build, swagger_manifest)
+            revision, mapping = version_frontend(build, {"frontend": manifest, "swagger": swagger_manifest})
+            mapping.update(version_swagger(build, revision))
+            verify_swagger_preservation(build, swagger_manifest)
             validation = verify_frontend(build, mapping)
             for entry in report:
                 entry["published_path"] = mapping.get(entry["path"], entry["path"])

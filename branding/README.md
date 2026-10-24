@@ -28,15 +28,19 @@ PNG 内有细微色阶，色值为界面设计基准，不表示文件中每个�
 
 登录与身份管理界面基于固定版本 Casdoor。原生应用/组织品牌字段统一设置名称、标题、Logo、favicon、页脚及主题色。为避免首次加载、错误页和未选择应用时回退到上游品牌，`scripts/prepare-branding.py` 从 Compose 固定的镜像提取前端，检查原文件指纹并应用限定的显示层补丁，输出 `.local/casdoor/web`，由 Compose 只读挂载到 `/web/build`。
 
+身份 API 文档位于 `/swagger/index.html`，其独立上游静态目录也从同一固定镜像提取，由单独清单校验；生成目录额外只读挂载到 `/swagger`。文档主标题、图标及顶栏使用 UniHub，保留 Casdoor 和 Swagger UI 的来源说明。JSON/YAML 仅改 `info.title` 和 `info.description`，脚本会拒绝 API 路径、认证定义等其他变更。后台文档菜单直接链接静态入口，兼容当前生产运行模式。
+
 脚本还为前端模块和 CSS 生成确定性的内容版本，重写动态导入与预加载引用；先发布资源，再切换 HTML 入口，避免旧浏览器缓存保留默认品牌。已发布的历史版本模块保留，供仍打开的页面使用。品牌准备需要 Node.js 22 或更高，会在发布前检查 JavaScript 语法和本地资源引用。
 
 品牌资产与身份界面同源，地址为 `/assets/unihub/…`，不依赖 Go 业务 API 或另一个静态服务。补丁不改 OIDC 协议、应用 ID、认证方法、上游依赖名称或许可证。Casdoor 作为第三方身份提供商的技术类型名称仍保留，避免错误标识该协议集成。
 
-执行 `make dev-setup` 应用品牌。初始化脚本同时更新新 seed 和已有四个品牌对象；现有用户、密码、OAuth client secret、证书与业务资金数据保留。仅当本项目管理的 Casdoor 容器缺少前端只读挂载时，脚本才重建该服务容器。
+执行 `make dev-setup` 应用品牌。初始化脚本同时更新新 seed 和已有四个品牌对象；现有用户、密码、OAuth client secret、证书与业务资金数据保留。仅当本项目管理的 Casdoor 容器缺少所需的前端／API 文档只读挂载时，脚本才重建该服务容器。重建会结束该容器内的浏览器登录会话，需要重新登录。
 
 `make dev-login` 的临时回调页内嵌标识，关闭回调服务器后仍可显示；页面只确认已收到授权响应，令牌交换与 API 验证以终端结果为准。
 
 ## 维护
+
+运行 `make test-branding` 可离线检查源码漂移拒绝、缓存模块图、旧版本保留、发布幂等、目录权限及认证数据保留；`python3 scripts/prepare-branding.py --check --json` 对实际固定镜像完整验证但不发布。
 
 升级 Casdoor 时重新审查固定镜像、被修改文件的指纹及替换数量，检查浅色/深色登录、组织后台、错误页、favicon 和实际 PKCE 登录。匹配失败时停止生成，不对未知版本执行全局替换。需要清理历史静态模块时，可在身份服务停止后移除生成的 `.local/casdoor/web` 并重新执行 `make dev-setup`；不要移除 `.local/casdoor/conf` 或其他本地凭据。
 

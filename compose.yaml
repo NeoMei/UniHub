@@ -49,6 +49,7 @@ services:
       - ./.local/casdoor/conf:/conf:ro
       # Reproducible UniHub UI overlay, prepared from the pinned image.
       - ./.local/casdoor/web:/web/build:ro
+      - ./.local/casdoor/web/swagger:/swagger:ro
       - casdoor-logs:/logs
     networks: [dev]
     depends_on:
