@@ -1,6 +1,6 @@
 # 本地开发
 
-这一切片提供 Go bearer API、账户数据库、Formance Ledger 和真实 Casdoor 身份服务。业务用户中心前端及 BFF 会话属于下一切片；API 当前没有 `/auth/login` 或 cookie 登录。
+当前提供 Go API、八页用户中心、服务端 OIDC 会话、账户与订阅数据库、Formance Ledger 和真实 Casdoor 身份服务。浏览器从 `http://localhost:8088` 使用 `/auth/login` 登录；产品采用独立 Bearer 客户端。
 
 ## 环境与启动
 
@@ -9,6 +9,7 @@
 ```sh
 make dev-setup
 make migrate
+make web-build
 make api
 ```
 
@@ -120,7 +121,7 @@ docker compose --env-file .local/dev.env ps
 
 修复后已完成真实浏览器链路：在 Casdoor 以 Alice 输入账号密码并点击新增登录按钮，callback 收到 `code`、`state`、`iss`，helper 使用 code + PKCE 换取 access token 并写入本地文件；真实 Go API `/v1/me` 返回 HTTP 200，用户名称为 Alice。验收截图保存在忽略目录 `.local/login-acceptance.png`。这是实际 Casdoor 登录及 API 验签验收，不是测试 issuer 的替代结果。
 
-Compose 新空卷全栈启动及历史容器迁移尚未执行；当前验证复用了已有 PostgreSQL 卷与 Ledger 服务。前端/BFF 业务会话仍属于下一切片。
+Compose 新空卷全栈启动及历史容器迁移尚未执行；当前验证复用了已有 PostgreSQL 卷与 Ledger 服务。订阅与业务前端的新增验收见[阶段记录](subscriptions-credits-validation.md)。
 
 ## 官方依据
 
@@ -130,3 +131,13 @@ Compose 新空卷全栈启动及历史容器迁移尚未执行；当前验证复
 - [Casdoor 数据初始化](https://casdoor.ai/docs/deployment/data-initialization/)及 [PostgreSQL 配置](https://casdoor.ai/docs/basic/server-installation/)。
 - [Casdoor OAuth code/PKCE](https://casdoor.ai/docs/how-to-connect/oauth/)及 [标准 discovery](https://casdoor.ai/docs/how-to-connect/oidc-client/)。
 - [Formance v2.4.16 README](https://github.com/formancehq/ledger/blob/v2.4.16/README.md)与 [Compose 环境变量](https://github.com/formancehq/ledger/blob/v2.4.16/docker-compose.yml)：Ledger 本地依赖 PostgreSQL。官方生产部署支持范围另见该 README 的 operator 说明。
+
+## 产品客户端与用户中心
+
+`PUBLIC_URL` 必须与浏览器实际访问 origin 一致；使用 `localhost:8088`，不要在 Cookie 会话中混用 `127.0.0.1:8088`。生产须 HTTPS。控制台密钥仅在服务端，Cookie 写操作同时校验 Origin 与 CSRF。
+
+`OIDC_PRODUCT_CLIENTS=superwagie=superwagie-unihub-local` 为产品配置独立 audience。产品只能读取身份、账户、目录、订阅和额度，签发归属于自身产品的模型凭据；财务操作和成员管理转至 UniHub 控制台。audience 不可与控制台或运营重叠。
+
+本地初始化另外创建 `app-superwagie`，仅登记 `http://127.0.0.1:57991/api/platform-account/callback` 与 `http://localhost:57991/api/platform-account/callback`。随机 client secret 仅存 Casdoor/本地私有配置，绝不交给 SuperWagie。固定 Casdoor v4.23.0 支持带有效 S256 challenge/verifier 的无 secret code 换取；保留随机 secret 可避免无 PKCE 的空 secret 匹配。见[对应源码](https://github.com/casdoor/casdoor/blob/v4.23.0/object/token_oauth.go#L159-L277)。现有 client 配置不会被重复初始化覆盖。
+
+SuperWagie 使用独立的 `OPENCHAMBER_UNIHUB_*` 配置；登录令牌保存在后端最多一小时的内存会话，浏览器/桌面渲染器不持有平台 access token。重启后重新登录，当前没有长期 refresh token 或隐式自动登录。

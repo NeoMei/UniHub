@@ -36,6 +36,17 @@ func (s *Service) Process(ctx context.Context, id string) error {
 		defer cancel()
 		_ = unlock(c)
 	}()
+	// Account locks protect submission, while this durable barrier protects its
+	// ordering across both workers. A commercial payment with an uncertain ledger
+	// result (or paid benefits still being recovered) must finish before a later
+	// wallet operation changes the cash allocation it was based on.
+	var commercialPending bool
+	if e = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM billing_commands WHERE account_id=$1 AND status IN ('CREATED','SUBMITTING','UNKNOWN')) OR EXISTS(SELECT 1 FROM billing_orders WHERE account_id=$1 AND ((snapshot->>'payment_status'='PAID' AND snapshot->>'fulfillment_status'='PENDING' AND COALESCE(snapshot->>'refund_status','') IN ('','REJECTED')) OR snapshot->>'refund_status'='FROZEN'))`, account).Scan(&commercialPending); e != nil {
+		return e
+	}
+	if commercialPending {
+		return ErrPending
+	}
 	rows, e := conn.Query(ctx, `SELECT id,actor_id,kind,status,command FROM wallet_operations WHERE account_id=$1 AND status IN ('CREATED','SUBMITTING','UNKNOWN') AND (created_at,id) <= (SELECT created_at,id FROM wallet_operations WHERE id=$2) ORDER BY created_at,id`, account, id)
 	if e != nil {
 		return e

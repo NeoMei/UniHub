@@ -127,6 +127,19 @@ def apply_seed_branding(init):
 def sql_literal(value):
     return "'" + value.replace("'", "''") + "'"
 
+def ensure_product_application(init, secret):
+    apps = init.setdefault('applications', [])
+    if any(app.get('owner') == 'admin' and app.get('name') == 'app-superwagie' for app in apps):
+        return False
+    source = next(app for app in apps if app.get('owner') == 'admin' and app.get('name') == 'app-unihub')
+    product = json.loads(json.dumps(source))
+    product.update({'name': 'app-superwagie', 'clientId': 'superwagie-unihub-local',
+        'clientSecret': secret, 'grantTypes': ['authorization_code'],
+        'redirectUris': ['http://127.0.0.1:57991/api/platform-account/callback',
+                         'http://localhost:57991/api/platform-account/callback']})
+    apps.append(product)
+    return True
+
 def branding_sql():
     # A columns= API request uses xorm MustCols, not a strict column whitelist.
     # Explicit SQL assignments keep every non-branding column unchanged.
@@ -314,6 +327,36 @@ if not credentials_path.exists():
         'users': [{'username': name, 'password': secrets.token_urlsafe(24)} for name in ['alice', 'bob']]}
     write_private(credentials_path, json.dumps(credentials, indent=2) + '\n')
 credentials = json.loads(credentials_path.read_text())
+# A public PKCE client keeps an undistributed random secret in Casdoor. Empty
+# client_secret is accepted by this pinned version only with a valid challenge.
+if 'superwagie_client_secret' not in credentials:
+    credentials['superwagie_client_secret'] = secrets.token_hex(32)
+    credentials_path.write_text(json.dumps(credentials, indent=2) + '\n')
+    credentials_path.chmod(0o600)
+# Browser console credentials stay server-side. Preserve customized values on
+# repeated setup; the model-service secret is separate from OIDC and payment.
+console_defaults = {'PUBLIC_URL': 'http://localhost:8088',
+    'OIDC_CLIENT_SECRET': credentials['client_secret'],
+    'CONSOLE_STATIC_DIR': 'web/dist', 'SANDBOX_CATALOG': 'true',
+    'OIDC_PRODUCT_CLIENTS': 'superwagie=superwagie-unihub-local'}
+env_changed = False
+for key, value in console_defaults.items():
+    if key not in env:
+        env[key] = value
+        env_changed = True
+if 'MODEL_SERVICE_TOKEN' not in env:
+    env['MODEL_SERVICE_TOKEN'] = secrets.token_urlsafe(48)
+    env_changed = True
+if env_changed:
+    temp_env = env_path.with_name('.dev.env.' + secrets.token_hex(8))
+    fd = os.open(temp_env, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write('# Generated local development values. Never commit this file.\n' + ''.join(f'{key}={shlex.quote(value)}\n' for key, value in env.items()))
+        os.replace(temp_env, env_path)
+    finally:
+        if temp_env.exists():
+            temp_env.unlink()
 conf_dir = local / 'casdoor' / 'conf'
 conf_dir.mkdir(parents=True, exist_ok=True)
 conf_dir.chmod(0o750)
@@ -355,7 +398,7 @@ if not init_path.exists():
             'signinItems': [{'name': 'Username', 'visible': True, 'rule': 'None'},
                 {'name': 'Password', 'visible': True, 'rule': 'None'},
                 {'name': 'Login button', 'visible': True, 'rule': 'None'}],
-            'grantTypes': ['authorization_code'], 'redirectUris': ['http://localhost:8089/callback'],
+            'grantTypes': ['authorization_code'], 'redirectUris': ['http://localhost:8089/callback', 'http://localhost:8088/auth/callback'],
             'tokenFormat': 'JWT-Standard', 'expireInHours': 1, 'cookieExpireInHours': 8,
             'failedSigninLimit': 5, 'failedSigninFrozenTime': 15}],
         'users': [{'owner': 'unihub', 'name': u['username'], 'id': secrets.token_hex(16), 'type': 'normal-user',
@@ -369,9 +412,15 @@ if not init_path.exists():
 # incomplete copies of their authentication configuration here.
 init = json.loads(init_path.read_text())
 seed_changed = apply_seed_branding(init)
+seed_changed = ensure_product_application(init, credentials['superwagie_client_secret']) or seed_changed
 for application in init.get('applications', []):
     if application.get('owner') != 'admin' or application.get('name') != 'app-unihub':
         continue
+    redirects = application.get('redirectUris', [])
+    if 'http://localhost:8088/auth/callback' not in redirects:
+        redirects.append('http://localhost:8088/auth/callback')
+        application['redirectUris'] = redirects
+        seed_changed = True
     items = application.get('signinItems', [])
     if items and not any(item.get('name') == 'Login button' for item in items):
         items.append({'name': 'Login button', 'visible': True, 'rule': 'None'})
@@ -477,7 +526,30 @@ WHERE owner='admin' AND name='app-unihub'
   );
 '''
 run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=repair_sql, quiet=True)
+# Add only the known local console callback to our own development client.
+# Existing callbacks, client credentials and built-in admin app are preserved.
+console_callback_sql = '''UPDATE application
+SET redirect_uris = (redirect_uris::jsonb || '["http://localhost:8088/auth/callback"]'::jsonb)::text
+WHERE owner='admin' AND name='app-unihub'
+  AND jsonb_typeof(redirect_uris::jsonb)='array'
+  AND NOT (redirect_uris::jsonb @> '["http://localhost:8088/auth/callback"]'::jsonb);
+'''
+run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=console_callback_sql, quiet=True)
+# Add this development client once, cloning only our own application. Keep any
+# existing product client settings/credentials untouched on subsequent setup.
+product_fields = {'name': 'app-superwagie', 'client_id': 'superwagie-unihub-local',
+    'client_secret': credentials['superwagie_client_secret'],
+    'grant_types': json.dumps(['authorization_code']),
+    'redirect_uris': json.dumps(['http://127.0.0.1:57991/api/platform-account/callback',
+                                'http://localhost:57991/api/platform-account/callback'])}
+product_sql = '''INSERT INTO application
+SELECT (jsonb_populate_record(NULL::application, to_jsonb(a) || %s::jsonb)).*
+FROM application a WHERE owner='admin' AND name='app-unihub'
+AND NOT EXISTS (SELECT 1 FROM application WHERE owner='admin' AND name='app-superwagie')
+ON CONFLICT DO NOTHING;
+''' % sql_literal(json.dumps(product_fields))
+run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=product_sql, quiet=True)
 run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=branding_sql(), quiet=True)
 print('Ready: PostgreSQL :55438; Formance :53068; UniHub sign-in http://localhost:58000.', flush=True)
-print('Next: make migrate; make api (includes recovery worker); then make dev-login in another terminal.', flush=True)
+print('Next: make migrate; make web-build; make api; open http://localhost:8088. CLI token helper: make dev-login.', flush=True)
 PY

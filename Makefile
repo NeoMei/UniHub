@@ -36,3 +36,11 @@ test-integration:
 
 build:
 	go build -o bin/unihub ./cmd/unihub
+
+.PHONY: web-build web-test
+web-build:
+	npm --prefix web ci
+	npm --prefix web run build
+
+web-test:
+	npm --prefix web test

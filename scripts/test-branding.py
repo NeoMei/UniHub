@@ -30,7 +30,7 @@ def setup_helpers():
     source = shell.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
     constants = {"brand_logo", "brand_icon", "default_casbin_avatar", "brand_theme",
                  "organization_branding", "application_branding", "official_homepages"}
-    functions = {"apply_seed_branding", "mount_source_matches"}
+    functions = {"apply_seed_branding", "mount_source_matches", "ensure_product_application"}
     selected, found = [], set()
     for node in ast.parse(source).body:
         if isinstance(node, ast.Assign):
@@ -43,12 +43,24 @@ def setup_helpers():
             found.add(node.name)
     if not (constants | functions) <= found:
         raise RuntimeError("Expected dev-setup helpers were removed or renamed")
-    namespace = {"Path": Path, "sys": SimpleNamespace(platform="darwin")}
+    namespace = {"Path": Path, "sys": SimpleNamespace(platform="darwin"), "json": json}
     exec(compile(ast.Module(body=selected, type_ignores=[]), "dev-setup-pure-helpers", "exec"), namespace)
     return namespace
 
 
 class BrandingRegression(unittest.TestCase):
+    def test_product_client_is_separate_preserved_and_uses_exact_callbacks(self):
+        create = setup_helpers()["ensure_product_application"]
+        original = {"owner":"admin", "name":"app-unihub", "clientId":"console", "clientSecret":"console-secret", "organization":"unihub", "cert":"cert", "grantTypes":["authorization_code"], "redirectUris":["http://localhost:8088/auth/callback"]}
+        seed = {"applications":[copy.deepcopy(original)]}
+        self.assertTrue(create(seed, "separate-product-secret"))
+        self.assertEqual(seed["applications"][0], original)
+        product = seed["applications"][1]
+        self.assertEqual(product["clientId"], "superwagie-unihub-local")
+        self.assertEqual(product["clientSecret"], "separate-product-secret")
+        self.assertEqual(set(product["redirectUris"]), {"http://localhost:57991/api/platform-account/callback", "http://127.0.0.1:57991/api/platform-account/callback"})
+        self.assertFalse(create(seed, "do-not-rotate"))
+        self.assertEqual(seed["applications"][1]["clientSecret"], "separate-product-secret")
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="unihub-branding-test-")
         self.addCleanup(self.temporary.cleanup)

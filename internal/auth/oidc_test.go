@@ -308,3 +308,50 @@ func TestOIDCRespectsCanceledVerificationContext(t *testing.T) {
 		t.Fatalf("canceled verification returned (%#v, %v)", got, err)
 	}
 }
+
+func TestOIDCSeparatesConsoleAndProductAudiences(t *testing.T) {
+	i := newTestIssuer(t)
+	for _, client := range []string{"unihub", "superwagie"} {
+		t.Run(client, func(t *testing.T) {
+			v, err := NewOIDC(context.Background(), i.server.URL, client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			other := "superwagie"
+			if client == other {
+				other = "unihub"
+			}
+			for _, test := range []struct {
+				name     string
+				audience any
+				azp      string
+				valid    bool
+			}{
+				{"singleton array", []string{client}, "", true},
+				{"singleton string", client, "", true},
+				{"matching authorized party", []string{client}, client, true},
+				{"other client singleton", []string{other}, other, false},
+				{"mixed audience other authorized party", []string{client, other}, other, false},
+				{"mixed audience matching authorized party", []string{other, client}, client, false},
+				{"mixed audience absent authorized party", []string{client, other}, "", false},
+				{"duplicate audience", []string{client, client}, client, false},
+				{"wrong authorized party", []string{client}, other, false},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					claims := i.claims()
+					claims["aud"] = test.audience
+					if test.azp != "" {
+						claims["azp"] = test.azp
+					}
+					got, err := v.Verify(context.Background(), signJWT(t, i.key, claims, "RS256"))
+					if test.valid && err != nil {
+						t.Fatalf("valid client token rejected: %v", err)
+					}
+					if !test.valid && (err == nil || got != (Claims{})) {
+						t.Fatalf("client audience confusion accepted: %#v, %v", got, err)
+					}
+				})
+			}
+		})
+	}
+}

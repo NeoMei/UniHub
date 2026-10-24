@@ -13,13 +13,21 @@ import (
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
+	"unihub/internal/billing"
+	"unihub/internal/ledger"
+	"unihub/internal/modelaccess"
 	"unihub/internal/wallet"
 )
 
 type Options struct {
-	Sandbox    bool
-	Merchant   string
-	SigningKey []byte
+	Sandbox          bool
+	Merchant         string
+	SigningKey       []byte
+	Billing          *billing.Service
+	ServiceToken     string
+	ModelAccess      *modelaccess.Service
+	OperatorVerifier auth.Verifier
+	ProductVerifiers map[string]auth.Verifier
 }
 type api struct {
 	verifier auth.Verifier
@@ -36,6 +44,12 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		respond(w, 200, map[string]string{"status": "ok", "service": "unihub"})
 	})
 	add := func(pattern string, f action) { m.HandleFunc(pattern, s.authenticated(f)) }
+	if o.Billing != nil {
+		s.billingRoutes(m, add)
+	}
+	if o.Billing != nil && o.ModelAccess != nil {
+		s.modelRoutes(m, add)
+	}
 	add("GET /v1/me", func(w http.ResponseWriter, r *http.Request, u accounts.User) error { return respond(w, 200, u) })
 	add("GET /v1/accounts", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		a, e := s.accounts.ListAccounts(r.Context(), u.ID)
@@ -211,15 +225,40 @@ var paymentUnavailable = errors.New("payments unavailable")
 
 func (s *api) authenticated(next action) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		h := r.Header.Get("Authorization")
-		if !strings.HasPrefix(h, "Bearer ") || len(h) > 16384 {
+		if len(r.Header.Values("Authorization")) > 1 {
 			fail(w, 401, "unauthorized")
 			return
 		}
-		c, e := s.verifier.Verify(r.Context(), strings.TrimPrefix(h, "Bearer "))
+		h := r.Header.Get("Authorization")
+		c, browser := auth.BrowserClaims(r.Context())
+		var e error
+		product := ""
+		if h != "" || !browser {
+			if !strings.HasPrefix(h, "Bearer ") || len(h) > 16384 {
+				fail(w, 401, "unauthorized")
+				return
+			}
+			c, e = s.verifier.Verify(r.Context(), strings.TrimPrefix(h, "Bearer "))
+			if e != nil {
+				for id, verifier := range s.options.ProductVerifiers {
+					c, e = verifier.Verify(r.Context(), strings.TrimPrefix(h, "Bearer "))
+					if e == nil {
+						product = id
+						break
+					}
+				}
+			}
+		}
 		if e != nil {
 			fail(w, 401, "unauthorized")
 			return
+		}
+		if product != "" {
+			if !productRouteAllowed(r.Pattern) {
+				fail(w, 403, "forbidden")
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), productIdentityKey{}, product))
 		}
 		u, e := s.accounts.EnsureIdentity(r.Context(), accounts.Identity{Issuer: c.Issuer, Subject: c.Subject, Name: c.Name, Email: c.Email})
 		if e != nil {
@@ -243,6 +282,8 @@ func writeError(w http.ResponseWriter, e error) {
 	switch {
 	case errors.Is(e, accounts.ErrForbidden):
 		fail(w, 403, "forbidden")
+	case errors.Is(e, modelaccess.ErrCredential):
+		fail(w, 403, "invalid_model_credential")
 	case errors.Is(e, accounts.ErrNotFound):
 		fail(w, 404, "not_found")
 	case errors.Is(e, accounts.ErrConflict) || errors.Is(e, wallet.ErrConflict):
@@ -251,6 +292,20 @@ func writeError(w http.ResponseWriter, e error) {
 		fail(w, 400, "invalid_request")
 	case errors.Is(e, paymentUnavailable):
 		fail(w, 503, "payment_not_configured")
+	case errors.Is(e, billing.ErrInvalid):
+		fail(w, 400, "invalid_request")
+	case errors.Is(e, billing.ErrConflict):
+		fail(w, 409, "conflict")
+	case errors.Is(e, billing.ErrPending) || errors.Is(e, wallet.ErrPending):
+		fail(w, 409, "operation_pending")
+	case errors.Is(e, billing.ErrInsufficientCredits):
+		fail(w, 402, "insufficient_credits")
+	case errors.Is(e, ledger.ErrInsufficientFunds):
+		fail(w, 402, "insufficient_funds")
+	case errors.Is(e, billing.ErrUnsupported):
+		fail(w, 409, "unsupported_plan_change")
+	case errors.Is(e, billing.ErrManualReview):
+		fail(w, 409, "refund_requires_review")
 	default:
 		fail(w, 503, "service_unavailable")
 	}

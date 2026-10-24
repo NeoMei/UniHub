@@ -30,6 +30,7 @@ type Verifier interface {
 // OIDC validates Casdoor access tokens against a discovered issuer's keys.
 type OIDC struct {
 	verifier *oidc.IDTokenVerifier
+	audience string
 }
 
 // NewOIDC discovers an issuer and configures strict RS256 bearer verification.
@@ -72,7 +73,7 @@ func NewOIDC(ctx context.Context, issuer, audience string) (*OIDC, error) {
 	return &OIDC{verifier: provider.VerifierContext(clientCtx, &oidc.Config{
 		ClientID:             audience,
 		SupportedSigningAlgs: []string{oidc.RS256},
-	})}, nil
+	}), audience: audience}, nil
 }
 
 func (v *OIDC) Verify(ctx context.Context, rawToken string) (Claims, error) {
@@ -84,14 +85,18 @@ func (v *OIDC) Verify(ctx context.Context, rawToken string) (Claims, error) {
 		return Claims{}, fmt.Errorf("verify access token: %w", err)
 	}
 	var claims struct {
-		Name      string   `json:"name"`
-		Email     string   `json:"email"`
-		TokenType string   `json:"tokenType"`
-		Scope     string   `json:"scope"`
-		Expiry    *float64 `json:"exp"`
+		Name            string   `json:"name"`
+		Email           string   `json:"email"`
+		TokenType       string   `json:"tokenType"`
+		Scope           string   `json:"scope"`
+		Expiry          *float64 `json:"exp"`
+		AuthorizedParty string   `json:"azp"`
 	}
 	if err := token.Claims(&claims); err != nil {
 		return Claims{}, fmt.Errorf("decode access token claims: %w", err)
+	}
+	if len(token.Audience) != 1 || token.Audience[0] != v.audience || (claims.AuthorizedParty != "" && claims.AuthorizedParty != v.audience) {
+		return Claims{}, errors.New("access token must belong to exactly the configured OIDC client")
 	}
 	// Casdoor signs ID, access and refresh tokens with the same key. Signature,
 	// issuer and audience verification alone cannot distinguish their purpose.

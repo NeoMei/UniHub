@@ -14,6 +14,74 @@ import (
 	"unihub/internal/ledger"
 )
 
+func TestWalletCannotOvertakeUnresolvedCommercialWork(t *testing.T) {
+	for _, state := range []string{"UNKNOWN", "PAID_PENDING", "FROZEN_REFUND"} {
+		t.Run(state, func(t *testing.T) {
+			s, l, u, a := fixture(t)
+			ctx := context.Background()
+			deposit(t, s, u, a)
+			// Reproduce committed recovery states left by the independent billing
+			// worker. The assertion concerns the real wallet's submission barrier.
+			if state == "UNKNOWN" {
+				if _, e := s.pool.Exec(ctx, `INSERT INTO billing_commands(id,account_id,actor_id,kind,request_key,request_digest,command,effect,status) VALUES('blocked',$1,$2,'payment','key','hash','{}','{}','UNKNOWN')`, a.ID, u.ID); e != nil {
+					t.Fatal(e)
+				}
+			} else {
+				snapshot := `{"payment_status":"PAID","fulfillment_status":"PENDING"}`
+				if state == "FROZEN_REFUND" {
+					snapshot = `{"payment_status":"PAID","fulfillment_status":"FULFILLED","refund_status":"FROZEN"}`
+				}
+				if _, e := s.pool.Exec(ctx, `INSERT INTO billing_orders(id,account_id,actor_id,request_key,request_digest,snapshot) VALUES('blocked',$1,$2,'key','hash',$3)`, a.ID, u.ID, []byte(snapshot)); e != nil {
+					t.Fatal(e)
+				}
+			}
+			op, e := s.Transfer(ctx, u.ID, a.ID, "agentwiki", "80000000", "transfer-after-billing")
+			if e != nil {
+				t.Fatal(e)
+			}
+			if e = s.Process(ctx, op.ID); !errors.Is(e, ErrPending) {
+				t.Fatalf("wallet overtook %s billing: %v", state, e)
+			}
+			if n, e := l.Balance(ctx, Address(a.ID, ""), Asset); e != nil || n != 100000000 {
+				t.Fatalf("pending command spent cash: %d %v", n, e)
+			}
+			if _, e = s.pool.Exec(ctx, `DELETE FROM billing_commands WHERE id='blocked'`); e != nil {
+				t.Fatal(e)
+			}
+			if _, e = s.pool.Exec(ctx, `DELETE FROM billing_orders WHERE id='blocked'`); e != nil {
+				t.Fatal(e)
+			}
+			if e = s.Process(ctx, op.ID); e != nil {
+				t.Fatal(e)
+			}
+			got, e := s.GetOperation(ctx, u.ID, a.ID, op.ID)
+			if e != nil || got.Status != "APPLIED" {
+				t.Fatalf("unblocked wallet failed: %+v %v", got, e)
+			}
+		})
+	}
+}
+
+func TestManualRefundReviewDoesNotBlockUnrelatedWalletTransfer(t *testing.T) {
+	s, _, u, a := fixture(t)
+	ctx := context.Background()
+	deposit(t, s, u, a)
+	if _, e := s.pool.Exec(ctx, `INSERT INTO billing_orders(id,account_id,actor_id,request_key,request_digest,snapshot) VALUES('manual',$1,$2,'manual','hash','{"payment_status":"PAID","fulfillment_status":"PENDING","refund_status":"MANUAL_REVIEW"}')`, a.ID, u.ID); e != nil {
+		t.Fatal(e)
+	}
+	op, e := s.Transfer(ctx, u.ID, a.ID, "agentwiki", "1000000", "transfer-after-manual-review")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Process(ctx, op.ID); e != nil {
+		t.Fatalf("resolved cash must not be blocked by manual refund review: %v", e)
+	}
+	got, e := s.GetOperation(ctx, u.ID, a.ID, op.ID)
+	if e != nil || got.Status != "APPLIED" {
+		t.Fatalf("transfer %+v %v", got, e)
+	}
+}
+
 func TestTransferKeyCannotBlockPaidRecharge(t *testing.T) {
 	s, _, u, a := fixture(t)
 	ctx := context.Background()

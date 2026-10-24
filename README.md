@@ -26,26 +26,27 @@ UniHub 统一用户与计费平台，为多个产品提供共用的用户、企�
 - [本地开发与 API 使用](docs/local-development.md)
 - [账户与资金基础实施计划](docs/superpowers/plans/2026-10-24-account-wallet-foundation.md)
 - [基础 API](docs/account-wallet-api.md)
-- [本次验收与剩余范围](docs/account-wallet-foundation-validation.md)
+- [账户基础验收](docs/account-wallet-foundation-validation.md)
+- [订阅、额度与控制台 API](docs/subscriptions-credits-api.md)
+- [本阶段验收与剩余范围](docs/subscriptions-credits-validation.md)
+- [多轮审查、修复证据与实施裁定](docs/subscriptions-credits-review.md)
 
 当前优先完成自有产品的统一用户与充值计费闭环，首个接入产品为 SuperWagie。第三方账户连接、第三方 MCP 与 API 接入依次作为后续扩展。
 
 ## 当前进度
 
-已落地第一阶段的账户与资金基础 API：Casdoor access token 验证、个人/团队账户、邀请与角色、充值订单、测试支付签名通知、统一钱包划拨、Formance 记账和后台恢复。业务数据保存在 PostgreSQL，现金余额以 Formance 为准。
+已实现账户、资金与订阅额度的本地闭环：Casdoor 登录、个人/团队账户与角色、测试充值、产品钱包和统一钱包、订阅购买、升级、加量包、按月发放模型额度、独立的续费/补款授权、退款核实与故障恢复。PostgreSQL 保存业务状态；现金与模型额度数量均以 Formance 为准。
 
-现有登录与身份管理界面已使用 UniHub 专用 Logo、浏览器图标、页脚与主题；浅色/深色界面及真实 PKCE 登录已验证。
-
-本地开发启动：
+用户中心已提供概览、会员、模型额度、加量包、钱包、订单、团队和设置八个页面。界面使用已确认的 UniHub Logo 与主题，浏览器通过服务端 OIDC 会话登录。商品价格可配置；当前发布的示例商品明确标记为测试套餐。
 
 ```sh
 make dev-setup
 make migrate
+make web-build
 make api
-# 在另一终端打开 UniHub 登录页，令牌仅保存在本地忽略目录
-make dev-login
+# 打开 http://localhost:8088
 ```
 
-开发依赖只绑定本机端口。API 默认 `http://127.0.0.1:8088`，付费账户与钱包业务界面尚未实现。当前付款方式为明确标注的 sandbox，测试到账不代表真实收款。生产模式禁止 sandbox；真实支付通道尚未接入。
+`make test-integration` 启用真实 PostgreSQL/Formance 与 race 检查；`make web-test` 验证前端。CLI 调试仍可用 `make dev-login`。
 
-会员/续费、模型额度、自动充值策略、退款业务、运营界面，以及 SuperWagie 等产品接入仍属于后续第一阶段切片。当前基础服务通过测试，不等于整个平台已完成或可直接生产上线。
+SuperWagie 独立平台登录、个人/团队选择、会员与额度读取、控制台跳转以及 llmrouter 模型计费已通过完整 Web 界面本地验收。模型上游使用受控模拟，身份、业务服务与账本均实际执行。浏览器与财务证据、部署边界见[阶段验收](docs/subscriptions-credits-validation.md)。当前付款方式是 sandbox，测试到账不代表真实收款。生产模式禁止 sandbox；真实支付通道、正式价格、独立运营可视化后台、AgentWiki 等后续产品及商业部署仍未完成。
