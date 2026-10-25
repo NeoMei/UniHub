@@ -54,6 +54,17 @@ class HeadlessDeploymentTests(unittest.TestCase):
         first=(self.root/'shared/credentials.json').read_bytes();bundle.prepare(self.root,self.release,{})
         self.assertEqual(first,(self.root/'shared/credentials.json').read_bytes())
 
+    def test_all_products_usage_scope_is_deployable_only_for_llmrouter(self):
+        item={**self.registry[0], 'product_id':'llmrouter', 'scopes':['usage:read','usage:all-products']}
+        bundle.stage_headless(self.root,[item])
+        bundle.prepare(self.root,self.release,{})
+        runtime=bundle.read_env(self.root/'shared/runtime.env')
+        config=json.loads(Path(runtime['PRODUCT_CLIENTS_FILE']).read_text())
+        self.assertIn('usage:all-products',config[0]['scopes'])
+        for product in ['superwagie','llmrouter-other']:
+            with self.subTest(product=product), self.assertRaises(bundle.DeploymentError):
+                bundle.stage_headless(self.root,[{**item,'product_id':product}])
+
     def test_registry_cannot_reuse_console_legacy_or_provisioner_identity(self):
         for client in ['unihub-console','superwagie-unihub',bundle.PROVISIONER_CLIENT]:
             item={**self.registry[0],'client_id':client}
