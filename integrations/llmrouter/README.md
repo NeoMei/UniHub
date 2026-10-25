@@ -1,5 +1,13 @@
 # llmrouter 通用资产计费桥接
 
+## 当前源码集成状态（2026-10-25）
+
+下面的 `composable-billing.patch` 是随 UniHub v0.2.0 保存的历史桥接补丁，不是当前 LLMRouter 集成分支的完整交付物。当前独立源码检出位于 `/Users/neomei/项目/codexprojects/unihub/.local/integrations/llmrouter`，分支 `codex/unihub-integration`，已在当前上游 `f808b1cd6` 上恢复桥接，并增加独立 UniHub 产品身份、个人/团队资源和财务界面。UniHub 配套源码位于 `codex/llmrouter-pool-reporting`（报告接口提交 `90a18fb`）。两者均为可审阅的本地分支，尚未部署、推送或发布；已发布 v0.2.0 不包含新增 model-pool 报告接口。
+
+当前安装配置、能力限制和回滚说明见该 LLMRouter 检出的 `docs/integrations/unihub.md`、`unihub.env.example`；真实本地 Casdoor/UniHub/PostgreSQL/Formance 和嵌入式生产前端验收见 `unihub-validation-2026-10-25.md`。模型响应为受控夹具，支付为明确的沙箱测试，不代表真实供应商或商户验收。真实接线用例可以直接将 `UNIHUB_LLMROUTER_PATH` 指向当前源码分支，无需重复应用历史补丁。
+
+## 历史 v0.2.0 补丁
+
 `composable-billing.patch` 是对已有 UniHub 平台计费桥接的一次通用升级，基线为 llmrouter `8721c25a91c1d5f74eb3a293d6ed1687661b3a38`。业务修改位于 `internal/platformbilling`，另包含显式启用的真实数据库迁移测试及 `router/platform_live_fixture_test.go` 接线。各来源产品继续使用相同的平台调用流程，无需实现自己的扣费逻辑。
 
 ## 接口与兼容
@@ -69,4 +77,4 @@ go test -race ./internal/httpapi -run '^TestComposableBillingActualGatewayAccept
 UNIHUB_GATEWAY_MIGRATION_DISPOSABLE=1 go test ./internal/platformbilling -run '^TestFundingMigrationRealDatabases$' -v -count=1
 ```
 
-状态：源码修改目前位于本机既有隔离集成检出；此目录将修改保存为可审阅补丁。未提交、未推送 llmrouter，未部署。目标 llmrouter 版本需核对补丁上下文后应用，重新运行上述套件及真实接线验收，再进入其部署验收。
+历史状态：本补丁记录 v0.2.0 当时的隔离桥接修改。当前源码已另行提交并通过本地接线验收，见本文开头；旧目标若应用此历史补丁，仍须核对其基线、重跑套件和真实接线，再进入部署验收。
