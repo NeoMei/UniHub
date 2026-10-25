@@ -1,6 +1,7 @@
 package billing
 
 import (
+	"fmt"
 	"math/big"
 	"strconv"
 	"strings"
@@ -64,7 +65,7 @@ func CalculateCharge(r Rate, u Usage) (string, error) {
 		}
 		v, err := metering.Calculate(*r.Metered, *u.Metered)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 		q, rem := new(big.Int), new(big.Int)
 		q.QuoRem(v.Num(), v.Denom(), rem)
@@ -137,7 +138,10 @@ func validateRate(r Rate) error {
 		if r.Metered == nil || r.Input != (Rational{}) || r.Output != (Rational{}) || r.CacheRead != (Rational{}) || r.CacheWrite != (Rational{}) || r.Reasoning != (Rational{}) {
 			return ErrInvalid
 		}
-		return metering.ValidatePrice(*r.Metered)
+		if err := metering.ValidatePrice(*r.Metered); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		return nil
 	}
 	if r.Semantics != "exclusive_v1" || r.Metered != nil {
 		return ErrInvalid

@@ -147,19 +147,19 @@ type Rate struct {
 	Model      string          `json:"model"`
 	Status     string          `json:"status"`
 	Semantics  string          `json:"semantics"` // exclusive_v1: each count excludes every other count
-	Input      Rational        `json:"input"`
-	Output     Rational        `json:"output"`
-	CacheRead  Rational        `json:"cache_read"`
-	CacheWrite Rational        `json:"cache_write"`
-	Reasoning  Rational        `json:"reasoning"`
+	Input      Rational        `json:"input,omitempty"`
+	Output     Rational        `json:"output,omitempty"`
+	CacheRead  Rational        `json:"cache_read,omitempty"`
+	CacheWrite Rational        `json:"cache_write,omitempty"`
+	Reasoning  Rational        `json:"reasoning,omitempty"`
 	Metered    *metering.Price `json:"metered,omitempty"`
 }
 type Usage struct {
-	Input      string          `json:"input"`
-	Output     string          `json:"output"`
-	CacheRead  string          `json:"cache_read"`
-	CacheWrite string          `json:"cache_write"`
-	Reasoning  string          `json:"reasoning"`
+	Input      string          `json:"input,omitempty"`
+	Output     string          `json:"output,omitempty"`
+	CacheRead  string          `json:"cache_read,omitempty"`
+	CacheWrite string          `json:"cache_write,omitempty"`
+	Reasoning  string          `json:"reasoning,omitempty"`
 	Metered    *metering.Usage `json:"metered,omitempty"`
 }
 type ReserveRequest struct {

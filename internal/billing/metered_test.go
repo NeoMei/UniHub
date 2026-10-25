@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"unihub/internal/metering"
 )
@@ -62,6 +63,13 @@ func TestMeteredSettlementFrozenReplayAndSummary(t *testing.T) {
 	if _, err := f.s.Reserve(ctx, "router", ReserveRequest{CallID: "native-call", ActorID: f.actor, AccountID: f.account, OriginProductID: "superwagie", RequestDigest: "d", RateID: r.ID, Amount: "1"}); err != nil {
 		t.Fatal(err)
 	}
+	changed := nativeRate()
+	changed.ID = r.ID
+	changed.Model = r.Model
+	changed.Metered.Terms[0].Price.Numerator = "999"
+	if _, err := f.s.pool.Exec(ctx, `UPDATE billing_rates SET snapshot=$1 WHERE id=$2`, encode(changed), r.ID); err != nil {
+		t.Fatal(err)
+	}
 	call, err := f.s.Settle(ctx, "router", SettlementRequest{CallID: "native-call"})
 	if err != nil || call.Status != "MISSING_USAGE" {
 		t.Fatalf("missing %+v %v", call, err)
@@ -76,8 +84,34 @@ func TestMeteredSettlementFrozenReplayAndSummary(t *testing.T) {
 	if err != nil || replay.FinalDigest != call.FinalDigest {
 		t.Fatalf("replay %+v %v", replay, err)
 	}
+	changedUsage := nativeUsage("1501")
+	if _, err := f.s.Settle(ctx, "router", SettlementRequest{CallID: "native-call", Usage: &changedUsage, ProviderCost: "17"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed retry: %v", err)
+	}
+	if _, err := f.s.Reserve(ctx, "router", ReserveRequest{CallID: "native-zero", ActorID: f.actor, AccountID: f.account, OriginProductID: "superwagie", RequestDigest: "zero", RateID: r.ID, Amount: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	zero := nativeUsage("0")
+	zeroCall, err := f.s.Settle(ctx, "router", SettlementRequest{CallID: "native-zero", Usage: &zero})
+	if err != nil || zeroCall.Status != "SETTLED" || zeroCall.Charged != "0" {
+		t.Fatalf("zero: %+v %v", zeroCall, err)
+	}
 	summary, err := f.s.QueryUsageSummary(ctx, f.actor, f.account, CallFilter{})
 	if err != nil || !summary.UsageComplete || summary.Usage.Input != "0" || len(summary.NativeUsage) != 1 || summary.NativeUsage[0].Measurements[0].Quantity.Value != "1500" {
 		t.Fatalf("summary %+v %v", summary, err)
+	}
+}
+
+func TestNativeUsageWireOmitsLegacyCounters(t *testing.T) {
+	b, err := json.Marshal(nativeUsage("0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]json.RawMessage
+	if err = json.Unmarshal(b, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if len(wire) != 1 || wire["metered"] == nil {
+		t.Fatalf("native wire: %s", b)
 	}
 }

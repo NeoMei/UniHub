@@ -2713,10 +2713,12 @@
         - "version"
       "additionalProperties": false
     "Usage":
+      "oneOf":
+        - "$ref": "#/components/schemas/LegacyUsage"
+        - "$ref": "#/components/schemas/NativeUsage"
+    "LegacyUsage":
       "type": "object"
       "properties":
-        "metered":
-          "$ref": "#/components/schemas/MeteringUsage"
         "input":
           "$ref": "#/components/schemas/IntegerString"
         "output":
@@ -2727,12 +2729,14 @@
           "$ref": "#/components/schemas/IntegerString"
         "reasoning":
           "$ref": "#/components/schemas/IntegerString"
-      "required":
-        - "input"
-        - "output"
-        - "cache_read"
-        - "cache_write"
-        - "reasoning"
+      "required": ["input", "output", "cache_read", "cache_write", "reasoning"]
+      "additionalProperties": false
+    "NativeUsage":
+      "type": "object"
+      "properties":
+        "metered":
+          "$ref": "#/components/schemas/MeteringUsage"
+      "required": ["metered"]
       "additionalProperties": false
     "QueryScope":
       "type": "object"

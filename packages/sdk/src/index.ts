@@ -30,11 +30,11 @@ export interface MeteringTerm { key: string; unit: string; provider_unit?: strin
 export interface MeteringPrice { version: "metered_v2"; operation: string; policy: string; terms: MeteringTerm[] }
 export interface MeteringMeasurement { key: string; unit: string; provider_unit?: string; quantity: MeteringQuantity }
 export interface MeteringUsage { version: "metered_v2"; operation: string; state: string; source: string; measurements: MeteringMeasurement[]; provider_request_id?: string }
-export interface Usage { input: IntegerString; output: IntegerString; cache_read: IntegerString; cache_write: IntegerString; reasoning: IntegerString; metered?: MeteringUsage }
+export type Usage = { input: IntegerString; output: IntegerString; cache_read: IntegerString; cache_write: IntegerString; reasoning: IntegerString; metered?: never } | { metered: MeteringUsage; input?: never; output?: never; cache_read?: never; cache_write?: never; reasoning?: never };
 export interface QueryScope { account_id: string; origin_product_id?: string; actor_id?: string; visibility: 'actor'|'account' }
 export interface CallFilter { from?: string; to?: string; model?: string; origin_product_id?: string; asset?: BillingAsset }
 export interface CallQuery extends CallFilter { limit?: number; cursor?: string }
-export interface Rate { asset: BillingAsset; id: string; model: string; status: string; semantics: string; metered?: MeteringPrice }
+export interface Rate { asset: BillingAsset; id: string; model: string; status: string; semantics: string; input?: MeteringRational; output?: MeteringRational; cache_read?: MeteringRational; cache_write?: MeteringRational; reasoning?: MeteringRational; metered?: MeteringPrice }
 
 export interface CallView { rate?: Rate; scope: QueryScope; financial_details: boolean; asset: BillingAsset; call_id: string; account_id: string; actor_id: string; origin_product_id: string; model: string; status: string; created_at: string|null; time_source: string; task_id?: string; held?: IntegerString; charged?: IntegerString; usage?: Usage }
 export interface CallPage { scope: QueryScope; filter: CallFilter; financial_details: boolean; items: CallView[]; next_cursor?: string; has_more: boolean; total: IntegerString; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
