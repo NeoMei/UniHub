@@ -140,7 +140,10 @@ export default function App() {
     return (
       <div className="login-page">
         <div className="login-brand">
-          <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
+          <div className="login-brand-mark">
+            <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
+            <span>归一</span>
+          </div>
           <h1>一个身份，连接你的产品。</h1>
           <p>集中管理个人与团队账户、产品会员、模型额度与资金。</p>
         </div>
