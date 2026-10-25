@@ -45,7 +45,8 @@ func (f *profileFixture) ChangePassword(_ context.Context, user, current, next s
 	f.revoked = true
 	return nil
 }
-func (f *profileFixture) SessionAllowed(_ context.Context, _ string) bool { return !f.revoked }
+func (f *profileFixture) SessionAllowed(_ context.Context, _ string) bool        { return !f.revoked }
+func (f *profileFixture) BrowserSessionAllowed(_ context.Context, _ string) bool { return !f.revoked }
 func (f *profileFixture) PutAvatar(_ context.Context, _ string, _ string, data []byte) (identityProfile, error) {
 	f.avatar = bytes.Clone(data)
 	f.profile.AvatarURL = "/v1/me/avatar"
@@ -151,6 +152,23 @@ func TestProfileContractAndPasswordRevokesSession(t *testing.T) {
 	w = call(h, "GET", "/v1/me/profile", "alice", "", "")
 	if w.Code != 401 {
 		t.Fatalf("revoked session: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestPendingPasswordMutationBlocksTrustedBrowserClaims(t *testing.T) {
+	p := testutil.Database(t)
+	if err := database.Migrate(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	a := accounts.New(p)
+	f := &profileFixture{profile: identityProfile{Username: "alice"}, revoked: true}
+	h := New(verifier{}, a, wallet.New(p, a, noLedger{}), Options{Identity: f})
+	r := httptest.NewRequest("GET", "/v1/me/profile", nil)
+	r = r.WithContext(auth.WithBrowserClaims(r.Context(), auth.Claims{Issuer: "issuer", Subject: "alice"}))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 401 {
+		t.Fatalf("pending mutation browser claims: %d", w.Code)
 	}
 }
 

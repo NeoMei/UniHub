@@ -662,6 +662,7 @@ func (s *Server) verifyTokens(ctx context.Context, client string, tokens tokenSe
 
 type envelope struct {
 	Status string          `json:"status"`
+	Msg    string          `json:"msg"`
 	Data   json.RawMessage `json:"data"`
 	Data2  json.RawMessage `json:"data2"`
 	Data3  json.RawMessage `json:"data3"`

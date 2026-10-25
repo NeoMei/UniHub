@@ -3,12 +3,14 @@ package identityapi
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"image"
 	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unihub/internal/accounts"
@@ -57,7 +59,7 @@ func TestSelfProfileKeepsLoginNameAndChangesDisplayNameAndAvatar(t *testing.T) {
 				t.Error("password target mismatch")
 			}
 			if r.Form.Get("oldPassword") != "old-password" {
-				json.NewEncoder(w).Encode(map[string]string{"status": "error"})
+				json.NewEncoder(w).Encode(map[string]string{"status": "error", "msg": "password or code is incorrect, you have 4 remaining chances"})
 				return
 			}
 			passwordChanged = true
@@ -130,6 +132,13 @@ func TestSelfProfileKeepsLoginNameAndChangesDisplayNameAndAvatar(t *testing.T) {
 	if passwordChanged {
 		t.Fatal("wrong old password changed provider")
 	}
+	if !s.SessionAllowed(ctx, "old-token") {
+		t.Fatal("definitive wrong password revoked the live bearer")
+	}
+	var preservedSessions int
+	if err = p.QueryRow(ctx, `SELECT count(*) FROM browser_sessions WHERE subject='immutable-sub'`).Scan(&preservedSessions); err != nil || preservedSessions != 1 {
+		t.Fatalf("definitive wrong password removed browser session: %d %v", preservedSessions, err)
+	}
 	if err = s.ChangePassword(ctx, u.ID, "old-password", "NewSecretPassword9!"); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
@@ -139,5 +148,75 @@ func TestSelfProfileKeepsLoginNameAndChangesDisplayNameAndAvatar(t *testing.T) {
 	var sessions int
 	if err = p.QueryRow(ctx, `SELECT count(*) FROM browser_sessions WHERE subject='immutable-sub'`).Scan(&sessions); err != nil || sessions != 0 {
 		t.Fatalf("browser sessions retained %d %v", sessions, err)
+	}
+}
+
+func TestChangePasswordUnknownProviderResultRevokesSessions(t *testing.T) {
+	for _, cancelRequest := range []bool{false, true} {
+		t.Run(map[bool]string{false: "provider_revoke_failure", true: "caller_cancelled_after_mutation"}[cancelRequest], func(t *testing.T) {
+			p := testutil.Database(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if err := database.Migrate(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			var called atomic.Bool
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/get-user":
+					json.NewEncoder(w).Encode(map[string]any{"status": "ok", "data": map[string]string{"id": "subject", "name": "login", "email": ""}})
+				case "/api/get-organization":
+					json.NewEncoder(w).Encode(map[string]any{"status": "ok", "data": map[string]any{"name": "unihub", "passwordType": "bcrypt", "passwordObfuscatorType": "None", "passwordOptions": []string{}, "masterPassword": "", "masterVerificationCode": "", "defaultPassword": ""}})
+				case "/api/set-password":
+					called.Store(true)
+					if cancelRequest {
+						cancel()
+					}
+					// Model the pinned provider's mutation already persisted, followed by
+					// token-revocation failure. Its old tokens remain live at get-account.
+					json.NewEncoder(w).Encode(map[string]string{"status": "error", "msg": "token store unavailable"})
+				case "/api/get-account":
+					json.NewEncoder(w).Encode(map[string]any{"status": "ok", "data": map[string]string{"id": "subject"}})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer upstream.Close()
+			u, err := accounts.New(p).EnsureIdentity(ctx, accounts.Identity{Issuer: upstream.URL, Subject: "subject"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = p.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at) VALUES('ambiguous',$1,'subject','','','csrf',now()+interval '1 hour')`, upstream.URL); err != nil {
+				t.Fatal(err)
+			}
+			s := &Server{pool: p, opts: Options{Issuer: upstream.URL, ManagementClientID: "m", ManagementClientSecret: "s", SigningKey: bytes.Repeat([]byte{1}, 32)}, client: upstream.Client()}
+			oldPayload, _ := json.Marshal(map[string]any{"sub": "subject", "iat": time.Now().Add(-time.Hour).Unix()})
+			oldToken := "header." + base64.RawURLEncoding.EncodeToString(oldPayload) + ".signature"
+			if !s.SessionAllowed(ctx, oldToken) {
+				t.Fatal("old bearer not live before mutation")
+			}
+			if err = s.ChangePassword(ctx, u.ID, "old", "NewSecretPassword9!"); err != ErrUnavailable {
+				t.Fatalf("ambiguous result: %v", err)
+			}
+			if !called.Load() {
+				t.Fatal("set-password was not reached")
+			}
+			var sessions int
+			if err = p.QueryRow(context.Background(), `SELECT count(*) FROM browser_sessions WHERE subject='subject'`).Scan(&sessions); err != nil || sessions != 0 {
+				t.Fatalf("sessions retained: %d %v", sessions, err)
+			}
+			if s.SessionAllowed(context.Background(), oldToken) {
+				t.Fatal("still-active provider old bearer bypassed local cutoff")
+			}
+			freshPayload, _ := json.Marshal(map[string]any{"sub": "subject", "iat": time.Now().Add(time.Second).Unix()})
+			freshToken := "header." + base64.RawURLEncoding.EncodeToString(freshPayload) + ".signature"
+			if s.SessionAllowed(context.Background(), freshToken) == cancelRequest {
+				t.Fatal("later bearer did not respect pending versus completed attempt")
+			}
+			if s.BrowserSessionAllowed(context.Background(), u.ID) == cancelRequest {
+				t.Fatal("browser claims did not respect pending attempt")
+			}
+		})
 	}
 }

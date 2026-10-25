@@ -346,6 +346,14 @@ func (s *api) authenticated(next action) http.HandlerFunc {
 			writeError(w, e)
 			return
 		}
+		if browser && h == "" {
+			if gate, ok := s.options.Identity.(interface {
+				BrowserSessionAllowed(context.Context, string) bool
+			}); ok && !gate.BrowserSessionAllowed(r.Context(), u.ID) {
+				fail(w, 401, "unauthorized")
+				return
+			}
+		}
 		if h != "" && s.options.Identity != nil && !s.options.Identity.SessionAllowed(r.Context(), strings.TrimPrefix(h, "Bearer ")) {
 			fail(w, 401, "unauthorized")
 			return
