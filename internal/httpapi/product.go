@@ -14,7 +14,7 @@ type productPolicyKey struct{}
 func productRouteAllowed(pattern string) bool {
 	switch pattern {
 	case "GET /v1/me", "GET /v1/accounts", "GET /v1/products", "GET /v1/catalog",
-		"GET /v1/accounts/{account}/subscriptions", "GET /v1/accounts/{account}/credits",
+		"GET /v1/accounts/{account}/subscriptions", "GET /v1/accounts/{account}/credits", "GET /v1/products/{product}/billing-profile", "GET /v1/billing-presets",
 		"POST /v1/accounts/{account}/model-credentials":
 		return true
 	}
@@ -23,6 +23,7 @@ func productRouteAllowed(pattern string) bool {
 
 func productScopeAllowed(pattern string, c products.Client) bool {
 	scope := map[string]string{
+		"GET /v1/products/{product}/billing-profile": "catalog:read", "GET /v1/billing-presets": "catalog:read",
 		"GET /v1/me": "accounts:read", "GET /v1/capabilities": "accounts:read",
 		"GET /v1/accounts": "accounts:read", "POST /v1/accounts": "accounts:write",
 		"GET /v1/accounts/{account}/members": "members:read",

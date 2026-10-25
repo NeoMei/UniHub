@@ -77,22 +77,6 @@ func (s *Service) GetCall(ctx context.Context, service, callID string) (Call, er
 	}
 	return call, nil
 }
-func (s *Service) reserveAllowed(ctx context.Context, c *pgxpool.Conn, actor, account, origin string, now time.Time) error {
-	if e := s.member(ctx, c, actor, account); e != nil {
-		return e
-	}
-	if e := product(ctx, c, origin); e != nil {
-		return e
-	}
-	sub, e := load[Subscription](ctx, c, `SELECT snapshot FROM billing_subscriptions WHERE account_id=$1 AND product_id=$2`, account, origin)
-	if e != nil {
-		return accounts.ErrForbidden
-	}
-	if sub.Status != "active" || !now.Before(sub.PaidThrough) {
-		return accounts.ErrForbidden
-	}
-	return nil
-}
 func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest) (Call, error) {
 	var out Call
 	if e := s.trust(service); e != nil {
@@ -122,9 +106,6 @@ func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest)
 			return e
 		}
 		now := s.now().UTC()
-		if e = s.reserveAllowed(ctx, c, r.ActorID, r.AccountID, r.OriginProductID, now); e != nil {
-			return e
-		}
 		if e = s.clear(ctx, c, r.AccountID); e != nil {
 			return e
 		}
@@ -132,21 +113,34 @@ func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest)
 		if e != nil {
 			return e
 		}
-		if e = s.checkCredential(ctx, c, r.CredentialID, r.ActorID, r.AccountID, r.OriginProductID, rate.Model, now); e != nil {
-			return e
-		}
-		alloc, e := s.allocate(ctx, c, r.AccountID, n, now)
+		auth, e := s.usageFundingOn(ctx, c, r.CredentialID, r.ActorID, r.AccountID, r.OriginProductID, rate.Model, now)
 		if e != nil {
 			return e
 		}
-		out = Call{ServiceID: service, CredentialID: r.CredentialID, CallID: r.CallID, ActorID: r.ActorID, AccountID: r.AccountID, OriginProductID: r.OriginProductID, RequestDigest: r.RequestDigest, Rate: rate, Held: r.Amount, Charged: "0", PlatformDifference: "0", Status: "PENDING", Allocations: alloc}
+		rate.Asset = normalizedAsset(rate.Asset)
+		if rate.Asset != auth.Asset {
+			return accounts.ErrForbidden
+		}
+		alloc := []Allocation{}
+		posts := []ledger.Posting{}
+		if auth.Asset == CashAsset {
+			posts, e = s.cashReservePosts(ctx, r.AccountID, CashHoldAddress(r.AccountID, r.CallID), n)
+		} else {
+			alloc, e = s.allocate(ctx, c, r.AccountID, n, now)
+			for _, a := range alloc {
+				n, _ := integer(a.Amount, true)
+				posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "available"), Destination: BatchAddress(a.BatchID, "reserved"), Asset: CreditAsset, Amount: n})
+			}
+		}
+		if e != nil {
+			return e
+		}
+		out = Call{ServiceID: service, CredentialID: r.CredentialID, CallID: r.CallID, ActorID: r.ActorID, AccountID: r.AccountID, OriginProductID: r.OriginProductID, RequestDigest: r.RequestDigest, Rate: rate, Held: r.Amount, Charged: "0", PlatformDifference: "0", Status: "PENDING", Allocations: alloc, ChargeAsset: auth.Asset, FundingMode: auth.FundingMode, FundingProductID: "llmrouter", BillingProfileVersion: auth.ProfileVersion}
+		if auth.Asset == CashAsset {
+			out.CashHoldAddress = CashHoldAddress(r.AccountID, r.CallID)
+		}
 		held := out
 		held.Status = "RESERVED"
-		posts := []ledger.Posting{}
-		for _, a := range alloc {
-			n, _ := integer(a.Amount, true)
-			posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "available"), Destination: BatchAddress(a.BatchID, "reserved"), Asset: CreditAsset, Amount: n})
-		}
 		tx, e := c.Begin(ctx)
 		if e != nil {
 			return e
@@ -257,27 +251,29 @@ func (s *Service) TopUp(ctx context.Context, service, callID, amount, key string
 			return ErrConflict
 		}
 		now := s.now().UTC()
-		if e = s.reserveAllowed(ctx, c, call.ActorID, call.AccountID, call.OriginProductID, now); e != nil {
+		if e = s.callFundingAllowed(ctx, c, call, now); e != nil {
 			return e
 		}
 		if e = s.clear(ctx, c, call.AccountID); e != nil {
-			return e
-		}
-		if e = s.checkCredential(ctx, c, call.CredentialID, call.ActorID, call.AccountID, call.OriginProductID, call.Rate.Model, now); e != nil {
 			return e
 		}
 		held, _ := integer(call.Held, true)
 		if n > int64(^uint64(0)>>1)-held {
 			return ErrInvalid
 		}
-		alloc, e := s.allocate(ctx, c, call.AccountID, n, now)
+		alloc := []Allocation{}
+		posts := []ledger.Posting{}
+		if callAsset(call) == CashAsset {
+			posts, e = s.cashReservePosts(ctx, call.AccountID, cashHoldForCall(call), n)
+		} else {
+			alloc, e = s.allocate(ctx, c, call.AccountID, n, now)
+			for _, a := range alloc {
+				x, _ := integer(a.Amount, true)
+				posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "available"), Destination: BatchAddress(a.BatchID, "reserved"), Asset: CreditAsset, Amount: x})
+			}
+		}
 		if e != nil {
 			return e
-		}
-		posts := []ledger.Posting{}
-		for _, a := range alloc {
-			x, _ := integer(a.Amount, true)
-			posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "available"), Destination: BatchAddress(a.BatchID, "reserved"), Asset: CreditAsset, Amount: x})
 		}
 		call.Allocations = append(call.Allocations, alloc...)
 		call.Held = str(held + n)
@@ -383,6 +379,9 @@ func (s *Service) Settle(ctx context.Context, service string, r SettlementReques
 	return out, e
 }
 func (s *Service) finalPosts(ctx context.Context, c *pgxpool.Conn, call Call, charge int64, now time.Time) ([]ledger.Posting, error) {
+	if callAsset(call) == CashAsset {
+		return cashFinalPosts(call, charge)
+	}
 	posts := []ledger.Posting{}
 	for _, a := range call.Allocations {
 		held, _ := integer(a.Amount, true)
@@ -486,19 +485,4 @@ func (s *Service) expireLocked(ctx context.Context, c *pgxpool.Conn, b Batch, no
 		return e
 	}
 	return s.runLocked(ctx, c, cmd.ID)
-}
-
-func (s *Service) checkCredential(ctx context.Context, q accounts.Querier, credential, actor, account, origin, model string, now time.Time) error {
-	if credential == "" {
-		return nil
-	}
-	var ok bool
-	e := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM model_credentials WHERE id=$1 AND actor_id=$2 AND account_id=$3 AND origin_product_id=$4 AND expires_at>$5 AND revoked_at IS NULL AND models ? $6)`, credential, actor, account, origin, now, model).Scan(&ok)
-	if e != nil {
-		return e
-	}
-	if !ok {
-		return accounts.ErrForbidden
-	}
-	return nil
 }

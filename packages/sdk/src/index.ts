@@ -1,5 +1,14 @@
 /** UniHub JSON protocol client. No UI, storage, refresh, permissions or retries. */
 export type IntegerString = string;
+export type BillingAsset = 'CREDIT/6' | 'CNY/6';
+export type FundingMode = 'credits' | 'prepaid_cash';
+export type BillingPreset = 'hybrid' | 'prepaid' | 'subscription';
+export interface BillingComponent { enabled: boolean }
+export interface BillingProfile { product_id: string; version: number; subscription: BillingComponent; included_credits: BillingComponent; addons: BillingComponent; usage: { enabled: boolean; require_subscription: boolean; funding_modes: FundingMode[]; default_funding_mode: FundingMode | '' } }
+/** Presets use product_id="template" and version=0; they are not saved profiles. */
+export type BillingPresets = Record<BillingPreset, BillingProfile>;
+export interface Product { id: string; name: string; billing_profile?: BillingProfile }
+export interface ModelCredential { id: string; audience: 'llmrouter'; actor_id: string; account_id: string; origin_product_id: string; models: string[]; task_id: string; expires_at: string; token: string; funding_mode: FundingMode; asset: BillingAsset; billing_profile_version: number }
 export interface Registration { username: string; password: string; email?: string; display_name?: string }
 export interface RegistrationResult { registration_id: string; status: 'CREATED' | 'UNKNOWN'; login_required?: boolean; retry_after?: number }
 export interface TokenSet { access_token: string; id_token: string; token_type: 'Bearer'; scope: string; expires_in: number }
@@ -17,12 +26,13 @@ export interface Quote { id: string; account_id: string; subscription_id: string
 export interface Authorization { product_id: string; purpose: 'funding'|'renewal'; enabled: boolean; version: number; max_per_operation: IntegerString; max_total: IntegerString; expires_at: string; used?: IntegerString; actor_id?: string }
 export interface Usage { input: IntegerString; output: IntegerString; cache_read: IntegerString; cache_write: IntegerString; reasoning: IntegerString }
 export interface QueryScope { account_id: string; origin_product_id?: string; actor_id?: string; visibility: 'actor'|'account' }
-export interface CallFilter { from?: string; to?: string; model?: string; origin_product_id?: string }
+export interface CallFilter { from?: string; to?: string; model?: string; origin_product_id?: string; asset?: BillingAsset }
 export interface CallQuery extends CallFilter { limit?: number; cursor?: string }
-export interface CallView { scope: QueryScope; financial_details: boolean; asset: 'CREDIT/6'; call_id: string; account_id: string; actor_id: string; origin_product_id: string; model: string; status: string; created_at: string|null; time_source: string; task_id?: string; held?: IntegerString; charged?: IntegerString; usage?: Usage }
+export interface CallView { scope: QueryScope; financial_details: boolean; asset: BillingAsset; call_id: string; account_id: string; actor_id: string; origin_product_id: string; model: string; status: string; created_at: string|null; time_source: string; task_id?: string; held?: IntegerString; charged?: IntegerString; usage?: Usage }
 export interface CallPage { scope: QueryScope; filter: CallFilter; financial_details: boolean; items: CallView[]; next_cursor?: string; has_more: boolean; total: IntegerString; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
-export interface UsageSummary { scope: QueryScope; filter: CallFilter; financial_details: boolean; calls_total: IntegerString; settled_calls: IntegerString; pending_calls: IntegerString; missing_usage_calls: IntegerString; unknown_calls: IntegerString; rejected_calls: IntegerString; released_calls: IntegerString; by_status: Record<string,IntegerString>; charged?: IntegerString; asset: 'CREDIT/6'; usage: Usage; usage_complete: boolean; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
-export interface Resources { account_id: string; product_id: string; subscriptions: Subscription[]; credits?: { asset: 'CREDIT/6'; pool: 'llmrouter'; spendable: IntegerString; reserved: IntegerString; frozen: IntegerString }; wallets?: Balance[]; payments: {mode: string; real_payments_configured: boolean}; as_of: string }
+/** mixed omits charged. All charge amounts are omitted without a finance role. */
+export interface UsageSummary { scope: QueryScope; filter: CallFilter; financial_details: boolean; calls_total: IntegerString; settled_calls: IntegerString; pending_calls: IntegerString; missing_usage_calls: IntegerString; unknown_calls: IntegerString; rejected_calls: IntegerString; released_calls: IntegerString; by_status: Record<string,IntegerString>; charged?: IntegerString; charges_by_asset?: Partial<Record<BillingAsset,IntegerString>>; asset: BillingAsset | 'mixed'; usage: Usage; usage_complete: boolean; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
+export interface Resources { account_id: string; product_id: string; billing_profile?: BillingProfile; subscriptions: Subscription[]; credits?: { asset: 'CREDIT/6'; pool: 'llmrouter'; spendable: IntegerString; reserved: IntegerString; frozen: IntegerString }; wallets?: Balance[]; payments: {mode: string; real_payments_configured: boolean}; as_of: string }
 export interface ClientOptions { baseUrl: string; clientId: string; redirectUri: string; fetch?: typeof globalThis.fetch; crypto?: Crypto }
 export interface RequestOptions { body?: unknown; idempotencyKey?: string; signal?: AbortSignal }
 export class UniHubError extends Error {
@@ -76,7 +86,9 @@ export class UniHubClient {
  inviteAccept(id: string): Promise<Account>{return this.request('POST',`/v1/invitations/${segment(id)}/accept`);}
  changeMemberRole(account: string,member: string,role: string): Promise<void>{return this.request('PATCH',this.path(account,`/members/${segment(member)}`),{body:{role}});}
  removeMember(account: string,member: string): Promise<void>{return this.request('DELETE',this.path(account,`/members/${segment(member)}`));}
- products(): Promise<{id:string;name:string}[]>{return this.request('GET','/v1/products');}
+ products(): Promise<Product[]>{return this.request('GET','/v1/products');}
+ billingProfile(product: string): Promise<BillingProfile>{return this.request('GET',`/v1/products/${segment(product)}/billing-profile`);}
+ billingPresets(): Promise<BillingPresets>{return this.request('GET','/v1/billing-presets');}
  catalog(): Promise<Offer[]>{return this.request('GET','/v1/catalog');}
  subscriptions(account: string): Promise<Subscription[]>{return this.request('GET',this.path(account,'/subscriptions'));}
  wallets(account: string): Promise<Balance[]>{return this.request('GET',this.path(account,'/wallets'));}
@@ -96,7 +108,7 @@ export class UniHubClient {
  calls(account: string,filter: CallQuery={}): Promise<CallPage>{return this.request('GET',query(this.path(account,'/calls'),filter));}
  getCall(account: string,id: string,originProductId?: string): Promise<CallView>{return this.request('GET',query(this.path(account,`/calls/${segment(id)}`),{origin_product_id:originProductId}));}
  usage(account: string,filter: CallFilter={}): Promise<UsageSummary>{return this.request('GET',query(this.path(account,'/usage/summary'),filter));}
- issueModelCredential(account: string,models: string[],taskId: string): Promise<Record<string,unknown>>{return this.request('POST',this.path(account,'/model-credentials'),{body:{models,task_id:taskId}});}
+ issueModelCredential(account: string,models: string[],taskId: string,fundingMode?: FundingMode): Promise<ModelCredential>{return this.request('POST',this.path(account,'/model-credentials'),{body:{models,task_id:taskId,funding_mode:fundingMode}});}
  revokeModelCredential(account: string,id: string): Promise<void>{return this.request('DELETE',this.path(account,`/model-credentials/${segment(id)}`));}
  /** Explicit sandbox only. Never a real payment or automatically called. */
  sandboxSettleRecharge(account: string,id: string): Promise<Operation>{return this.request('POST',this.path(account,`/recharges/${segment(id)}/sandbox-settle`));}

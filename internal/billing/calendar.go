@@ -51,7 +51,7 @@ func str(n int64) string { return strconv.FormatInt(n, 10) }
 // CalculateCharge requires mutually exclusive counters, sums exact fractions,
 // then rounds up once. Intermediate arithmetic never uses floats or int64 sums.
 func CalculateCharge(r Rate, u Usage) (string, error) {
-	if r.Semantics != "exclusive_v1" {
+	if (normalizedAsset(r.Asset) != CreditAsset && normalizedAsset(r.Asset) != CashAsset) || r.Semantics != "exclusive_v1" {
 		return "", ErrInvalid
 	}
 	total := new(big.Rat)

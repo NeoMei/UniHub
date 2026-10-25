@@ -5,7 +5,24 @@ export type Session = {
   sandbox: boolean;
 };
 export type Account = { id: string; kind: string; name: string; role: string };
-export type Product = { id: string; name: string };
+export type BillingProfile = {
+  product_id: string;
+  version: number;
+  subscription: { enabled: boolean };
+  included_credits: { enabled: boolean };
+  addons: { enabled: boolean };
+  usage: {
+    enabled: boolean;
+    require_subscription: boolean;
+    funding_modes: string[];
+    default_funding_mode: string;
+  };
+};
+export type Product = {
+  id: string;
+  name: string;
+  billing_profile?: BillingProfile;
+};
 export type Wallet = { product_id: string; asset: string; amount: string };
 export type Member = {
   user_id: string;

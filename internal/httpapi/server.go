@@ -131,7 +131,18 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 			return e
 		}
 		a = filterProducts(r, a, func(p wallet.Product) string { return p.ID })
-		return respond(w, 200, a)
+		if s.options.Billing == nil {
+			return respond(w, 200, a)
+		}
+		out := make([]map[string]any, 0, len(a))
+		for _, product := range a {
+			profile, e := s.options.Billing.Profile(r.Context(), product.ID)
+			if e != nil {
+				return e
+			}
+			out = append(out, map[string]any{"id": product.ID, "name": product.Name, "billing_profile": profile})
+		}
+		return respond(w, 200, out)
 	})
 	add("GET /v1/accounts/{account}/wallets", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var a []wallet.Balance

@@ -1,0 +1,15 @@
+[
+  {
+    "product_id": "my-product",
+    "version": 1,
+    "subscription": {"enabled": true},
+    "included_credits": {"enabled": false},
+    "addons": {"enabled": false},
+    "usage": {
+      "enabled": true,
+      "require_subscription": true,
+      "funding_modes": ["prepaid_cash"],
+      "default_funding_mode": "prepaid_cash"
+    }
+  }
+]

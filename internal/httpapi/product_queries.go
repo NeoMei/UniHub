@@ -75,6 +75,13 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 			return e
 		}
 		out := map[string]any{"account_id": account, "product_id": originProduct(r), "subscriptions": filterProducts(r, subs, func(x billing.Subscription) string { return x.ProductID }), "payments": map[string]any{"mode": map[bool]string{true: "sandbox", false: "unconfigured"}[s.options.Sandbox], "real_payments_configured": false}}
+		if origin := originProduct(r); origin != "" {
+			profile, e := s.options.Billing.Profile(r.Context(), origin)
+			if e != nil {
+				return e
+			}
+			out["billing_profile"] = profile
+		}
 		policy, explicit := productPolicy(r)
 		if !explicit || policy.HasScope("credits:read") {
 			bs, e := s.options.Billing.Batches(r.Context(), u.ID, account)
@@ -144,7 +151,7 @@ func callQuery(r *http.Request, paged bool) (billing.CallFilter, billing.CallPag
 			return f, page, billing.ErrInvalid
 		}
 		switch k {
-		case "from", "to", "model", "origin_product_id":
+		case "from", "to", "model", "origin_product_id", "asset":
 		case "limit", "cursor":
 			if !paged {
 				return f, page, billing.ErrInvalid
@@ -154,6 +161,10 @@ func callQuery(r *http.Request, paged bool) (billing.CallFilter, billing.CallPag
 		}
 	}
 	f.Model = q.Get("model")
+	f.Asset = q.Get("asset")
+	if f.Asset != "" && f.Asset != billing.CreditAsset && f.Asset != billing.CashAsset {
+		return f, page, billing.ErrInvalid
+	}
 	f.OriginProductID = q.Get("origin_product_id")
 	if p := originProduct(r); p != "" {
 		if f.OriginProductID != "" && f.OriginProductID != p {
@@ -172,6 +183,9 @@ func callQuery(r *http.Request, paged bool) (billing.CallFilter, billing.CallPag
 		page.Cursor = q.Get("cursor")
 		f.From = restored.From
 		f.To = restored.To
+		if f.Asset == "" {
+			f.Asset = restored.Asset
+		}
 	}
 	for k, dest := range map[string]*time.Time{"from": &f.From, "to": &f.To} {
 		if q.Get(k) != "" {

@@ -61,7 +61,7 @@ func (s *Service) QuoteUpgrade(ctx context.Context, actor, account, subID, offer
 		if e != nil {
 			return e
 		}
-		newCredit, _ := integer(offer.MonthlyCredit, true)
+		newCredit, _ := integer(offer.MonthlyCredit, false)
 		issued := int64(0)
 		for _, b := range rows {
 			n, _ := integer(b.Original, true)

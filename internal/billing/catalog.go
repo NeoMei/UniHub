@@ -2,6 +2,7 @@ package billing
 
 import (
 	"context"
+	"errors"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
 )
@@ -13,13 +14,16 @@ func validateOffer(o Offer) error {
 	if _, e := integer(o.Price, true); e != nil {
 		return e
 	}
-	if _, e := integer(o.MonthlyCredit, true); e != nil {
+	if _, e := integer(o.MonthlyCredit, o.Kind == "addon"); e != nil {
 		return e
 	}
 	if o.Kind == "membership" && (o.Period != "month" && o.Period != "year") {
 		return ErrInvalid
 	}
 	if o.Kind == "addon" && (o.Period != "" || o.ValidityMonths < 1 || o.ValidityMonths > 120) {
+		return ErrInvalid
+	}
+	if o.Kind == "membership" && o.MonthlyCredit == "0" && o.RefundRule == "unused_only_v1" {
 		return ErrInvalid
 	}
 	if o.RefundRule != "" && o.RefundRule != "unused_only_v1" {
@@ -40,7 +44,7 @@ func (s *Service) SaveOffer(ctx context.Context, actor string, o Offer) (Offer, 
 	if o.Sandbox && !s.isSandbox() {
 		return Offer{}, accounts.ErrForbidden
 	}
-	if e := product(ctx, s.pool, o.ProductID); e != nil {
+	if e := s.offerForSaleOn(ctx, s.pool, o); e != nil {
 		return Offer{}, e
 	}
 	o.Status = "draft"
@@ -69,6 +73,15 @@ func (s *Service) PublishOffer(ctx context.Context, actor, offerID string) (Offe
 	if o.Sandbox && !s.isSandbox() {
 		return Offer{}, accounts.ErrForbidden
 	}
+	if e = validateOffer(o); e != nil {
+		return Offer{}, e
+	}
+	if e = lockBillingProduct(ctx, tx, o.ProductID); e != nil {
+		return Offer{}, e
+	}
+	if e = s.offerForSaleOn(ctx, tx, o); e != nil {
+		return Offer{}, e
+	}
 	o.Status = "published"
 	_, e = tx.Exec(ctx, `UPDATE billing_offers SET status='published',snapshot=$2 WHERE id=$1`, o.ID, encode(o))
 	if e != nil {
@@ -77,7 +90,21 @@ func (s *Service) PublishOffer(ctx context.Context, actor, offerID string) (Offe
 	return o, tx.Commit(ctx)
 }
 func (s *Service) Catalog(ctx context.Context) ([]Offer, error) {
-	return list[Offer](ctx, s.pool, `SELECT snapshot FROM billing_offers WHERE status='published' AND (NOT (snapshot->>'sandbox')::boolean OR $1) ORDER BY product_id,id`, s.isSandbox())
+	offers, e := list[Offer](ctx, s.pool, `SELECT o.snapshot FROM billing_offers o JOIN products p ON p.id=o.product_id AND p.enabled WHERE o.status='published' AND (NOT (o.snapshot->>'sandbox')::boolean OR $1) ORDER BY o.product_id,o.id`, s.isSandbox())
+	if e != nil {
+		return nil, e
+	}
+	out := make([]Offer, 0, len(offers))
+	for _, o := range offers {
+		if e = s.offerForSaleOn(ctx, s.pool, o); errors.Is(e, accounts.ErrForbidden) {
+			continue
+		}
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, o)
+	}
+	return out, nil
 }
 func (s *Service) OfferDrafts(ctx context.Context, actor string) ([]Offer, error) {
 	if e := s.operator(actor); e != nil {
@@ -127,7 +154,7 @@ func (s *Service) buyable(ctx context.Context, q accounts.Querier, offerID, acco
 	if o.AccountKind != "both" && o.AccountKind != kind {
 		return o, accounts.ErrForbidden
 	}
-	return o, product(ctx, q, o.ProductID)
+	return o, s.offerForSaleOn(ctx, q, o)
 }
 func (s *Service) PublishRate(ctx context.Context, actor string, r Rate) (Rate, error) {
 	if e := s.operator(actor); e != nil {
@@ -136,6 +163,7 @@ func (s *Service) PublishRate(ctx context.Context, actor string, r Rate) (Rate, 
 	if !keyOK(r.ID) || r.Model == "" {
 		return Rate{}, ErrInvalid
 	}
+	r.Asset = normalizedAsset(r.Asset)
 	if _, e := CalculateCharge(r, Usage{"0", "0", "0", "0", "0"}); e != nil {
 		return Rate{}, e
 	}
@@ -144,6 +172,7 @@ func (s *Service) PublishRate(ctx context.Context, actor string, r Rate) (Rate, 
 	if e != nil {
 		var old Rate
 		old, e = load[Rate](ctx, s.pool, `SELECT snapshot FROM billing_rates WHERE id=$1`, r.ID)
+		old.Asset = normalizedAsset(old.Asset)
 		if e == nil && hash(old) == hash(r) {
 			return old, nil
 		}
