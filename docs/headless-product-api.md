@@ -144,3 +144,31 @@ apply 只调用精确目标应用的 get/add/update API，保留既有 client se
 已完成本地真实 Casdoor 补充验收（2026-10-25）：SDK 使用独立 headless 测试客户端完成密码 JSON 授权、64 位 code 的 S256 交换、me/accounts/resources 读回及内存 token 清除，无资金写入；通用接入脚本为独立 headlessonboard 产品创建指定私有应用、发布公共 registry，并完成再次 prepare/apply（零 POST mutation）和 readback。公开结果分别保存于 `.local/headless-onboarding/sdk-acceptance.json` 与 `onboarding-acceptance.json`，不含凭据。这些是本地受控环境结果，不代表生产密码流程、双站点浏览器或真实支付验收。
 
 当前部署的公网 JSON 全流程、SDK、权限边界及重启读回结果见[2026-10-25验收记录](headless-product-api-validation-2026-10-25.md)。真实支付仍未配置；现有产品何时改用这些 API，由各产品分别实施。
+
+### Explicit unified model-pool reporting
+
+Only a registered client with `product_id: "llmrouter"` may configure the exact
+`usage:all-products` scope in the registry referenced by `PRODUCT_CLIENTS_FILE` (or the offline onboarding
+`product_client.py prepare --product-id llmrouter --scope usage:all-products`).
+Keep any other required scopes explicit; this capability does not imply `usage:read`.
+Other product IDs are rejected by both registry and offline configuration validation.
+
+The following GET routes additionally require the authenticated user's **current**
+account role to be `owner` or `billing_admin`:
+
+- `/v1/accounts/{account}/model-pool/calls`
+- `/v1/accounts/{account}/model-pool/calls/{call}`
+- `/v1/accounts/{account}/model-pool/usage/summary`
+
+Console tokens, legacy product tokens, members and account admins cannot use these
+routes. Scope alone never grants account membership or finance access. The list and
+summary accept the existing time/model/asset/origin filters; list pagination uses
+account-, actor-, role- and filter-bound signed cursors. Detail accepts an optional
+`origin_product_id`. Source origin is optional here and restricts the report when
+provided. Existing `/calls`, `/calls/{call}` and `/usage/summary` always retain the
+verified product's own-origin restriction, including for llmrouter finance users.
+Amounts remain integer strings, with CREDIT/6 and CNY/6 grouped independently;
+provider costs, credentials and prompts are never included. SDK methods are
+`modelPoolCalls(account, filter)`, `modelPoolCall(account, id, origin?)`, and
+`modelPoolUsage(account, filter)`. A missing scope must be presented as an incomplete
+own-origin view by clients using the ordinary reporting fallback.

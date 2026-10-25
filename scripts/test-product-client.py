@@ -18,6 +18,10 @@ class ProductClientTests(unittest.TestCase):
   for change in [{'client_secret':'x'},{'origins':['https://app.test/path']},{'redirect_uris':['https://app.test/%2A']},{'scopes':['admin:all']},{'organization':'built-in'},{'application':'app-built-in'}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
   self.m.validate_client(self.client())
+ def test_all_products_usage_requires_llmrouter(self):
+  self.m.validate_client(self.client(product_id='llmrouter',scopes=['usage:all-products']))
+  for product in ['agentwiki','superwagie','new-product']:
+   with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(product_id=product,scopes=['usage:all-products']))
  def test_prepare_is_public_minimal_and_apply_only_named_app(self):
   with tempfile.TemporaryDirectory() as d:
    registry=Path(d)/'clients.json';plan=self.m.prepare(registry,self.client(),'cert-built-in');self.assertFalse(registry.exists());self.assertNotIn('clientSecret',json.dumps(plan));self.assertFalse(plan['client']['registration'])

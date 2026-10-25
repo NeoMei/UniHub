@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"context"
 	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/billing"
@@ -11,6 +13,55 @@ import (
 )
 
 func (s *api) productQueryRoutes(add func(string, action)) {
+	// Explicit pool reports require a registered router and a current financial role.
+	for _, route := range []string{"GET /v1/accounts/{account}/model-pool/calls", "GET /v1/accounts/{account}/model-pool/calls/{call}", "GET /v1/accounts/{account}/model-pool/usage/summary"} {
+		add(route, func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+			c, ok := productPolicy(r)
+			if !ok || c.ProductID != "llmrouter" || !c.HasScope("usage:all-products") {
+				return accounts.ErrForbidden
+			}
+			role, e := s.accounts.Role(r.Context(), u.ID, r.PathValue("account"))
+			if e != nil {
+				return e
+			}
+			if role != "owner" && role != "billing_admin" {
+				return accounts.ErrForbidden
+			}
+			// Clearing attribution is local to these explicit reporting handlers.
+			r = r.WithContext(context.WithValue(r.Context(), productIdentityKey{}, ""))
+			if r.PathValue("call") != "" {
+				q := r.URL.Query()
+				for k, v := range q {
+					if k != "origin_product_id" || len(v) != 1 {
+						return billing.ErrInvalid
+					}
+				}
+				v, e := s.options.Billing.QueryCall(r.Context(), u.ID, r.PathValue("account"), r.PathValue("call"), q.Get("origin_product_id"))
+				if e != nil {
+					return e
+				}
+				return respond(w, 200, v)
+			}
+			summary := strings.HasSuffix(r.URL.Path, "/usage/summary")
+			f, page, e := callQuery(r, !summary)
+			if e != nil {
+				return e
+			}
+			if summary {
+				v, e := s.options.Billing.QueryUsageSummary(r.Context(), u.ID, r.PathValue("account"), f)
+				if e != nil {
+					return e
+				}
+				return respond(w, 200, v)
+			}
+			v, e := s.options.Billing.QueryCalls(r.Context(), u.ID, r.PathValue("account"), f, page)
+			if e != nil {
+				return e
+			}
+			return respond(w, 200, v)
+		})
+	}
+
 	add("GET /v1/capabilities", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		scopes := []string{}
 		clientID := ""
