@@ -777,9 +777,21 @@ td strong {
   flex-direction: column;
   border-right: 1px solid var(--line);
 }
-.login-brand img {
-  width: 210px;
+.login-brand-mark {
+  display: flex;
+  align-items: center;
+  gap: 18px;
   margin-bottom: 58px;
+}
+.login-brand-mark img {
+  width: 210px;
+}
+.login-brand-mark span {
+  color: #142b35;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
 }
 .login-brand h1 {
   font-size: 35px;
@@ -1100,9 +1112,15 @@ td strong {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
-  .login-brand img {
-    width: 165px;
+  .login-brand-mark {
+    gap: 12px;
     margin-bottom: 27px;
+  }
+  .login-brand-mark img {
+    width: 165px;
+  }
+  .login-brand-mark span {
+    font-size: 23px;
   }
   .login-brand h1 {
     font-size: 27px;
