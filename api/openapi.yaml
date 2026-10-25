@@ -2,7 +2,7 @@
 "info":
   "title": "UniHub Headless Product API"
   "version": "0.1.0"
-  "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists."
+  "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
     "url": "http://127.0.0.1:8088"
@@ -614,7 +614,7 @@
     "get":
       "operationId": "products"
       "summary": "products"
-      "description": ""
+      "description": "Approved product catalog, optionally with the current billing_profile on each product. Commercial policy is public metadata; it does not grant access or permit product clients to set prices."
       "security":
         -
           "BearerAuth": []
@@ -645,6 +645,147 @@
           "$ref": "#/components/responses/Error"
       "x-product-scopes":
         - "catalog:read"
+  "/v1/billing-presets":
+    "get":
+      "operationId": "billingPresets"
+      "summary": "billingPresets"
+      "description": "Read hybrid, prepaid and subscription templates. Hybrid requires membership for credits with no cash fallback; prepaid consumes CNY/6 without membership; subscription grants terms/entitlements with monthly_credit=0."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/BillingPresets"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "catalog:read"
+  "/v1/products/{product}/billing-profile":
+    "get":
+      "operationId": "billingProfile"
+      "summary": "billingProfile"
+      "description": "Read the current product policy. Product tokens require catalog:read and origin or explicitly approved BillingProducts; console reads use the console boundary. Product tokens cannot update profiles or prices."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/BillingProfile"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "catalog:read"
+      "parameters":
+        -
+          "name": "product"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+  "/ops/v1/products/{product}/billing-profile":
+    "get":
+      "operationId": "operatorBillingProfile"
+      "summary": "operatorBillingProfile"
+      "description": "Read public commercial metadata through the distinct operator token boundary."
+      "security":
+        -
+          "OperatorBearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/BillingProfile"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "parameters":
+        -
+          "name": "product"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    "put":
+      "operationId": "setBillingProfile"
+      "summary": "setBillingProfile"
+      "description": "Append a profile version using the body version as the expected current version. Body product_id must match the path; successful write returns version+1. Stale versions return 409. Operator token plus configured operator allowlist required. No automatic retries after an unknown outcome: read back and compare before deciding the next action."
+      "security":
+        -
+          "OperatorBearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/BillingProfile"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "parameters":
+        -
+          "name": "product"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/BillingProfile"
   "/v1/catalog":
     "get":
       "operationId": "catalog"
@@ -1143,6 +1284,12 @@
                 - "product_id"
                 - "amount"
               "additionalProperties": false
+            "examples":
+              "llmrouterCash":
+                "summary": "Recharge the account llmrouter product wallet for prepaid cash usage"
+                "value":
+                  "product_id": "llmrouter"
+                  "amount": "10000000"
   "/v1/accounts/{account}/recharges/{order}":
     "get":
       "operationId": "getRecharge"
@@ -1607,11 +1754,18 @@
           "schema":
             "type": "string"
           "description": "Opaque signed live traversal cursor, bound to filter/actor/account/current role. Omitted time bounds restored on continuation. Process restart expires cursor."
+        -
+          "name": "asset"
+          "in": "query"
+          "required": false
+          "schema":
+            "$ref": "#/components/schemas/BillingAsset"
+          "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
   "/v1/accounts/{account}/usage/summary":
     "get":
       "operationId": "usageSummary"
       "summary": "usageSummary"
-      "description": "Exact query snapshot totals. Member/admin see self; owner/billing_admin see account for same product. charged finance-only; no provider cost. UNKNOWN and MISSING_USAGE never counted as settled consumption. Separate calls/summary requests have distinct snapshots."
+      "description": "Role-scoped live query summary. Only settled charges are summed, separately by asset. For one asset, asset/charged remain compatible; for mixed assets asset=mixed and charged is omitted. Non-finance users receive no charged or charges_by_asset fields."
       "security":
         -
           "BearerAuth": []
@@ -1678,6 +1832,13 @@
           "schema":
             "type": "string"
           "description": "Product origin forced from verified client; explicit different product is 403."
+        -
+          "name": "asset"
+          "in": "query"
+          "required": false
+          "schema":
+            "$ref": "#/components/schemas/BillingAsset"
+          "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
   "/v1/accounts/{account}/calls/{call}":
     "get":
       "operationId": "getCall"
@@ -1737,7 +1898,7 @@
     "post":
       "operationId": "issueModelCredential"
       "summary": "issueModelCredential"
-      "description": "Origin defaults to verified product; mismatch denied. Requires current membership and active own-product subscription. Short-lived token only for llmrouter, never user login or settlement."
+      "description": "Origin defaults to verified product; mismatch denied. Current account membership, product usage policy, optional subscription gate and a published rate in the selected asset are required. Omitted funding_mode uses the profile default; explicit modes must be allowed. No credits-to-cash fallback. Short-lived llmrouter capability only, never a user login or settlement credential."
       "security":
         -
           "BearerAuth": []
@@ -1789,10 +1950,20 @@
                     "type": "string"
                 "task_id":
                   "type": "string"
+                "funding_mode":
+                  "$ref": "#/components/schemas/FundingMode"
               "required":
                 - "models"
                 - "task_id"
               "additionalProperties": false
+            "examples":
+              "prepaidCash":
+                "summary": "Use the account llmrouter CNY/6 wallet; origin is verified from client"
+                "value":
+                  "models":
+                    - "published-cash-model"
+                  "task_id": "product-task-123"
+                  "funding_mode": "prepaid_cash"
   "/v1/accounts/{account}/model-credentials/{credential}":
     "delete":
       "operationId": "revokeModelCredential"
@@ -1844,6 +2015,11 @@
       "scheme": "bearer"
       "bearerFormat": "OIDC access token"
       "description": "Exact distinct client audience; console/ops/service audiences separate. Scope requirements are x-product-scopes registry upper bounds AND domain RBAC."
+    "OperatorBearerAuth":
+      "type": "http"
+      "scheme": "bearer"
+      "bearerFormat": "Operator OIDC access token"
+      "description": "Distinct operator audience verified separately from product/console tokens. A write also requires the configured operator allowlist. Never embed an operator token in a product UI, configuration file or URL."
   "parameters":
     "IdempotencyKey":
       "name": "Idempotency-Key"
@@ -1963,6 +2139,8 @@
           "type": "string"
         "name":
           "type": "string"
+        "billing_profile":
+          "$ref": "#/components/schemas/BillingProfile"
       "required":
         - "id"
         - "name"
@@ -1981,6 +2159,10 @@
         - "asset"
         - "amount"
       "additionalProperties": false
+      "example":
+        "product_id": "llmrouter"
+        "asset": "CNY/6"
+        "amount": "10000000"
     "Operation":
       "type": "object"
       "properties":
@@ -2352,6 +2534,8 @@
           "type": "string"
         "origin_product_id":
           "type": "string"
+        "asset":
+          "$ref": "#/components/schemas/BillingAsset"
       "required": []
       "additionalProperties": false
     "Payments":
@@ -2693,7 +2877,7 @@
         "financial_details":
           "type": "boolean"
         "asset":
-          "const": "CREDIT/6"
+          "$ref": "#/components/schemas/BillingAsset"
         "call_id":
           "type": "string"
         "account_id":
@@ -2793,6 +2977,7 @@
           "$ref": "#/components/schemas/IntegerString"
         "charged":
           "$ref": "#/components/schemas/IntegerString"
+          "description": "Settled amount only for a single matching asset and finance roles. Omitted for mixed assets or non-finance roles."
         "unknown_time":
           "$ref": "#/components/schemas/IntegerString"
         "scope":
@@ -2806,7 +2991,12 @@
           "additionalProperties":
             "$ref": "#/components/schemas/IntegerString"
         "asset":
-          "const": "CREDIT/6"
+          "type": "string"
+          "enum":
+            - "CREDIT/6"
+            - "CNY/6"
+            - "mixed"
+          "description": "Single matching asset or mixed when calls use both assets. mixed omits charged; use charges_by_asset without adding unlike assets."
         "usage":
           "$ref": "#/components/schemas/Usage"
         "usage_complete":
@@ -2818,6 +3008,16 @@
           "const": "exact_for_query_snapshot"
         "consistency":
           "const": "live"
+        "charges_by_asset":
+          "type": "object"
+          "properties":
+            "CREDIT/6":
+              "$ref": "#/components/schemas/IntegerString"
+            "CNY/6":
+              "$ref": "#/components/schemas/IntegerString"
+          "additionalProperties": false
+          "minProperties": 1
+          "description": "Settled charges separately per matching asset. Present only for finance roles; pending/unknown holds are excluded."
       "required":
         - "calls_total"
         - "settled_calls"
@@ -2838,6 +3038,34 @@
         - "accuracy"
         - "consistency"
       "additionalProperties": false
+      "allOf":
+        -
+          "if":
+            "properties":
+              "asset":
+                "const": "mixed"
+            "required":
+              - "asset"
+          "then":
+            "not":
+              "required":
+                - "charged"
+        -
+          "if":
+            "properties":
+              "financial_details":
+                "const": false
+            "required":
+              - "financial_details"
+          "then":
+            "not":
+              "anyOf":
+                -
+                  "required":
+                    - "charged"
+                -
+                  "required":
+                    - "charges_by_asset"
     "Resources":
       "type": "object"
       "properties":
@@ -2860,6 +3088,9 @@
         "as_of":
           "type": "string"
           "format": "date-time"
+        "billing_profile":
+          "$ref": "#/components/schemas/BillingProfile"
+          "description": "Optional origin product profile for a product access token. Console responses may omit it; use products or profile reads for other products."
       "required":
         - "account_id"
         - "product_id"
@@ -2891,6 +3122,14 @@
           "format": "date-time"
         "token":
           "type": "string"
+        "funding_mode":
+          "$ref": "#/components/schemas/FundingMode"
+        "asset":
+          "$ref": "#/components/schemas/BillingAsset"
+        "billing_profile_version":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 0
       "required":
         - "id"
         - "audience"
@@ -2901,4 +3140,95 @@
         - "task_id"
         - "expires_at"
         - "token"
+        - "funding_mode"
+        - "asset"
+        - "billing_profile_version"
       "additionalProperties": false
+    "BillingAsset":
+      "type": "string"
+      "enum":
+        - "CREDIT/6"
+        - "CNY/6"
+      "description": "One asset per call. Both have scale 6; CREDIT is not CNY and there is no automatic conversion or fallback."
+    "FundingMode":
+      "type": "string"
+      "enum":
+        - "credits"
+        - "prepaid_cash"
+      "description": "credits uses CREDIT/6; prepaid_cash uses only the billed account llmrouter product wallet in CNY/6."
+    "BillingComponent":
+      "type": "object"
+      "properties":
+        "enabled":
+          "type": "boolean"
+      "required":
+        - "enabled"
+      "additionalProperties": false
+    "UsagePolicy":
+      "type": "object"
+      "properties":
+        "enabled":
+          "type": "boolean"
+        "require_subscription":
+          "type": "boolean"
+        "funding_modes":
+          "type": "array"
+          "items":
+            "$ref": "#/components/schemas/FundingMode"
+          "uniqueItems": true
+        "default_funding_mode":
+          "type": "string"
+          "enum":
+            - ""
+            - "credits"
+            - "prepaid_cash"
+      "required":
+        - "enabled"
+        - "require_subscription"
+        - "funding_modes"
+        - "default_funding_mode"
+      "additionalProperties": false
+      "description": "Enabled usage requires an allowed default mode. Disabled usage requires an empty modes array, empty default and require_subscription=false. A subscription requirement requires subscription.enabled."
+    "BillingProfile":
+      "type": "object"
+      "properties":
+        "product_id":
+          "type": "string"
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        "version":
+          "type": "integer"
+          "format": "int64"
+          "minimum": 0
+          "description": "Read version. PUT sends the current expected version and returns version+1. Deployment file versions start at 1."
+        "subscription":
+          "$ref": "#/components/schemas/BillingComponent"
+        "included_credits":
+          "$ref": "#/components/schemas/BillingComponent"
+        "addons":
+          "$ref": "#/components/schemas/BillingComponent"
+        "usage":
+          "$ref": "#/components/schemas/UsagePolicy"
+      "required":
+        - "product_id"
+        - "version"
+        - "subscription"
+        - "included_credits"
+        - "addons"
+        - "usage"
+      "additionalProperties": false
+      "description": "Commercial policy shared by all clients of one product, independent of identity client configuration. included_credits needs subscriptions and credits mode; addons needs credits mode. Prices, periods and immutable grant terms remain in Offers. Unconfigured products retain version-zero hybrid."
+    "BillingPresets":
+      "type": "object"
+      "properties":
+        "hybrid":
+          "$ref": "#/components/schemas/BillingProfile"
+        "prepaid":
+          "$ref": "#/components/schemas/BillingProfile"
+        "subscription":
+          "$ref": "#/components/schemas/BillingProfile"
+      "required":
+        - "hybrid"
+        - "prepaid"
+        - "subscription"
+      "additionalProperties": false
+      "description": "Templates only: product_id=template and version=0. Replace product and choose an explicit version to prepare a deployment policy; presets do not publish prices or save profiles."

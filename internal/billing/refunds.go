@@ -83,7 +83,9 @@ func (s *Service) RequestRefund(ctx context.Context, actor, account, orderID, ke
 			return e
 		}
 		manual := ""
-		if o.Offer.RefundRule != "unused_only_v1" {
+		if o.Offer.Kind == "membership" && o.Offer.MonthlyCredit == "0" {
+			manual = "service_entitlements_require_review"
+		} else if o.Offer.RefundRule != "unused_only_v1" {
 			manual = "refund_policy_not_configured"
 		}
 		posts := []ledger.Posting{}

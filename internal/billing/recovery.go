@@ -183,11 +183,8 @@ func (s *Service) runLocked(ctx context.Context, c *pgxpool.Conn, cmdID string) 
 			if e = s.trust(call.ServiceID); e != nil {
 				return s.reject(ctx, c, x, "CANCELED", "service_revoked")
 			}
-			if e = s.reserveAllowed(ctx, c, call.ActorID, call.AccountID, call.OriginProductID, s.now().UTC()); e != nil {
+			if e = s.callFundingAllowed(ctx, c, *call, s.now().UTC()); e != nil {
 				return s.reject(ctx, c, x, "CANCELED", "membership_revoked")
-			}
-			if e = s.checkCredential(ctx, c, call.CredentialID, call.ActorID, call.AccountID, call.OriginProductID, call.Rate.Model, s.now().UTC()); e != nil {
-				return s.reject(ctx, c, x, "CANCELED", "credential_revoked")
 			}
 			if e = s.validateNewAllocation(ctx, c, x); e != nil {
 				return s.reject(ctx, c, x, "CANCELED", "batch_no_longer_eligible")
@@ -351,6 +348,9 @@ func (s *Service) Maintain(ctx context.Context, now time.Time) (MaintenanceResul
 }
 
 func (s *Service) validateNewAllocation(ctx context.Context, q accounts.Querier, x command) error {
+	if callAsset(*x.Effect.Call) == CashAsset {
+		return s.validateCashAllocation(ctx, q, x)
+	}
 	now := s.now().UTC()
 	for _, p := range x.Ledger.Postings {
 		matched := false

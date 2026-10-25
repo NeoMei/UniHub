@@ -1,0 +1,853 @@
+diff --git a/internal/platformbilling/adapter.go b/internal/platformbilling/adapter.go
+index ffdcfc59a..0355e9a4f 100644
+--- a/internal/platformbilling/adapter.go
++++ b/internal/platformbilling/adapter.go
+@@ -22,21 +22,25 @@ import (
+ // Call stores immutable verified payer scope and terminal command intent. Model
+ // credentials are never persisted: recovery cannot authorize another dispatch.
+ type Call struct {
+-	CallID          string `gorm:"primaryKey;size:128"`
+-	ActorID         string `gorm:"size:128"`
+-	AccountID       string `gorm:"size:128"`
+-	OriginProductID string `gorm:"size:128"`
+-	CredentialID    string `gorm:"size:128"`
+-	TaskID          string `gorm:"size:128"`
+-	Model           string `gorm:"size:255"`
+-	Digest          string `gorm:"size:64"`
+-	RateID          string `gorm:"size:128"`
+-	Amount          string `gorm:"size:32"`
+-	Status          string `gorm:"size:32;index"`
+-	Intent          string `gorm:"type:text"`
+-	Charged         string `gorm:"size:32"`
+-	CreatedAt       time.Time
+-	UpdatedAt       time.Time
++	CallID                string `gorm:"primaryKey;size:128"`
++	ActorID               string `gorm:"size:128"`
++	AccountID             string `gorm:"size:128"`
++	OriginProductID       string `gorm:"size:128"`
++	CredentialID          string `gorm:"size:128"`
++	TaskID                string `gorm:"size:128"`
++	Model                 string `gorm:"size:255"`
++	Digest                string `gorm:"size:64"`
++	RateID                string `gorm:"size:128"`
++	Asset                 string `gorm:"size:16;not null;default:CREDIT/6"`
++	FundingMode           string `gorm:"size:16;not null;default:credits"`
++	FundingProductID      string `gorm:"size:128;not null;default:llmrouter"`
++	BillingProfileVersion int    `gorm:"not null;default:0"`
++	Amount                string `gorm:"size:32"`
++	Status                string `gorm:"size:32;index"`
++	Intent                string `gorm:"type:text"`
++	Charged               string `gorm:"size:32"`
++	CreatedAt             time.Time
++	UpdatedAt             time.Time
+ }
+ 
+ func (Call) TableName() string { return "platform_model_calls" }
+@@ -171,9 +175,20 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
+ 	if grant.ID == "" || grant.Audience != "llmrouter" || grant.ActorID == "" || grant.AccountID == "" || grant.OriginProductID == "" || grant.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, model) {
+ 		return nil, ErrInvalid
+ 	}
+-	sum := sha256.Sum256(append(append([]byte(task), 0), body...))
++	asset, mode, err := normalizeFunding(grant.Asset, grant.FundingMode)
++	if err != nil || grant.BillingProfileVersion < 0 {
++		return nil, ErrInvalid
++	}
++	digestBody := append(append([]byte(task), 0), body...)
++	// Keep the original CREDIT/version-0 digest byte-for-byte compatible with
++	// in-flight calls. New funding snapshots cannot reinterpret that digest.
++	if asset != "CREDIT/6" || mode != "credits" || grant.BillingProfileVersion != 0 {
++		prefix := fmt.Sprintf("unihub-funding-v1\x00%s\x00%s\x00%d\x00", asset, mode, grant.BillingProfileVersion)
++		digestBody = append([]byte(prefix), digestBody...)
++	}
++	sum := sha256.Sum256(digestBody)
+ 	digest := hex.EncodeToString(sum[:])
+-	row := Call{CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: model, Digest: digest, Status: "RESERVING"}
++	row := Call{CallID: id, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, CredentialID: grant.ID, TaskID: task, Model: model, Digest: digest, Asset: asset, FundingMode: mode, FundingProductID: "llmrouter", BillingProfileVersion: grant.BillingProfileVersion, Status: "RESERVING"}
+ 	var old Call
+ 	if err := a.db.WithContext(ctx).First(&old, "call_id = ?", id).Error; err == nil {
+ 		return nil, compareCall(old, row)
+@@ -187,7 +202,21 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
+ 	var chosen *Rate
+ 	for i := range rates {
+ 		r := &rates[i]
+-		if r.Model == model && (a.config.RateIDs[model] == "" || r.ID == a.config.RateIDs[model]) {
++		if r.Model != model {
++			continue
++		}
++		rateAsset, err := normalizeAsset(r.Asset)
++		if err != nil {
++			return nil, err
++		}
++		pin := ""
++		if asset == "CREDIT/6" {
++			pin = a.config.RateIDs[model]
++		}
++		if assetPin := a.config.AssetRateIDs[asset][model]; assetPin != "" {
++			pin = assetPin
++		}
++		if rateAsset == asset && (pin == "" || r.ID == pin) {
+ 			if chosen != nil {
+ 				return nil, ErrInvalid
+ 			}
+@@ -239,7 +268,8 @@ func (a *Adapter) Admit(ctx context.Context, credential, task, id string, body [
+ 	return &Session{adapter: a, call: row, safeFailure: true}, nil
+ }
+ func compareCall(old, row Call) error {
+-	if old.CallID != row.CallID || old.ActorID != row.ActorID || old.AccountID != row.AccountID || old.OriginProductID != row.OriginProductID || old.TaskID != row.TaskID || old.Model != row.Model || old.Digest != row.Digest {
++	oldAsset, oldMode, err := normalizeFunding(old.Asset, old.FundingMode)
++	if err != nil || oldAsset != row.Asset || oldMode != row.FundingMode || old.BillingProfileVersion != row.BillingProfileVersion || (old.FundingProductID != "" && old.FundingProductID != row.FundingProductID) || old.CallID != row.CallID || old.ActorID != row.ActorID || old.AccountID != row.AccountID || old.OriginProductID != row.OriginProductID || old.TaskID != row.TaskID || old.Model != row.Model || old.Digest != row.Digest {
+ 		return ErrConflict
+ 	}
+ 	return ErrDuplicate
+@@ -435,6 +465,7 @@ type Receipt struct {
+ 	CallID  string `json:"call_id"`
+ 	Status  string `json:"status"`
+ 	Charged string `json:"charged,omitempty"`
++	Asset   string `json:"asset"`
+ }
+ 
+ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Receipt, error) {
+@@ -452,5 +483,9 @@ func (a *Adapter) Receipt(ctx context.Context, credential, task, id string) (Rec
+ 	if row.CallID != id || grant.Audience != "llmrouter" || grant.ID == "" || grant.ActorID != row.ActorID || grant.AccountID != row.AccountID || grant.OriginProductID != row.OriginProductID || grant.TaskID != task || row.TaskID != task || !grant.ExpiresAt.After(time.Now()) || !slices.Contains(grant.Models, row.Model) {
+ 		return Receipt{}, ErrInvalid
+ 	}
+-	return Receipt{row.CallID, row.Status, row.Charged}, nil
++	asset, _, err := normalizeFunding(row.Asset, row.FundingMode)
++	if err != nil {
++		return Receipt{}, ErrInvalid
++	}
++	return Receipt{CallID: row.CallID, Status: row.Status, Charged: row.Charged, Asset: asset}, nil
+ }
+diff --git a/internal/platformbilling/client.go b/internal/platformbilling/client.go
+index 6b16906d1..ad5398366 100644
+--- a/internal/platformbilling/client.go
++++ b/internal/platformbilling/client.go
+@@ -1,4 +1,4 @@
+-// Package platformbilling isolates platform model credits from local quota.
++// Package platformbilling isolates platform model funding from local quota.
+ package platformbilling
+ 
+ import (
+@@ -26,14 +26,17 @@ var (
+ )
+ 
+ type Claims struct {
+-	ID              string    `json:"id"`
+-	Audience        string    `json:"audience"`
+-	ActorID         string    `json:"actor_id"`
+-	AccountID       string    `json:"account_id"`
+-	OriginProductID string    `json:"origin_product_id"`
+-	Models          []string  `json:"models"`
+-	TaskID          string    `json:"task_id"`
+-	ExpiresAt       time.Time `json:"expires_at"`
++	ID                    string    `json:"id"`
++	Audience              string    `json:"audience"`
++	ActorID               string    `json:"actor_id"`
++	AccountID             string    `json:"account_id"`
++	OriginProductID       string    `json:"origin_product_id"`
++	Models                []string  `json:"models"`
++	TaskID                string    `json:"task_id"`
++	ExpiresAt             time.Time `json:"expires_at"`
++	Asset                 string    `json:"asset"`
++	FundingMode           string    `json:"funding_mode"`
++	BillingProfileVersion int       `json:"billing_profile_version"`
+ }
+ type Rational struct {
+ 	Numerator   string `json:"numerator"`
+@@ -42,6 +45,7 @@ type Rational struct {
+ type Rate struct {
+ 	ID         string   `json:"id"`
+ 	Model      string   `json:"model"`
++	Asset      string   `json:"asset"`
+ 	Status     string   `json:"status"`
+ 	Semantics  string   `json:"semantics"`
+ 	Input      Rational `json:"input"`
+@@ -58,14 +62,18 @@ type Usage struct {
+ 	Reasoning  string `json:"reasoning"`
+ }
+ type RemoteCall struct {
+-	ActorID         string `json:"actor_id"`
+-	AccountID       string `json:"account_id"`
+-	OriginProductID string `json:"origin_product_id"`
+-	RequestDigest   string `json:"request_digest"`
+-	Rate            Rate   `json:"rate"`
+-	CallID          string `json:"call_id"`
+-	Status          string `json:"status"`
+-	Charged         string `json:"charged,omitempty"`
++	ActorID               string `json:"actor_id"`
++	AccountID             string `json:"account_id"`
++	OriginProductID       string `json:"origin_product_id"`
++	RequestDigest         string `json:"request_digest"`
++	Rate                  Rate   `json:"rate"`
++	CallID                string `json:"call_id"`
++	Status                string `json:"status"`
++	Charged               string `json:"charged,omitempty"`
++	ChargeAsset           string `json:"charge_asset"`
++	FundingMode           string `json:"funding_mode"`
++	FundingProductID      string `json:"funding_product_id"`
++	BillingProfileVersion int    `json:"billing_profile_version"`
+ }
+ type Config struct {
+ 	Enabled                         bool
+@@ -74,6 +82,7 @@ type Config struct {
+ 	MaxBodyBytes                    int64
+ 	MaxInputTokens, MaxOutputTokens int
+ 	RateIDs                         map[string]string
++	AssetRateIDs                    map[string]map[string]string
+ 	Timeout                         time.Duration
+ }
+ type client struct {
+@@ -207,5 +216,50 @@ func HTTPStatus(err error) int {
+ }
+ 
+ func (remote RemoteCall) matches(row Call) bool {
+-	return remote.CallID == row.CallID && remote.ActorID == row.ActorID && remote.AccountID == row.AccountID && remote.OriginProductID == row.OriginProductID && remote.RequestDigest == row.Digest && remote.Rate.ID == row.RateID && remote.Rate.Model == row.Model
++	asset, mode, err := normalizeFunding(row.Asset, row.FundingMode)
++	if err != nil || row.BillingProfileVersion < 0 {
++		return false
++	}
++	remoteAsset, remoteMode, err := normalizeFunding(remote.ChargeAsset, remote.FundingMode)
++	if err != nil || remote.BillingProfileVersion != row.BillingProfileVersion {
++		return false
++	}
++	rateAsset, err := normalizeAsset(remote.Rate.Asset)
++	if err != nil || rateAsset != asset || remoteAsset != asset || remoteMode != mode {
++		return false
++	}
++	funder := remote.FundingProductID
++	if funder == "" && remoteAsset == "CREDIT/6" {
++		funder = "llmrouter"
++	}
++	localFunder := row.FundingProductID
++	if localFunder == "" && asset == "CREDIT/6" {
++		localFunder = "llmrouter"
++	}
++	return funder == "llmrouter" && funder == localFunder && remote.CallID == row.CallID && remote.ActorID == row.ActorID && remote.AccountID == row.AccountID && remote.OriginProductID == row.OriginProductID && remote.RequestDigest == row.Digest && remote.Rate.ID == row.RateID && remote.Rate.Model == row.Model
++}
++
++// Missing fields belong to the original CREDIT contract, never to cash funding.
++func normalizeAsset(asset string) (string, error) {
++	if asset == "" {
++		return "CREDIT/6", nil
++	}
++	if asset != "CREDIT/6" && asset != "CNY/6" {
++		return "", ErrInvalid
++	}
++	return asset, nil
++}
++
++func normalizeFunding(asset, mode string) (string, string, error) {
++	asset, err := normalizeAsset(asset)
++	if err != nil {
++		return "", "", err
++	}
++	if mode == "" {
++		mode = "credits"
++	}
++	if (asset == "CREDIT/6" && mode != "credits") || (asset == "CNY/6" && mode != "prepaid_cash") {
++		return "", "", ErrInvalid
++	}
++	return asset, mode, nil
+ }
+diff --git a/internal/platformbilling/config.go b/internal/platformbilling/config.go
+index 615d82b4c..d54c60659 100644
+--- a/internal/platformbilling/config.go
++++ b/internal/platformbilling/config.go
+@@ -37,5 +37,17 @@ func ConfigFromEnv(get func(string) string) (Config, error) {
+ 			return c, ErrInvalid
+ 		}
+ 	}
++	// Legacy model pins select CREDIT rates only. Explicit asset pins take
++	// precedence, for example {"CNY/6":{"model-name":"cash-rate-id"}}.
++	if raw := get("UNIHUB_MODEL_ASSET_RATE_IDS"); raw != "" {
++		if common.UnmarshalJsonStr(raw, &c.AssetRateIDs) != nil {
++			return c, ErrInvalid
++		}
++		for asset := range c.AssetRateIDs {
++			if asset != "CREDIT/6" && asset != "CNY/6" {
++				return c, ErrInvalid
++			}
++		}
++	}
+ 	return c, nil
+ }
+diff --git a/router/platform_live_fixture_test.go b/router/platform_live_fixture_test.go
+index fa11f3d24..88875fdc8 100644
+--- a/router/platform_live_fixture_test.go
++++ b/router/platform_live_fixture_test.go
+@@ -10,6 +10,7 @@ import (
+ 	"os"
+ 	"os/signal"
+ 	"path/filepath"
++	"sync/atomic"
+ 	"syscall"
+ 	"testing"
+ 	"time"
+@@ -43,7 +44,12 @@ func TestPlatformLocalLiveFixture(t *testing.T) {
+ 	gin.SetMode(gin.ReleaseMode)
+ 	require.NoError(t, i18n.Init())
+ 	constant.StreamingTimeout = 30
+-	db, e := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/gateway.db"), &gorm.Config{})
++	dbPath := os.Getenv("UNIHUB_PLATFORM_E2E_DATABASE")
++	if dbPath == "" {
++		dbPath = filepath.Join(t.TempDir(), "gateway.db")
++	}
++	require.True(t, filepath.IsAbs(dbPath))
++	db, e := gorm.Open(sqlite.Open("file:"+dbPath), &gorm.Config{})
+ 	require.NoError(t, e)
+ 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.UserSubscription{}, &model.ClientModelRoute{}, &model.ClientModelTarget{}))
+ 	model.DB = db
+@@ -51,7 +57,9 @@ func TestPlatformLocalLiveFixture(t *testing.T) {
+ 	common.MemoryCacheEnabled = true
+ 	common.RedisEnabled = false
+ 	common.RetryTimes = 1
++	var upstreamCalls atomic.Int64
+ 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		upstreamCalls.Add(1)
+ 		var body struct {
+ 			Stream bool `json:"stream"`
+ 		}
+@@ -68,16 +76,24 @@ func TestPlatformLocalLiveFixture(t *testing.T) {
+ 		_, _ = w.Write([]byte(`{"id":"synthetic","object":"chat.completion","model":"unihub-synthetic-model","choices":[{"index":0,"message":{"role":"assistant","content":"synthetic local provider"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":2},"completion_tokens_details":{"reasoning_tokens":1}}}`))
+ 	}))
+ 	defer upstream.Close()
+-	require.NoError(t, db.Create(&model.User{Id: 1, Username: "isolated-non-financial-principal", Status: common.UserStatusEnabled, Group: "platform", Quota: 0}).Error)
++	require.NoError(t, db.Save(&model.User{Id: 1, Username: "isolated-non-financial-principal", Status: common.UserStatusEnabled, Group: "platform", Quota: 0}).Error)
+ 	base := upstream.URL
+-	require.NoError(t, db.Create(&model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Key: "synthetic-not-a-provider-key", Status: common.ChannelStatusEnabled, Name: "isolated synthetic channel", BaseURL: &base, Models: "unihub-synthetic-model", Group: "platform"}).Error)
+-	require.NoError(t, db.Create(&model.Ability{Group: "platform", Model: "unihub-synthetic-model", ChannelId: 1, Enabled: true}).Error)
++	require.NoError(t, db.Save(&model.Channel{Id: 1, Type: constant.ChannelTypeOpenAI, Key: "synthetic-not-a-provider-key", Status: common.ChannelStatusEnabled, Name: "isolated synthetic channel", BaseURL: &base, Models: "unihub-synthetic-model", Group: "platform"}).Error)
++	require.NoError(t, db.Save(&model.Ability{Group: "platform", Model: "unihub-synthetic-model", ChannelId: 1, Enabled: true}).Error)
+ 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"unihub-synthetic-model":0}`))
+ 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"platform":1}`))
+ 	model.InitChannelCache()
+ 	service.InitHttpClient()
+ 	service.InitTokenEncoders()
+-	adapter, e := platformbilling.New(db, platformbilling.Config{Enabled: true, Origin: "http://localhost:8088", ServiceToken: token, PrincipalID: 1, Group: "platform", MaxBodyBytes: 32768, MaxInputTokens: 65536, MaxOutputTokens: 8192, RateIDs: map[string]string{"unihub-synthetic-model": "local-e2e-chat-v1"}})
++	origin := os.Getenv("UNIHUB_PLATFORM_E2E_ORIGIN")
++	if origin == "" {
++		origin = "http://localhost:8088"
++	}
++	config := platformbilling.Config{Enabled: true, Origin: origin, ServiceToken: token, PrincipalID: 1, Group: "platform", MaxBodyBytes: 32768, MaxInputTokens: 65536, MaxOutputTokens: 8192, RateIDs: map[string]string{"unihub-synthetic-model": "local-e2e-chat-v1"}}
++	if raw := os.Getenv("UNIHUB_PLATFORM_E2E_ASSET_RATES"); raw != "" {
++		require.NoError(t, common.UnmarshalJsonStr(raw, &config.AssetRateIDs))
++	}
++	adapter, e := platformbilling.New(db, config)
+ 	require.NoError(t, e)
+ 	engine := gin.New()
+ 	engine.Use(func(c *gin.Context) {
+@@ -106,16 +122,33 @@ func TestPlatformLocalLiveFixture(t *testing.T) {
+ 	})
+ 	engine.Use(gin.Recovery(), middlewareBodyCleanupForTest())
+ 	SetPlatformRouter(engine, adapter)
+-	listener, e := net.Listen("tcp", "127.0.0.1:3001")
++	// Only the explicit opt-in fixture exposes synthetic acceptance counters.
++	engine.GET("/__fixture/status", func(c *gin.Context) {
++		var user model.User
++		require.NoError(t, db.Select("quota", "used_quota").First(&user, 1).Error)
++		c.JSON(200, gin.H{"provider_calls": upstreamCalls.Load(), "quota": user.Quota, "used_quota": user.UsedQuota})
++	})
++	bind := os.Getenv("UNIHUB_PLATFORM_E2E_LISTEN")
++	if bind == "" {
++		bind = "127.0.0.1:3001"
++	}
++	listener, e := net.Listen("tcp", bind)
+ 	require.NoError(t, e)
++	require.True(t, listener.Addr().(*net.TCPAddr).IP.IsLoopback())
+ 	server := &http.Server{Handler: engine, ReadHeaderTimeout: 5 * time.Second}
+ 	defer server.Close()
+ 	go func() { _ = server.Serve(listener) }()
+ 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+ 	defer cancel()
+-	stop := adapter.Start(ctx)
+-	defer stop()
+-	t.Log("isolated synthetic gateway ready at http://127.0.0.1:3001; real UniHub at localhost:8088; auto-stop 15 minutes")
++	if os.Getenv("UNIHUB_PLATFORM_E2E_RECOVERY") != "false" {
++		stop := adapter.Start(ctx)
++		defer stop()
++	}
++	if ready := os.Getenv("UNIHUB_PLATFORM_E2E_READY"); ready != "" {
++		require.True(t, filepath.IsAbs(ready))
++		require.NoError(t, os.WriteFile(ready, []byte("http://"+listener.Addr().String()), 0600))
++	}
++	t.Log("isolated synthetic gateway ready; actual UniHub HTTP; auto-stop 15 minutes")
+ 	select {
+ 	case <-ctx.Done():
+ 	case <-time.After(15 * time.Minute):
+diff --git a/internal/platformbilling/funding_test.go b/internal/platformbilling/funding_test.go
+new file mode 100644
+index 000000000..9e789cb02
+--- /dev/null
++++ b/internal/platformbilling/funding_test.go
+@@ -0,0 +1,379 @@
++package platformbilling
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/QuantumNous/new-api/common"
++	"github.com/QuantumNous/new-api/dto"
++	"github.com/glebarez/sqlite"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"gorm.io/gorm"
++)
++
++type fundingHub struct {
++	mu                sync.Mutex
++	grant             map[string]any
++	rates             []map[string]any
++	reserved          map[string]map[string]string
++	reserveCount      int
++	settleCount       int
++	releaseCount      int
++	failReserve       bool
++	responseAsset     string
++	responseRateAsset string
++	responseMode      string
++	responseFunder    string
++	responseVersion   *int
++}
++
++func fundingFixture(t *testing.T, asset, mode string, version int) (*Adapter, *gorm.DB, *fundingHub) {
++	t.Helper()
++	hub := &fundingHub{grant: map[string]any{"id": "cred", "audience": "llmrouter", "actor_id": "actor", "account_id": "account", "origin_product_id": "product", "models": []string{"test"}, "task_id": "task", "expires_at": time.Now().Add(time.Hour), "asset": asset, "funding_mode": mode, "billing_profile_version": version}, reserved: make(map[string]map[string]string)}
++	for _, pair := range []struct{ id, asset string }{{"credit-rate", ""}, {"cash-rate", "CNY/6"}} {
++		hub.rates = append(hub.rates, map[string]any{"id": pair.id, "asset": pair.asset, "model": "test", "status": "published", "semantics": "exclusive_v1", "input": Rational{"1", "1"}, "output": Rational{"2", "1"}, "cache_read": Rational{"1", "1"}, "cache_write": Rational{"1", "1"}, "reasoning": Rational{"2", "1"}})
++	}
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		hub.mu.Lock()
++		defer hub.mu.Unlock()
++		assert.Equal(t, "Bearer service-service-service-service-token", r.Header.Get("Authorization"))
++		var v any
++		switch r.URL.Path {
++		case "/internal/v1/model-credentials/verify":
++			v = hub.grant
++		case "/internal/v1/rates":
++			v = hub.rates
++		default:
++			status, id := "RESERVED", ""
++			if r.URL.Path == "/internal/v1/calls/reserve" {
++				var request map[string]string
++				if err := common.DecodeJson(r.Body, &request); !assert.NoError(t, err) {
++					w.WriteHeader(400)
++					return
++				}
++				id = request["call_id"]
++				hub.reserved[id] = request
++				hub.reserveCount++
++				if hub.failReserve {
++					w.WriteHeader(503)
++					return
++				}
++			} else {
++				parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/internal/v1/calls/"), "/")
++				id = parts[0]
++				if len(parts) == 2 {
++					switch parts[1] {
++					case "settle":
++						hub.settleCount++
++						status = "SETTLED"
++					case "release":
++						hub.releaseCount++
++						status = "RELEASED"
++					}
++				}
++			}
++			request := hub.reserved[id]
++			asset, mode, funder := "CREDIT/6", "credits", "llmrouter"
++			if request["rate_id"] == "cash-rate" {
++				asset, mode = "CNY/6", "prepaid_cash"
++			}
++			rateAsset := asset
++			if hub.responseAsset != "" {
++				asset = hub.responseAsset
++			}
++			if hub.responseRateAsset != "" {
++				rateAsset = hub.responseRateAsset
++			}
++			if hub.responseMode != "" {
++				mode = hub.responseMode
++			}
++			if hub.responseFunder != "" {
++				funder = hub.responseFunder
++			}
++			remoteVersion := version
++			if hub.responseVersion != nil {
++				remoteVersion = *hub.responseVersion
++			}
++			v = map[string]any{"call_id": id, "status": status, "actor_id": "actor", "account_id": "account", "origin_product_id": "product", "request_digest": request["request_digest"], "rate": map[string]any{"id": request["rate_id"], "model": "test", "asset": rateAsset}, "charge_asset": asset, "funding_mode": mode, "funding_product_id": funder, "billing_profile_version": remoteVersion, "charged": "20"}
++		}
++		b, err := common.Marshal(v)
++		assert.NoError(t, err)
++		_, _ = w.Write(b)
++	}))
++	t.Cleanup(server.Close)
++	db, err := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/platform.db"), &gorm.Config{})
++	require.NoError(t, err)
++	a, err := New(db, Config{Enabled: true, Origin: server.URL, ServiceToken: "service-service-service-service-token", Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192})
++	require.NoError(t, err)
++	return a, db, hub
++}
++
++// Selecting by model alone would make dual-asset rates ambiguous or charge the wrong wallet.
++func TestAdmissionSelectsVerifiedFundingAsset(t *testing.T) {
++	for _, tc := range []struct {
++		name, asset, mode, rate string
++		version                 int
++	}{
++		{"legacy", "", "", "credit-rate", 0},
++		{"credits", "CREDIT/6", "credits", "credit-rate", 2},
++		{"cash", "CNY/6", "prepaid_cash", "cash-rate", 3},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			a, db, hub := fundingFixture(t, tc.asset, tc.mode, tc.version)
++			_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
++			require.NoError(t, err)
++			hub.mu.Lock()
++			assert.Equal(t, tc.rate, hub.reserved["call"]["rate_id"])
++			assert.Equal(t, "1100", hub.reserved["call"]["amount"])
++			hub.mu.Unlock()
++			var row map[string]any
++			require.NoError(t, db.Table("platform_model_calls").Take(&row).Error)
++			asset, mode := tc.asset, tc.mode
++			if asset == "" {
++				asset, mode = "CREDIT/6", "credits"
++			}
++			assert.Equal(t, asset, row["asset"])
++			assert.Equal(t, mode, row["funding_mode"])
++			assert.Equal(t, "llmrouter", row["funding_product_id"])
++			assert.EqualValues(t, tc.version, row["billing_profile_version"])
++		})
++	}
++}
++
++func TestAdmissionRejectsMalformedVerifiedFunding(t *testing.T) {
++	for _, tc := range []struct {
++		asset, mode string
++		version     int
++	}{{"USD/6", "credits", 0}, {"CNY/6", "credits", 0}, {"CREDIT/6", "prepaid_cash", 0}, {"", "prepaid_cash", 0}, {"CREDIT/6", "other", 0}, {"CREDIT/6", "credits", -1}} {
++		t.Run(tc.asset+"-"+tc.mode, func(t *testing.T) {
++			a, _, hub := fundingFixture(t, tc.asset, tc.mode, tc.version)
++			hub.mu.Lock()
++			hub.rates = hub.rates[:1]
++			hub.mu.Unlock()
++			_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
++			assert.ErrorIs(t, err, ErrInvalid)
++			hub.mu.Lock()
++			assert.Zero(t, hub.reserveCount)
++			hub.mu.Unlock()
++		})
++	}
++}
++
++func TestLegacyRatePinOnlyAppliesToCredits(t *testing.T) {
++	a, _, _ := fundingFixture(t, "CNY/6", "prepaid_cash", 1)
++	a.config.RateIDs = map[string]string{"test": "credit-rate"}
++	_, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
++	require.NoError(t, err)
++}
++
++func TestAssetRatePinDisambiguatesOnlyItsFundingAsset(t *testing.T) {
++	a, _, hub := fundingFixture(t, "CNY/6", "prepaid_cash", 1)
++	hub.mu.Lock()
++	other := make(map[string]any)
++	for key, value := range hub.rates[1] {
++		other[key] = value
++	}
++	other["id"] = "other-cash-rate"
++	hub.rates = append(hub.rates, other)
++	hub.mu.Unlock()
++	env := map[string]string{"UNIHUB_PLATFORM_ENABLED": "true", "UNIHUB_ROUTING_PRINCIPAL_ID": "1", "UNIHUB_MAX_INPUT_TOKENS": "1000", "UNIHUB_MAX_OUTPUT_TOKENS": "100", "UNIHUB_MAX_BODY_BYTES": "8192", "UNIHUB_MODEL_RATE_IDS": `{"test":"credit-rate"}`, "UNIHUB_MODEL_ASSET_RATE_IDS": `{"CNY/6":{"test":"cash-rate"}}`}
++	c, err := ConfigFromEnv(func(key string) string { return env[key] })
++	require.NoError(t, err)
++	c.Origin, c.ServiceToken, c.Group = a.config.Origin, a.config.ServiceToken, a.config.Group
++	a.config = c
++	_, err = a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
++	require.NoError(t, err)
++	hub.mu.Lock()
++	assert.Equal(t, "cash-rate", hub.reserved["call"]["rate_id"])
++	hub.mu.Unlock()
++}
++
++// A version-0 CREDIT digest is part of the deployed idempotency contract.
++func TestLegacyCallDigestAndOldRowsRemainCompatible(t *testing.T) {
++	fail := false
++	a, db := fixture(t, &fail)
++	ctx := context.Background()
++	body := []byte(`{"model":"test","max_tokens":50}`)
++	_, err := a.Admit(ctx, "uh_model_token", "task", "call", body)
++	require.NoError(t, err)
++	var row Call
++	require.NoError(t, db.First(&row).Error)
++	sum := sha256.Sum256(append([]byte("task\x00"), body...))
++	assert.Equal(t, hex.EncodeToString(sum[:]), row.Digest)
++	require.NoError(t, db.Model(&Call{}).Where("call_id = ?", "call").Updates(map[string]any{"asset": "", "funding_mode": "", "funding_product_id": "", "updated_at": time.Now().Add(-2 * time.Minute)}).Error)
++	_, err = a.Admit(ctx, "uh_model_token", "task", "call", body)
++	assert.ErrorIs(t, err, ErrDuplicate)
++	require.NoError(t, a.Recover(ctx))
++	require.NoError(t, db.First(&row).Error)
++	assert.Equal(t, "RELEASED", row.Status)
++	receipt, err := a.Receipt(ctx, "uh_model_reissued", "task", "call")
++	require.NoError(t, err)
++	data, err := common.Marshal(receipt)
++	require.NoError(t, err)
++	var got map[string]any
++	require.NoError(t, common.Unmarshal(data, &got))
++	assert.Equal(t, "CREDIT/6", got["asset"])
++}
++
++func TestRequestDigestBindsAssetAndProfileSnapshot(t *testing.T) {
++	seen := make(map[string]bool)
++	for _, tc := range []struct {
++		asset, mode string
++		version     int
++	}{{"", "", 0}, {"CNY/6", "prepaid_cash", 1}, {"CNY/6", "prepaid_cash", 2}, {"CREDIT/6", "credits", 1}} {
++		a, _, _ := fundingFixture(t, tc.asset, tc.mode, tc.version)
++		s, err := a.Admit(context.Background(), "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
++		require.NoError(t, err)
++		assert.False(t, seen[s.call.Digest], "funding snapshots must have different idempotency digests")
++		seen[s.call.Digest] = true
++	}
++}
++
++func TestMigrationPreservesLegacyInFlightFunding(t *testing.T) {
++	db, err := gorm.Open(sqlite.Open("file:"+t.TempDir()+"/legacy.db"), &gorm.Config{})
++	require.NoError(t, err)
++	// This is the pre-funding schema, with an existing durable unsettled call.
++	type legacyCall struct {
++		CallID string `gorm:"primaryKey;size:128"`
++		Status string `gorm:"size:32;index"`
++		Intent string `gorm:"type:text"`
++	}
++	require.NoError(t, db.Table("platform_model_calls").AutoMigrate(&legacyCall{}))
++	require.NoError(t, db.Table("platform_model_calls").Create(&legacyCall{CallID: "inflight", Status: "SETTLE_PENDING", Intent: `{"usage":{"input":"1","output":"0","cache_read":"0","cache_write":"0","reasoning":"0"},"provider_cost":""}`}).Error)
++	_, err = New(db, Config{Enabled: true, Origin: "http://localhost:8088", ServiceToken: "service-service-service-service-token", Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192})
++	require.NoError(t, err)
++	var row Call
++	require.NoError(t, db.First(&row).Error)
++	assert.Equal(t, "CREDIT/6", row.Asset)
++	assert.Equal(t, "credits", row.FundingMode)
++	assert.Equal(t, "llmrouter", row.FundingProductID)
++	assert.Zero(t, row.BillingProfileVersion)
++	assert.Equal(t, "SETTLE_PENDING", row.Status)
++	assert.Contains(t, row.Intent, `"input":"1"`)
++}
++
++func TestCashLostReserveResponseReleasesWithoutRedispatch(t *testing.T) {
++	a, db, hub := fundingFixture(t, "CNY/6", "prepaid_cash", 1)
++	hub.mu.Lock()
++	hub.failReserve = true
++	hub.mu.Unlock()
++	ctx := context.Background()
++	body := []byte(`{"model":"test","max_tokens":50}`)
++	_, err := a.Admit(ctx, "uh_model_token", "task", "call", body)
++	require.Error(t, err)
++	_, err = a.Admit(ctx, "uh_model_token", "task", "call", body)
++	assert.ErrorIs(t, err, ErrDuplicate)
++	require.NoError(t, a.Recover(ctx))
++	require.NoError(t, a.Recover(ctx))
++	var row Call
++	require.NoError(t, db.First(&row).Error)
++	assert.Equal(t, "RELEASED", row.Status)
++	var attempts int64
++	require.NoError(t, db.Model(&Attempt{}).Count(&attempts).Error)
++	assert.Zero(t, attempts)
++	hub.mu.Lock()
++	assert.Equal(t, 1, hub.reserveCount)
++	assert.Equal(t, 1, hub.releaseCount)
++	hub.mu.Unlock()
++}
++
++func TestFundingSnapshotPreventsCallIDReinterpretation(t *testing.T) {
++	a, _, hub := fundingFixture(t, "CNY/6", "prepaid_cash", 1)
++	ctx := context.Background()
++	body := []byte(`{"model":"test","max_tokens":50}`)
++	_, err := a.Admit(ctx, "uh_model_token", "task", "call", body)
++	require.NoError(t, err)
++	hub.mu.Lock()
++	hub.grant["asset"], hub.grant["funding_mode"] = "CREDIT/6", "credits"
++	hub.mu.Unlock()
++	_, err = a.Admit(ctx, "uh_model_token", "task", "call", body)
++	assert.ErrorIs(t, err, ErrConflict)
++	hub.mu.Lock()
++	assert.Equal(t, 1, hub.reserveCount)
++	hub.mu.Unlock()
++}
++
++// Wrong-asset reserve responses must not authorize dispatch or recovery refunds.
++func TestCashReservationRecoveryRejectsChangedFunding(t *testing.T) {
++	for _, changed := range []string{"asset", "rate_asset", "mode", "funder", "profile_version"} {
++		t.Run(changed, func(t *testing.T) {
++			a, db, hub := fundingFixture(t, "CNY/6", "prepaid_cash", 1)
++			hub.mu.Lock()
++			switch changed {
++			case "asset":
++				hub.responseAsset = "CREDIT/6"
++			case "rate_asset":
++				hub.responseRateAsset = "CREDIT/6"
++			case "mode":
++				hub.responseMode = "credits"
++			case "funder":
++				hub.responseFunder = "product"
++			case "profile_version":
++				otherVersion := 2
++				hub.responseVersion = &otherVersion
++			}
++			hub.mu.Unlock()
++			ctx := context.Background()
++			_, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
++			assert.ErrorIs(t, err, ErrPending)
++			require.NoError(t, a.Recover(ctx))
++			var row Call
++			require.NoError(t, db.First(&row).Error)
++			assert.Equal(t, "RESERVE_UNKNOWN", row.Status)
++			hub.mu.Lock()
++			assert.Zero(t, hub.releaseCount)
++			hub.responseAsset, hub.responseRateAsset, hub.responseMode, hub.responseFunder = "", "", "", ""
++			hub.responseVersion = nil
++			hub.mu.Unlock()
++			require.NoError(t, a.Recover(ctx))
++			require.NoError(t, db.First(&row).Error)
++			assert.Equal(t, "RELEASED", row.Status)
++			hub.mu.Lock()
++			assert.Equal(t, 1, hub.reserveCount)
++			assert.Equal(t, 1, hub.releaseCount)
++			hub.mu.Unlock()
++		})
++	}
++}
++
++func TestCashSettlementReceiptKeepsOriginalAssetAfterProfileChange(t *testing.T) {
++	a, db, hub := fundingFixture(t, "CNY/6", "prepaid_cash", 3)
++	ctx := context.Background()
++	s, err := a.Admit(ctx, "uh_model_token", "task", "call", []byte(`{"model":"test","max_tokens":50}`))
++	require.NoError(t, err)
++	require.NoError(t, s.Dispatch(ctx, 1))
++	s.observe(&dto.Usage{PromptTokens: 10, CompletionTokens: 5})
++	hub.mu.Lock()
++	hub.responseAsset = "CREDIT/6"
++	hub.mu.Unlock()
++	require.NoError(t, s.Finish(ctx))
++	var row Call
++	require.NoError(t, db.First(&row).Error)
++	assert.Equal(t, "SETTLE_PENDING", row.Status)
++	hub.mu.Lock()
++	hub.responseAsset = ""
++	hub.grant["asset"], hub.grant["funding_mode"], hub.grant["billing_profile_version"] = "CREDIT/6", "credits", 4
++	hub.mu.Unlock()
++	require.NoError(t, a.Recover(ctx))
++	receipt, err := a.Receipt(ctx, "uh_model_reissued", "task", "call")
++	require.NoError(t, err)
++	data, err := common.Marshal(receipt)
++	require.NoError(t, err)
++	var got map[string]any
++	require.NoError(t, common.Unmarshal(data, &got))
++	assert.Equal(t, "CNY/6", got["asset"])
++	assert.Equal(t, "SETTLED", got["status"])
++	assert.Equal(t, "20", got["charged"])
++	hub.mu.Lock()
++	assert.Equal(t, 1, hub.reserveCount)
++	assert.Equal(t, 2, hub.settleCount)
++	hub.mu.Unlock()
++}
+diff --git a/internal/platformbilling/migration_live_test.go b/internal/platformbilling/migration_live_test.go
+new file mode 100644
+index 000000000..9267ea46d
+--- /dev/null
++++ b/internal/platformbilling/migration_live_test.go
+@@ -0,0 +1,86 @@
++package platformbilling
++
++import (
++	"os"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"gorm.io/driver/mysql"
++	"gorm.io/driver/postgres"
++	"gorm.io/gorm"
++	"gorm.io/gorm/logger"
++)
++
++// Opt-in and destructive only to explicitly supplied disposable databases.
++// This verifies the real pre-funding GORM schema upgrade on supported engines.
++func TestFundingMigrationRealDatabases(t *testing.T) {
++	for _, dialect := range []string{"mysql", "postgres"} {
++		t.Run(dialect, func(t *testing.T) {
++			if os.Getenv("UNIHUB_GATEWAY_MIGRATION_DISPOSABLE") != "1" {
++				t.Skip("explicit disposable-database opt-in required")
++			}
++			dsn := os.Getenv("UNIHUB_GATEWAY_MIGRATION_" + map[string]string{"mysql": "MYSQL_DSN", "postgres": "POSTGRES_DSN"}[dialect])
++			if dsn == "" {
++				t.Skip("disposable database not configured")
++			}
++			var driver gorm.Dialector
++			if dialect == "mysql" {
++				driver = mysql.Open(dsn)
++			} else {
++				driver = postgres.Open(dsn)
++			}
++			db, err := gorm.Open(driver, &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
++			require.True(t, err == nil, "disposable database connection failed")
++			sqlDB, err := db.DB()
++			require.NoError(t, err)
++			t.Cleanup(func() { _ = sqlDB.Close() })
++			// Every field in the schema deployed before asset-aware billing.
++			type legacyCall struct {
++				CallID          string `gorm:"primaryKey;size:128"`
++				ActorID         string `gorm:"size:128"`
++				AccountID       string `gorm:"size:128"`
++				OriginProductID string `gorm:"size:128"`
++				CredentialID    string `gorm:"size:128"`
++				TaskID          string `gorm:"size:128"`
++				Model           string `gorm:"size:255"`
++				Digest          string `gorm:"size:64"`
++				RateID          string `gorm:"size:128"`
++				Amount          string `gorm:"size:32"`
++				Status          string `gorm:"size:32;index"`
++				Intent          string `gorm:"type:text"`
++				Charged         string `gorm:"size:32"`
++				CreatedAt       time.Time
++				UpdatedAt       time.Time
++			}
++			require.NoError(t, db.Migrator().DropTable(&Attempt{}, &Call{}))
++			require.NoError(t, db.Table("platform_model_calls").AutoMigrate(&legacyCall{}))
++			intent := `{"usage":{"input":"8","output":"4","cache_read":"2","cache_write":"0","reasoning":"1"},"provider_cost":""}`
++			for _, state := range []string{"SETTLE_PENDING", "UNKNOWN", "RESERVED"} {
++				row := legacyCall{CallID: state, ActorID: "actor", AccountID: "fixed-payer", OriginProductID: "superwagie", CredentialID: "credential", TaskID: "task", Model: "model", Digest: "unchanged-digest", RateID: "legacy-rate", Amount: "100", Status: state, Intent: intent, Charged: "0", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
++				require.NoError(t, db.Table("platform_model_calls").Create(&row).Error)
++			}
++			config := Config{Enabled: true, Origin: "http://localhost:8088", ServiceToken: "test-only-service-token-over-32-characters", Group: "platform", MaxInputTokens: 1000, MaxOutputTokens: 100, MaxBodyBytes: 8192}
++			for range 2 {
++				_, err = New(db, config)
++				require.NoError(t, err)
++				var calls []Call
++				require.NoError(t, db.Order("call_id").Find(&calls).Error)
++				require.Len(t, calls, 3)
++				for _, row := range calls {
++					assert.Equal(t, row.CallID, row.Status)
++					assert.Equal(t, "CREDIT/6", row.Asset)
++					assert.Equal(t, "credits", row.FundingMode)
++					assert.Equal(t, "llmrouter", row.FundingProductID)
++					assert.Zero(t, row.BillingProfileVersion)
++					assert.Equal(t, "fixed-payer", row.AccountID)
++					assert.Equal(t, "unchanged-digest", row.Digest)
++					assert.Equal(t, "legacy-rate", row.RateID)
++					assert.JSONEq(t, intent, row.Intent)
++				}
++			}
++			t.Log("pre-funding durable calls migrated twice with funding defaults; payer, digest, rate, terminal intent and state preserved")
++		})
++	}
++}

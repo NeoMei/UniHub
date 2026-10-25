@@ -25,25 +25,40 @@ type Eligibility interface {
 	Subscriptions(context.Context, string, string) ([]billing.Subscription, error)
 	Rates(context.Context) ([]billing.Rate, error)
 }
+
+// BillingUsageEligibility supplies current composable usage policy. Older
+// test/adaptor implementations remain restricted to legacy member credits.
+type BillingUsageEligibility interface {
+	AuthorizeUsage(context.Context, string, string, string, string) (billing.UsageAuthorization, error)
+}
+
+type BillingUsageEligibilityOn interface {
+	BillingUsageEligibility
+	AuthorizeUsageOn(context.Context, accounts.Querier, string, string, string, string) (billing.UsageAuthorization, error)
+}
 type Service struct {
 	pool        *pgxpool.Pool
 	accounts    *accounts.Store
 	eligibility Eligibility
 }
 type Request struct {
+	FundingMode     string   `json:"funding_mode,omitempty"`
 	OriginProductID string   `json:"origin_product_id"`
 	Models          []string `json:"models"`
 	TaskID          string   `json:"task_id"`
 }
 type Claims struct {
-	ID              string    `json:"id"`
-	Audience        string    `json:"audience"`
-	ActorID         string    `json:"actor_id"`
-	AccountID       string    `json:"account_id"`
-	OriginProductID string    `json:"origin_product_id"`
-	Models          []string  `json:"models"`
-	TaskID          string    `json:"task_id"`
-	ExpiresAt       time.Time `json:"expires_at"`
+	FundingMode           string    `json:"funding_mode"`
+	Asset                 string    `json:"asset"`
+	BillingProfileVersion int64     `json:"billing_profile_version"`
+	ID                    string    `json:"id"`
+	Audience              string    `json:"audience"`
+	ActorID               string    `json:"actor_id"`
+	AccountID             string    `json:"account_id"`
+	OriginProductID       string    `json:"origin_product_id"`
+	Models                []string  `json:"models"`
+	TaskID                string    `json:"task_id"`
+	ExpiresAt             time.Time `json:"expires_at"`
 }
 type Grant struct {
 	Claims
@@ -74,11 +89,29 @@ func (s *Service) eligible(ctx context.Context, actor, account, product string) 
 	}
 	return time.Time{}, accounts.ErrForbidden
 }
+func (s *Service) authorize(ctx context.Context, actor, account, product, mode string) (billing.UsageAuthorization, error) {
+	if policy, ok := s.eligibility.(BillingUsageEligibility); ok {
+		auth, e := policy.AuthorizeUsage(ctx, actor, account, product, mode)
+		if e != nil {
+			return auth, e
+		}
+		if (mode != "" && auth.FundingMode != mode) || auth.ProfileVersion < 0 || (auth.FundingMode != billing.FundingCredits && auth.FundingMode != billing.FundingPrepaidCash) || (auth.FundingMode == billing.FundingCredits && auth.Asset != billing.CreditAsset) || (auth.FundingMode == billing.FundingPrepaidCash && auth.Asset != billing.CashAsset) {
+			return billing.UsageAuthorization{}, accounts.ErrForbidden
+		}
+		return auth, nil
+	}
+	if mode != "" && mode != billing.FundingCredits {
+		return billing.UsageAuthorization{}, accounts.ErrForbidden
+	}
+	until, e := s.eligible(ctx, actor, account, product)
+	return billing.UsageAuthorization{FundingMode: billing.FundingCredits, Asset: billing.CreditAsset, ExpiresAt: until}, e
+}
+
 func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (Grant, error) {
 	if r.OriginProductID == "" || len(r.Models) == 0 || len(r.Models) > 32 || strings.TrimSpace(r.TaskID) == "" || len(r.TaskID) > 128 {
 		return Grant{}, billing.ErrInvalid
 	}
-	until, e := s.eligible(ctx, actor, account, r.OriginProductID)
+	auth, e := s.authorize(ctx, actor, account, r.OriginProductID, r.FundingMode)
 	if e != nil {
 		return Grant{}, e
 	}
@@ -88,7 +121,11 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 	}
 	allowed := map[string]bool{}
 	for _, v := range rates {
-		if v.Status == "published" {
+		asset := v.Asset
+		if asset == "" {
+			asset = billing.CreditAsset
+		}
+		if v.Status == "published" && asset == auth.Asset {
 			allowed[v.Model] = true
 		}
 	}
@@ -109,10 +146,10 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 		return Grant{}, e
 	}
 	expiry := time.Now().UTC().Add(10 * time.Minute)
-	if until.Before(expiry) {
-		expiry = until
+	if !auth.ExpiresAt.IsZero() && auth.ExpiresAt.Before(expiry) {
+		expiry = auth.ExpiresAt
 	}
-	grant := Grant{Claims: Claims{ID: id, Audience: "llmrouter", ActorID: actor, AccountID: account, OriginProductID: r.OriginProductID, Models: models, TaskID: r.TaskID, ExpiresAt: expiry}, Token: token}
+	grant := Grant{Claims: Claims{ID: id, Audience: "llmrouter", ActorID: actor, AccountID: account, OriginProductID: r.OriginProductID, Models: models, TaskID: r.TaskID, ExpiresAt: expiry, FundingMode: auth.FundingMode, Asset: auth.Asset, BillingProfileVersion: auth.ProfileVersion}, Token: token}
 	data, _ := json.Marshal(models)
 	tx, e := s.pool.Begin(ctx)
 	if e != nil {
@@ -125,7 +162,22 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 	if _, e = s.accounts.RoleOn(ctx, tx, actor, account); e != nil {
 		return Grant{}, e
 	}
-	if _, e = tx.Exec(ctx, `INSERT INTO model_credentials(id,token_hash,actor_id,account_id,origin_product_id,models,task_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, digest(token), actor, account, r.OriginProductID, data, r.TaskID, expiry); e != nil {
+	// Recheck current policy inside the membership mutation lock before saving.
+	current := auth
+	if policy, ok := s.eligibility.(BillingUsageEligibilityOn); ok {
+		current, e = policy.AuthorizeUsageOn(ctx, tx, actor, account, r.OriginProductID, auth.FundingMode)
+		if e != nil {
+			return Grant{}, e
+		}
+	}
+	if current.Asset != auth.Asset || current.FundingMode != auth.FundingMode || current.ProfileVersion < 0 {
+		return Grant{}, accounts.ErrForbidden
+	}
+	grant.BillingProfileVersion = current.ProfileVersion
+	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(grant.ExpiresAt) {
+		grant.ExpiresAt = current.ExpiresAt
+	}
+	if _, e = tx.Exec(ctx, `INSERT INTO model_credentials(id,token_hash,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, digest(token), actor, account, r.OriginProductID, data, r.TaskID, grant.ExpiresAt, grant.FundingMode, grant.Asset, grant.BillingProfileVersion); e != nil {
 		return Grant{}, e
 	}
 	if _, e = tx.Exec(ctx, `INSERT INTO audit_events(account_id,actor_id,operation_id,action) VALUES($1,$2,$3,'model_credential.issued')`, account, actor, id); e != nil {
@@ -142,7 +194,7 @@ func (s *Service) Verify(ctx context.Context, token, model string) (Claims, erro
 	}
 	var c Claims
 	var data []byte
-	e := s.pool.QueryRow(ctx, `SELECT id,actor_id,account_id,origin_product_id,models,task_id,expires_at FROM model_credentials WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&c.ID, &c.ActorID, &c.AccountID, &c.OriginProductID, &data, &c.TaskID, &c.ExpiresAt)
+	e := s.pool.QueryRow(ctx, `SELECT id,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version FROM model_credentials WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&c.ID, &c.ActorID, &c.AccountID, &c.OriginProductID, &data, &c.TaskID, &c.ExpiresAt, &c.FundingMode, &c.Asset, &c.BillingProfileVersion)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return c, ErrCredential
 	}
@@ -155,7 +207,8 @@ func (s *Service) Verify(ctx context.Context, token, model string) (Claims, erro
 	if model != "" && !slices.Contains(c.Models, model) {
 		return Claims{}, ErrCredential
 	}
-	if _, e = s.eligible(ctx, c.ActorID, c.AccountID, c.OriginProductID); e != nil {
+	auth, e := s.authorize(ctx, c.ActorID, c.AccountID, c.OriginProductID, c.FundingMode)
+	if e != nil || auth.Asset != c.Asset {
 		return Claims{}, ErrCredential
 	}
 	c.Audience = "llmrouter"

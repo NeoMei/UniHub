@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"unihub/internal/billing"
 	"unihub/internal/products"
 )
 
@@ -34,4 +35,12 @@ func ensureConfiguredProducts(ctx context.Context, pool *pgxpool.Pool, clients m
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func ensureConfiguredBillingProducts(ctx context.Context, pool *pgxpool.Pool, profiles []billing.BillingProfile) error {
+	configured := map[string]products.Client{}
+	for _, profile := range profiles {
+		configured[profile.ProductID] = products.Client{ProductID: profile.ProductID}
+	}
+	return ensureConfiguredProducts(ctx, pool, configured)
 }

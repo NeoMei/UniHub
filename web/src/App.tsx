@@ -322,6 +322,9 @@ function AccountConsole({
   const refresh = () => setVersion((v) => v + 1);
   const productName = (id: string) =>
     products.data?.find((p) => p.id === id)?.name || id;
+  const prepaidProducts = (products.data || []).filter((p) =>
+    p.billing_profile?.usage.funding_modes.includes("prepaid_cash"),
+  );
   const act = (spec: ActionSpec) => {
     setActionError("");
     setAction({ ...spec, key: idempotencyKey() });
@@ -380,7 +383,7 @@ function AccountConsole({
   const title = navigation.find((n) => n.id === page)!.label;
   const descriptions: Record<Page, string> = {
     overview: "查看当前账户的会员、额度与资金。",
-    memberships: "管理产品会员，查看已付期限与每月包含额度。",
+    memberships: "管理产品会员，查看已付期限与方案权益。",
     credits: "模型额度仅用于模型服务，不是可退款现金。",
     addons: "按需补充模型额度，独立有效期以商品规则为准。",
     wallets: "统一钱包与产品钱包分开记账，资金始终归属当前账户。",
@@ -396,8 +399,10 @@ function AccountConsole({
           <td>
             <strong>{s.offer.name}</strong>
             <small>
-              {s.offer.period === "year" ? "年付" : "月付"} · 每月{" "}
-              {fixed(s.offer.monthly_credit, 6)} 额度
+              {s.offer.period === "year" ? "年付" : "月付"} ·{" "}
+              {s.offer.monthly_credit === "0"
+                ? "纯功能订阅，不含模型额度"
+                : `每月 ${fixed(s.offer.monthly_credit, 6)} 额度`}
             </small>
           </td>
           <td>{date(s.paid_through)}</td>
@@ -427,6 +432,14 @@ function AccountConsole({
           刷新
         </button>
       </div>
+      {(page === "overview" || page === "credits") &&
+        prepaidProducts.length > 0 && (
+          <Notice>
+            {prepaidProducts.map((p) => p.name).join("、")} 已启用现金按量服务。
+            使用入口由各产品自己的界面提供，UniHub 是可选的账户管理入口。
+            现金模型用量从当前付费账户的 llmrouter 产品钱包扣款，额度不足不会自动转为现金扣款。
+          </Notice>
+        )}
       {message && (
         <Notice>
           {message}

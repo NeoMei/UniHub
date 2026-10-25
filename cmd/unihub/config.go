@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"unihub/internal/billing"
 	"unihub/internal/products"
 )
 
@@ -18,6 +19,7 @@ type config struct {
 	OperatorIDs                                                   []string
 	ProductClients                                                map[string]string
 	ProductAccess                                                 map[string]products.Client
+	BillingProfiles                                               []billing.BillingProfile
 	IdentityKey                                                   []byte
 	IdentityManagementClientID, IdentityManagementSecret          string
 	IdentityAuditVerified                                         bool
@@ -64,6 +66,26 @@ func readConfig(get func(string) string) (config, error) {
 			}
 			c.ProductClients[product] = audience
 			usedAudiences[audience] = true
+		}
+	}
+	if file := get("PRODUCT_BILLING_FILE"); file != "" {
+		f, err := os.Open(file)
+		if err != nil {
+			return c, fmt.Errorf("billing profile configuration is unavailable")
+		}
+		info, statErr := f.Stat()
+		if statErr != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			f.Close()
+			return c, fmt.Errorf("billing profiles require a bounded regular file")
+		}
+		raw, readErr := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+		f.Close()
+		if readErr != nil {
+			return c, fmt.Errorf("billing profile configuration is unavailable")
+		}
+		c.BillingProfiles, err = billing.ParseBillingProfiles(raw)
+		if err != nil {
+			return c, fmt.Errorf("invalid billing profile configuration")
 		}
 	}
 	c.ProductAccess = map[string]products.Client{}

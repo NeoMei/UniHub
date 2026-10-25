@@ -57,7 +57,7 @@ def backup(root, destination):
             source = root / relative
             no_symlink(source)
             archive.add(source, arcname=relative, recursive=True)
-        for relative in ['shared/identity-image.json','shared/headless-audit.json','headless-config']:
+        for relative in ['shared/identity-image.json','shared/headless-audit.json','headless-config','billing-config']:
             source=root/relative
             if source.exists():
                 no_symlink(source)

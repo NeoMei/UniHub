@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"net/http"
-	"unihub/internal/accounts"
 	"unihub/internal/billing"
 )
 
@@ -10,16 +9,11 @@ func (s *api) authorizeOffer(r *http.Request, id string) error {
 	if originProduct(r) == "" {
 		return nil
 	}
-	offers, e := s.options.Billing.Catalog(r.Context())
+	product, e := s.options.Billing.OfferProduct(r.Context(), id)
 	if e != nil {
 		return e
 	}
-	for _, o := range offers {
-		if o.ID == id {
-			return requireBillingProduct(r, o.ProductID)
-		}
-	}
-	return accounts.ErrNotFound
+	return requireBillingProduct(r, product)
 }
 
 // Credits are one account-wide llmrouter pool. Return each real source batch's

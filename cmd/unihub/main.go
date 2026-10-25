@@ -70,6 +70,15 @@ func run() error {
 	b.ConfigureOperators(c.OperatorIDs)
 	b.ConfigureTrustedServices([]string{"llmrouter"})
 	b.ConfigureSandbox(c.Sandbox && !c.Production)
+	if e = ensureConfiguredProducts(startup, pool, c.ProductAccess); e != nil {
+		return e
+	}
+	if e = ensureConfiguredBillingProducts(startup, pool, c.BillingProfiles); e != nil {
+		return e
+	}
+	if e = b.ApplyConfiguredProfiles(startup, c.BillingProfiles); e != nil {
+		return errors.New("billing profile deployment conflicts with published configuration")
+	}
 	if c.SandboxCatalog {
 		if _, e = b.SeedSandbox(startup); e != nil {
 			return e
@@ -96,9 +105,6 @@ func run() error {
 		if e != nil {
 			return e
 		}
-	}
-	if e = ensureConfiguredProducts(startup, pool, c.ProductAccess); e != nil {
-		return e
 	}
 	var operatorVerifier auth.Verifier
 	if c.OperatorAudience != "" {

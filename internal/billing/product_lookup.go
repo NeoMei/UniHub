@@ -1,6 +1,11 @@
 package billing
 
-import "context"
+import (
+	"context"
+	"errors"
+	"github.com/jackc/pgx/v5"
+	"unihub/internal/accounts"
+)
 
 // GetQuote/GetOrder/GetSubscription provide read-only authorization checks before
 // an HTTP product client invokes a command that may resume existing ledger work.
@@ -29,4 +34,16 @@ func (s *Service) ProductOrders(ctx context.Context, actor, account string, prod
 		return nil, e
 	}
 	return list[Order](ctx, s.pool, `SELECT snapshot FROM billing_orders WHERE account_id=$1 AND snapshot->>'product_id'=ANY($2) ORDER BY (snapshot->>'created_at')::timestamptz DESC,id LIMIT 200`, account, products)
+}
+
+// OfferProduct reads immutable offer ownership without the current sale filter.
+// This permits an authorized same-key purchase replay after policy changes;
+// Purchase independently gates every genuinely new commercial commitment.
+func (s *Service) OfferProduct(ctx context.Context, id string) (string, error) {
+	var product string
+	e := s.pool.QueryRow(ctx, `SELECT product_id FROM billing_offers WHERE id=$1 AND status='published'`, id).Scan(&product)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return "", accounts.ErrNotFound
+	}
+	return product, e
 }

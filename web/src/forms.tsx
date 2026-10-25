@@ -116,20 +116,33 @@ export function Catalog({
           <dl>
             <Detail label="目标方案">{value.offer.name}</Detail>
             <Detail label="本次补差">¥ {fixed(value.amount)}</Detail>
-            <Detail label="立即增加额度">{fixed(value.grant_amount, 6)}</Detail>
-            <Detail label="后续每月额度">
-              {fixed(value.offer.monthly_credit, 6)}
-            </Detail>
+            {value.offer.monthly_credit === "0" ? (
+              <>
+                <Detail label="订阅权益">纯功能订阅，不含模型额度</Detail>
+                <Detail label="退款规则">需人工核实权益使用情况</Detail>
+              </>
+            ) : (
+              <>
+                <Detail label="立即增加额度">{fixed(value.grant_amount, 6)}</Detail>
+                <Detail label="后续每月额度">
+                  {fixed(value.offer.monthly_credit, 6)}
+                </Detail>
+              </>
+            )}
             <Detail label="当前已付期限">
               {date(subscription.paid_through)}
             </Detail>
-            <Detail label="当前额度账期">{date(value.period_start)} 起</Detail>
+            {value.offer.monthly_credit !== "0" && (
+              <Detail label="当前额度账期">{date(value.period_start)} 起</Detail>
+            )}
             <Detail label="报价截止">
               {new Date(value.expires_at).toLocaleString("zh-CN")}
             </Detail>
           </dl>
           <Notice>
-            升级保持原账期。当前剩余额度不会重新发放。过期或状态变化后须重新报价。
+            {value.offer.monthly_credit === "0"
+              ? "升级保持原服务期限，不发放模型额度。过期或状态变化后须重新报价。"
+              : "升级保持原账期。当前剩余额度不会重新发放。过期或状态变化后须重新报价。"}
           </Notice>
         </>
       ),
@@ -170,12 +183,20 @@ export function Catalog({
                     {kind === "addon"
                       ? `购买后 ${o.validity_months} 个月有效`
                       : o.period === "year"
-                        ? "年付会员 · 按月发放额度"
+                        ? o.monthly_credit === "0"
+                          ? "年付会员 · 纯功能订阅"
+                          : "年付会员 · 按月发放额度"
                         : "月付会员"}
                   </p>
                   <p>
-                    {kind === "addon" ? "包含" : "每月包含"}{" "}
-                    <strong>{fixed(o.monthly_credit, 6)}</strong> 模型额度
+                    {kind === "membership" && o.monthly_credit === "0" ? (
+                      "纯功能订阅，不含模型额度"
+                    ) : (
+                      <>
+                        {kind === "addon" ? "包含" : "每月包含"}{" "}
+                        <strong>{fixed(o.monthly_credit, 6)}</strong> 模型额度
+                      </>
+                    )}
                   </p>
                   {Object.entries(o.entitlements || {})
                     .filter(([key]) => key !== "sandbox")
@@ -234,12 +255,21 @@ export function Catalog({
               <Detail label="当前方案">{quote.subscription.offer.name}</Detail>
               <Detail label="目标方案">{quote.value.offer.name}</Detail>
               <Detail label="补差价格">¥ {fixed(quote.value.amount)}</Detail>
-              <Detail label="当前月增加额度">
-                {fixed(quote.value.grant_amount, 6)}
-              </Detail>
-              <Detail label="后续每月额度">
-                {fixed(quote.value.offer.monthly_credit, 6)}
-              </Detail>
+              {quote.value.offer.monthly_credit === "0" ? (
+                <>
+                  <Detail label="订阅权益">纯功能订阅，不含模型额度</Detail>
+                  <Detail label="退款规则">需人工核实权益使用情况</Detail>
+                </>
+              ) : (
+                <>
+                  <Detail label="当前月增加额度">
+                    {fixed(quote.value.grant_amount, 6)}
+                  </Detail>
+                  <Detail label="后续每月额度">
+                    {fixed(quote.value.offer.monthly_credit, 6)}
+                  </Detail>
+                </>
+              )}
               <Detail label="已付服务期限">
                 {date(quote.subscription.paid_through)}
               </Detail>
@@ -260,16 +290,20 @@ export function Catalog({
   );
 }
 function OfferDetails({ offer, name }: { offer: Offer; name: string }) {
+  const featureSubscription =
+    offer.kind === "membership" && offer.monthly_credit === "0";
   return (
     <dl>
       <Detail label="产品 / 方案">
         {name} / {offer.name}
       </Detail>
-      {offer.refund_rule && (
+      {(offer.refund_rule || featureSubscription) && (
         <Detail label="退款规则">
-          {offer.refund_rule === "unused_only_v1"
-            ? "仅未使用权益可按规则退款"
-            : "按商品规则审核"}
+          {featureSubscription
+            ? "需人工核实权益使用情况"
+            : offer.refund_rule === "unused_only_v1"
+              ? "仅未使用权益可按规则退款"
+              : "按商品规则审核"}
         </Detail>
       )}
       <Detail label="购买价格">¥ {fixed(offer.price)}</Detail>
@@ -280,10 +314,14 @@ function OfferDetails({ offer, name }: { offer: Offer; name: string }) {
             ? "一年"
             : "一个月"}
       </Detail>
-      <Detail label={offer.kind === "addon" ? "本次额度" : "每月包含额度"}>
-        {fixed(offer.monthly_credit, 6)}
-      </Detail>
-      {offer.kind === "membership" && (
+      {featureSubscription ? (
+        <Detail label="订阅权益">纯功能订阅，不含模型额度</Detail>
+      ) : (
+        <Detail label={offer.kind === "addon" ? "本次额度" : "每月包含额度"}>
+          {fixed(offer.monthly_credit, 6)}
+        </Detail>
+      )}
+      {offer.kind === "membership" && !featureSubscription && (
         <Detail label="额度发放">
           按月发放，每月批次独立到期；年付不提前发放全年额度。
         </Detail>

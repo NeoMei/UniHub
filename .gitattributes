@@ -1,3 +1,6 @@
 # Upstream unified-diff context necessarily has a space before Go tabs and
 # represents blank context lines with a single space. Preserve the locked patch.
 deploy/identity/audit-redaction.patch -whitespace
+
+# External integration patches retain literal upstream diff context.
+integrations/llmrouter/*.patch -whitespace

@@ -124,6 +124,12 @@ func (s *Service) payLocked(ctx context.Context, c *pgxpool.Conn, o Order, key, 
 		return o, e
 	}
 	defer database.Rollback(tx)
+	if e = lockBillingProduct(ctx, tx, o.ProductID); e != nil {
+		return o, e
+	}
+	if e = s.offerForSaleOn(ctx, tx, o.Offer); e != nil {
+		return o, e
+	}
 	_, e = tx.Exec(ctx, `INSERT INTO billing_orders(id,account_id,actor_id,request_key,request_digest,snapshot) VALUES($1,$2,$3,$4,$5,$6)`, o.ID, o.AccountID, o.ActorID, key, digest, encode(o))
 	if e != nil {
 		return o, e
@@ -264,6 +270,13 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 	return s.runLocked(ctx, c, cmd.ID)
 }
 func (s *Service) monthlyLocked(ctx context.Context, c *pgxpool.Conn, sub Subscription, now time.Time) error {
+	n, e := integer(sub.Offer.MonthlyCredit, false)
+	if e != nil {
+		return e
+	}
+	if n == 0 {
+		return nil
+	}
 	start, end, ok := CurrentPeriod(sub.Anchor, sub.PaidThrough, now)
 	if !ok {
 		return nil
@@ -277,7 +290,7 @@ func (s *Service) monthlyLocked(ctx context.Context, c *pgxpool.Conn, sub Subscr
 		return nil
 	}
 	var orderID string
-	e := c.QueryRow(ctx, `SELECT id FROM billing_orders WHERE account_id=$1 AND snapshot->>'subscription_id'=$2 AND snapshot->>'payment_status'='PAID' AND COALESCE(snapshot->>'refund_status','') IN ('','REJECTED') AND snapshot->>'kind'<>'upgrade' AND (snapshot->>'start')::timestamptz <= $3 AND (snapshot->>'end')::timestamptz > $3 ORDER BY (snapshot->>'created_at')::timestamptz DESC LIMIT 1`, sub.AccountID, sub.ID, start).Scan(&orderID)
+	e = c.QueryRow(ctx, `SELECT id FROM billing_orders WHERE account_id=$1 AND snapshot->>'subscription_id'=$2 AND snapshot->>'payment_status'='PAID' AND COALESCE(snapshot->>'refund_status','') IN ('','REJECTED') AND snapshot->>'kind'<>'upgrade' AND (snapshot->>'start')::timestamptz <= $3 AND (snapshot->>'end')::timestamptz > $3 ORDER BY (snapshot->>'created_at')::timestamptz DESC LIMIT 1`, sub.AccountID, sub.ID, start).Scan(&orderID)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil
 	}
@@ -285,7 +298,6 @@ func (s *Service) monthlyLocked(ctx context.Context, c *pgxpool.Conn, sub Subscr
 		return e
 	}
 	b := Batch{ID: id("batch_"), AccountID: sub.AccountID, ProductID: sub.ProductID, OrderID: orderID, SubscriptionID: sub.ID, SourceKey: source, Kind: "base", Original: sub.Offer.MonthlyCredit, StartsAt: start, ExpiresAt: end, CreatedAt: now}
-	n, _ := integer(b.Original, true)
 	tx, e := c.Begin(ctx)
 	if e != nil {
 		return e

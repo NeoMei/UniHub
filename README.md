@@ -25,6 +25,7 @@ UniHub 的核心是独立后台 JSON API。接入产品自己实现所有页面�
 - [品牌任务三轮审查与补漏](docs/branding-audit-2026-10-24.md)
 - [首版设计](docs/superpowers/specs/2026-10-24-unihub-design.md)
 - [设计审查](docs/design-review-2026-10-24.md)
+- [可组合收费配置](docs/composable-billing.md)
 - [产品接入核查](docs/integration-findings-2026-10-24.md)
 - [后续扩展方向与第三方项目调研](docs/extension-roadmap-2026-10-24.md)
 - [本地开发与 API 使用](docs/local-development.md)
@@ -41,6 +42,10 @@ UniHub 的核心是独立后台 JSON API。接入产品自己实现所有页面�
 - [多轮审查、修复证据与实施裁定](docs/subscriptions-credits-review.md)
 
 当前优先完成自有产品的统一用户与充值计费闭环，首个接入产品为 SuperWagie。第三方账户连接、第三方 MCP 与 API 接入依次作为后续扩展。
+
+## 可组合收费
+
+各产品可选订阅赠送额度及加量包、充值余额按量使用、纯月/年订阅三个预设，也可组合会员与余额按量等规则。配置独立于身份客户端，产品通过同一API读取规则、权益、余额及用量，自行展示界面。现金模型消费统一从llmrouter产品钱包扣除，赠送额度单独记录，不会未经选择切换或混算。配置与接入方法见[可组合收费](docs/composable-billing.md)。
 
 ## 当前进度
 

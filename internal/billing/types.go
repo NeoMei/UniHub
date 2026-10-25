@@ -16,7 +16,26 @@ var (
 	ErrManualReview        = errors.New("billing: refund requires manual review")
 )
 
-const CreditAsset = "CREDIT/6"
+const (
+	CreditAsset = "CREDIT/6"
+)
+
+// Empty assets in historical rates and calls denote model credits.
+func normalizedAsset(asset string) string {
+	if asset == "" {
+		return CreditAsset
+	}
+	return asset
+}
+
+// UsageAuthorization is the current policy decision for a new usage hold.
+// Credential/call snapshots retain their original version after this decision.
+type UsageAuthorization struct {
+	FundingMode    string    `json:"funding_mode"`
+	Asset          string    `json:"asset"`
+	ProfileVersion int64     `json:"billing_profile_version"`
+	ExpiresAt      time.Time `json:"expires_at"`
+}
 
 type Offer struct {
 	ID             string            `json:"id"`
@@ -122,6 +141,7 @@ type Rational struct {
 	Denominator string `json:"denominator"`
 }
 type Rate struct {
+	Asset      string   `json:"asset"`
 	ID         string   `json:"id"`
 	Model      string   `json:"model"`
 	Status     string   `json:"status"`
@@ -154,22 +174,27 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type Call struct {
-	ServiceID          string       `json:"service_id"`
-	CallID             string       `json:"call_id"`
-	ActorID            string       `json:"actor_id"`
-	AccountID          string       `json:"account_id"`
-	OriginProductID    string       `json:"origin_product_id"`
-	RequestDigest      string       `json:"request_digest"`
-	Rate               Rate         `json:"rate"`
-	Held               string       `json:"held"`
-	Charged            string       `json:"charged"`
-	PlatformDifference string       `json:"platform_difference"`
-	Status             string       `json:"status"`
-	Allocations        []Allocation `json:"allocations"`
-	Usage              *Usage       `json:"usage,omitempty"`
-	FinalDigest        string       `json:"final_digest,omitempty"`
-	ProviderCost       string       `json:"provider_cost,omitempty"`
-	CredentialID       string       `json:"credential_id,omitempty"`
+	CashHoldAddress       string       `json:"cash_hold_address,omitempty"`
+	ChargeAsset           string       `json:"charge_asset"`
+	FundingMode           string       `json:"funding_mode"`
+	FundingProductID      string       `json:"funding_product_id"`
+	BillingProfileVersion int64        `json:"billing_profile_version"`
+	ServiceID             string       `json:"service_id"`
+	CallID                string       `json:"call_id"`
+	ActorID               string       `json:"actor_id"`
+	AccountID             string       `json:"account_id"`
+	OriginProductID       string       `json:"origin_product_id"`
+	RequestDigest         string       `json:"request_digest"`
+	Rate                  Rate         `json:"rate"`
+	Held                  string       `json:"held"`
+	Charged               string       `json:"charged"`
+	PlatformDifference    string       `json:"platform_difference"`
+	Status                string       `json:"status"`
+	Allocations           []Allocation `json:"allocations"`
+	Usage                 *Usage       `json:"usage,omitempty"`
+	FinalDigest           string       `json:"final_digest,omitempty"`
+	ProviderCost          string       `json:"provider_cost,omitempty"`
+	CredentialID          string       `json:"credential_id,omitempty"`
 }
 type SettlementRequest struct {
 	CallID       string `json:"call_id"`

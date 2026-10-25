@@ -38,6 +38,38 @@ Repeated prepare and unchanged policy staging preserve an accepted gate for the 
 
 Run `python3 deploy/server/test-headless-deployment.py` plus the existing deployment/identity scripts. For the isolated PostgreSQL policy regression, set `UNIHUB_TEST_DATABASE_URL` in the process environment. It uses a random temporary schema, validates real insert/idempotency/conflict behavior, then removes only that schema. No production server is accessed by these tests.
 
+## Explicit product billing staging
+
+Preparing or upgrading a release does not select a new billing mode. With no staged billing file, `PRODUCT_BILLING_FILE` remains unset and the existing v0.1.0 products retain their version-0 hybrid behavior. An operator must explicitly review and stage a public billing JSON array to opt in. Billing policy is independent of the headless client registry: staging creates no client credentials, rotates no existing secrets, and preserves the identity image, client policy and accepted headless audit gate.
+
+Copy a reviewed file containing at most 100 profiles into the new immutable release, for example `/opt/unihub/releases/<revision>/billing.approved.json`. A preset entry is `{"product_id":"my-product","version":1,"preset":"prepaid"}`; supported presets are `hybrid`, `prepaid` and `subscription`. Custom entries must provide all four complete components (`subscription`, `included_credits`, `addons`, `usage`); see [composable billing](../../docs/composable-billing.md) and [examples](../../examples/billing). Every version must be a positive int64. Unknown or private fields, duplicate fields/products, mixed preset/components, invalid funding combinations, symlinks, hardlinks and nonregular files are rejected. Files contain public commercial metadata only; never include tokens, passwords, client secrets, payment keys or model credentials.
+
+Run as root on the deployment host only after reviewing the exact profiles:
+
+```sh
+python3 /opt/unihub/releases/<revision>/deploy/server/bootstrap.py stage-billing \
+  --release /opt/unihub/releases/<revision> \
+  --billing-profiles /opt/unihub/releases/<revision>/billing.approved.json
+```
+
+This command atomically publishes `/opt/unihub/billing-config/products.json` as root:root0644 inside a root:root0755 directory, outside private `shared`. It regenerates private `runtime.env` with that public path in `PRODUCT_BILLING_FILE`; subsequent `prepare` and other bootstrap modes preserve it. The nonroot service can read the profiles. Invalid existing staged configuration fails preparation instead of silently reverting to legacy behavior. No application or dependency restart occurs during staging. After the normal release switch and review, load the staged versions by restarting only UniHub:
+
+```sh
+systemctl restart unihub
+```
+
+The trusted backend startup creates the configured product catalog rows and atomically appends billing profile versions. It does not grant identity-client access or publish prices, Offers, cash rates, real payment merchants or model-provider credentials. Versions must increase; the same version is idempotent only when its normalized profile matches, while a lower version or changed content at the same version fails startup. Changing an existing product needs an explicit higher version. Existing paid orders, rights and in-flight usage retain their original terms. Removing a staged file does not undo versions already saved in the database. Prepaid usage consumes the payer's llmrouter product wallet CNY/6 balance only when a separately published compatible rate and trusted usage flow exist; this staging step is not payment or billing-flow acceptance.
+
+Run the offline staging/prepare checks from the repository:
+
+```sh
+python3 deploy/server/test-billing-deployment.py
+python3 scripts/test-server-deployment.py
+python3 deploy/server/test-headless-deployment.py
+```
+
+These tests use disposable local files, validate preserved credentials and an accepted identity gate, exercise public access permissions, and inspect a configuration archive. They do not change the deployed server or prove PostgreSQL/Formance/payment acceptance. `backup.py` includes the staged `billing-config` directory with private runtime configuration; backups remain restricted because the other archived files contain secrets.
+
 ## Artifact and ownership contract
 
 Run on Ubuntu 24.04 x86_64 as root with Python 3, Docker Engine/Compose and nginx already installed. No package installer, firewall change, unrelated restart or existing service removal is performed by this bundle. Existing ports 55438, 53068, 58000 and Go 8088 must be available; public HTTPS443 forwards to this host's 8484. This hostname is HTTPS-only: its dedicated port80 vhost closes HTTP connections with nginx444, preventing fallback to another hosted site. Existing wildcard certificate/key are read at `/etc/nginx/ssl/_.quukk.com_chain.pem` and `/etc/nginx/ssl/_.quukk.com_key.key`.

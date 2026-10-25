@@ -65,3 +65,52 @@ test('credential transport requires HTTPS except explicit loopback',()=>{
  assert.throws(()=>new UniHubClient({...options,baseUrl:'http://public.example'}),TypeError);
  for(const baseUrl of ['https://hub.example','http://localhost:8189','http://127.0.0.1:8189','http://[::1]:8189'])assert.doesNotThrow(()=>new UniHubClient({...options,baseUrl}));
 });
+
+test('billing discovery carries profiles and keeps reads on product routes',async t=>{
+ const profile={product_id:'my-product',version:2,subscription:{enabled:true},included_credits:{enabled:false},addons:{enabled:false},usage:{enabled:true,require_subscription:true,funding_modes:['prepaid_cash'],default_funding_mode:'prepaid_cash'}};
+ const {client,calls}=await fixture(t,(r,res)=>{
+  assert.equal(r.headers.authorization,'Bearer product-access');
+  if(r.path==='/v1/billing-presets')send(res,200,{hybrid:{...profile,product_id:'template',version:0},prepaid:{...profile,product_id:'template',version:0},subscription:{...profile,product_id:'template',version:0}});
+  else if(r.path==='/v1/products/my-product/billing-profile')send(res,200,profile);
+  else if(r.path==='/v1/products')send(res,200,[{id:'my-product',name:'Product',billing_profile:profile}]);
+  else send(res,403,{error:'forbidden'});
+ });
+ client.setAccessToken('product-access');
+ assert.equal((await client.billingPresets()).prepaid.product_id,'template');
+ assert.equal((await client.billingProfile('my-product')).usage.default_funding_mode,'prepaid_cash');
+ assert.equal((await client.products())[0].billing_profile?.version,2);
+ await assert.rejects(client.billingProfile('other-product'),e=>e instanceof UniHubError&&e.status===403&&e.code==='forbidden');
+ await assert.rejects(client.request('PUT','/ops/v1/products/my-product/billing-profile',{body:profile}),TypeError);
+ assert.equal(calls.length,4);
+});
+
+test('model credential preserves three-argument call and sends explicit funding mode',async t=>{
+ const {client,calls}=await fixture(t,(r,res)=>{
+  assert.equal(r.path,'/v1/accounts/account/model-credentials');
+  send(res,201,{id:'credential',audience:'llmrouter',actor_id:'actor',account_id:'account',origin_product_id:'my-product',models:['model'],task_id:r.body.task_id,expires_at:'2026-10-25T01:00:00Z',token:'opaque',funding_mode:r.body.funding_mode??'credits',asset:r.body.funding_mode==='prepaid_cash'?'CNY/6':'CREDIT/6',billing_profile_version:3});
+ });
+ assert.equal((await client.issueModelCredential('account',['model'],'legacy')).funding_mode,'credits');
+ assert.equal(Object.hasOwn(calls[0].body,'funding_mode'),false);
+ const cash=await client.issueModelCredential('account',['model'],'cash','prepaid_cash');
+ assert.equal(cash.asset,'CNY/6');assert.equal(cash.billing_profile_version,3);
+ assert.deepEqual(calls[1].body,{models:['model'],task_id:'cash',funding_mode:'prepaid_cash'});
+});
+
+test('usage and call queries preserve asset selection and separate large per-asset charges',async t=>{
+ const common={scope:{account_id:'account',origin_product_id:'my-product',visibility:'account'},filter:{},financial_details:true,as_of:'2026-10-25T00:00:00Z',accuracy:'exact_for_query_snapshot',consistency:'live'};
+ const usage={input:'9007199254740993',output:'0',cache_read:'0',cache_write:'0',reasoning:'0'};
+ const {client,calls}=await fixture(t,(r,res)=>{
+  const url=new URL(r.path,'http://fixture.test');
+  if(url.pathname.endsWith('/calls')){assert.equal(url.searchParams.get('asset'),'CNY/6');send(res,200,{...common,filter:{asset:'CNY/6',model:'model'},items:[{scope:common.scope,financial_details:true,asset:'CNY/6',call_id:'call',account_id:'account',actor_id:'actor',origin_product_id:'my-product',model:'model',status:'SETTLED',created_at:'2026-10-25T00:00:00Z',time_source:'request',charged:'9007199254740993',usage}],has_more:false,total:'1',unknown_time:'0'});}
+  else {const asset=url.searchParams.get('asset');if(asset!==null)assert.equal(asset,'CNY/6');send(res,200,{...common,filter:asset?{asset}:{},asset:asset??'mixed',...(asset?{charged:'17'}:{}),calls_total:'2',settled_calls:'2',pending_calls:'0',missing_usage_calls:'0',unknown_calls:'0',rejected_calls:'0',released_calls:'0',by_status:{SETTLED:'2'},charges_by_asset:asset?{'CNY/6':'17'}:{'CREDIT/6':'9007199254740993','CNY/6':'17'},usage,usage_complete:true,unknown_time:'0'});}
+ });
+ const page=await client.calls('account',{asset:'CNY/6',model:'model'});assert.equal(page.items[0].asset,'CNY/6');assert.equal(page.items[0].charged,'9007199254740993');
+ const single=await client.usage('account',{asset:'CNY/6'});assert.equal(single.asset,'CNY/6');assert.equal(single.charged,'17');assert.deepEqual(single.charges_by_asset,{'CNY/6':'17'});
+ const summary=await client.usage('account');assert.equal(summary.asset,'mixed');assert.equal(summary.charged,undefined);assert.deepEqual(summary.charges_by_asset,{'CREDIT/6':'9007199254740993','CNY/6':'17'});assert.equal(summary.usage.input,'9007199254740993');
+ assert.equal(calls.length,3);
+});
+
+test('unknown product route remains a structured error and is not retried',async t=>{
+ const {client,calls}=await fixture(t,(r,res)=>send(res,404,{error:'not_found'}));
+ await assert.rejects(client.request('GET','/v1/unknown-billing-route'),e=>e instanceof UniHubError&&e.status===404&&e.code==='not_found');assert.equal(calls.length,1);
+});

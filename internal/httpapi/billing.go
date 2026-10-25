@@ -24,6 +24,7 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 			operatorAPI.authenticated(fn)(w, r)
 		})
 	}
+	s.billingProfileRoutes(add, addOps)
 	add("GET /v1/catalog", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		v, e := b.Catalog(r.Context())
 		if e != nil {
