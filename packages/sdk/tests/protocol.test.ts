@@ -114,3 +114,27 @@ test('unknown product route remains a structured error and is not retried',async
  const {client,calls}=await fixture(t,(r,res)=>send(res,404,{error:'not_found'}));
  await assert.rejects(client.request('GET','/v1/unknown-billing-route'),e=>e instanceof UniHubError&&e.status===404&&e.code==='not_found');assert.equal(calls.length,1);
 });
+
+test('explicit model pool methods preserve quantities, filters, encoded IDs and structured errors',async t=>{
+ const {client,calls}=await fixture(t,(r,res)=>{
+  if(r.path.includes('denied'))return send(res,403,{error:'forbidden'});
+  send(res,200,{total:'9007199254740993',charged:'9007199254740993',asset:'CNY/6'});
+ });client.setAccessToken('pool-token');
+ assert.equal((await client.modelPoolCalls('account',{origin_product_id:'agentwiki',asset:'CNY/6',limit:1,cursor:'signed+cursor'})).total,'9007199254740993');
+ assert.equal((await client.modelPoolCall('account','call/id','agentwiki')).charged,'9007199254740993');
+ assert.equal((await client.modelPoolUsage('account',{asset:'CNY/6'})).charged,'9007199254740993');
+ assert.equal(calls[0].path,'/v1/accounts/account/model-pool/calls?origin_product_id=agentwiki&asset=CNY%2F6&limit=1&cursor=signed%2Bcursor');
+ assert.equal(calls[1].path,'/v1/accounts/account/model-pool/calls/call%2Fid?origin_product_id=agentwiki');
+ assert.equal(calls[2].path,'/v1/accounts/account/model-pool/usage/summary?asset=CNY%2F6');
+ assert.ok(calls.every(r=>r.headers.authorization==='Bearer pool-token'));
+ await assert.rejects(client.modelPoolCalls('denied'),e=>e instanceof UniHubError&&e.status===403&&e.code==='forbidden');
+});
+
+test('OpenAPI publishes all named model pool methods with exact restricted scope',async()=>{
+ const {readFile}=await import('node:fs/promises');
+ const spec=await readFile(new URL('../../../api/openapi.yaml',import.meta.url),'utf8');
+ for(const [path,method] of [['calls','modelPoolCalls'],['calls/{call}','modelPoolCall'],['usage/summary','modelPoolUsage']]){
+  const block=spec.split(`  "/v1/accounts/{account}/model-pool/${path}":`)[1]?.split('\n  "/')[0];
+  assert.ok(block);assert.ok(block.includes(`"operationId": "${method}"`));assert.ok(block.includes('"usage:all-products"'));assert.ok(block.includes('billing_admin'));
+ }
+});

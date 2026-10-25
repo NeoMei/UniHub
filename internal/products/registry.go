@@ -35,7 +35,7 @@ var supportedScopes = map[string]bool{
 	"recharges:read": true, "recharges:write": true, "transfers:write": true,
 	"operations:read": true, "orders:read": true, "orders:write": true,
 	"settings:read": true, "settings:write": true, "refunds:write": true,
-	"usage:read": true, "model-credentials:write": true,
+	"usage:read": true, "usage:all-products": true, "model-credentials:write": true,
 }
 
 func (c Client) HasScope(scope string) bool      { return slices.Contains(c.Scopes, scope) }
@@ -71,7 +71,7 @@ func Parse(raw []byte) (map[string]Client, error) {
 			return nil, errors.New("duplicate product client audience")
 		}
 		for _, s := range c.Scopes {
-			if !supportedScopes[s] {
+			if !supportedScopes[s] || (s == "usage:all-products" && c.ProductID != "llmrouter") {
 				return nil, errors.New("unknown product scope")
 			}
 		}

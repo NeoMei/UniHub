@@ -105,6 +105,9 @@ export class UniHubClient {
  settings(account: string): Promise<Authorization[]>{return this.request('GET',this.path(account,'/settings'));}
  async setAuthorization(account: string,body: Authorization): Promise<Authorization>{if(body.enabled){integer(body.max_per_operation);integer(body.max_total);}return this.request('PUT',this.path(account,'/settings'),{body:{product_id:body.product_id,purpose:body.purpose,enabled:body.enabled,version:body.version,max_per_operation:body.max_per_operation,max_total:body.max_total,expires_at:body.expires_at}});}
  resources(account: string): Promise<Resources>{return this.request('GET',this.path(account,'/resources'));}
+ modelPoolCalls(account: string,filter: CallQuery={}): Promise<CallPage>{return this.request('GET',query(this.path(account,'/model-pool/calls'),filter));}
+ modelPoolCall(account: string,id: string,origin?: string): Promise<CallView>{return this.request('GET',query(this.path(account,'/model-pool/calls/'+encodeURIComponent(id)),{origin_product_id:origin}));}
+ modelPoolUsage(account: string,filter: CallFilter={}): Promise<UsageSummary>{return this.request('GET',query(this.path(account,'/model-pool/usage/summary'),filter));}
  calls(account: string,filter: CallQuery={}): Promise<CallPage>{return this.request('GET',query(this.path(account,'/calls'),filter));}
  getCall(account: string,id: string,originProductId?: string): Promise<CallView>{return this.request('GET',query(this.path(account,`/calls/${segment(id)}`),{origin_product_id:originProductId}));}
  usage(account: string,filter: CallFilter={}): Promise<UsageSummary>{return this.request('GET',query(this.path(account,'/usage/summary'),filter));}

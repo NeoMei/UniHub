@@ -22,6 +22,9 @@ func productRouteAllowed(pattern string) bool {
 }
 
 func productScopeAllowed(pattern string, c products.Client) bool {
+	if isModelPoolRoute(pattern) {
+		return c.ProductID == "llmrouter" && c.HasScope("usage:all-products")
+	}
 	scope := map[string]string{
 		"GET /v1/products/{product}/billing-profile": "catalog:read", "GET /v1/billing-presets": "catalog:read",
 		"GET /v1/me": "accounts:read", "GET /v1/capabilities": "accounts:read",
@@ -86,4 +89,12 @@ func filterProducts[T any](r *http.Request, in []T, id func(T) string) []T {
 		}
 	}
 	return out
+}
+
+func isModelPoolRoute(pattern string) bool {
+	switch pattern {
+	case "GET /v1/accounts/{account}/model-pool/calls", "GET /v1/accounts/{account}/model-pool/calls/{call}", "GET /v1/accounts/{account}/model-pool/usage/summary":
+		return true
+	}
+	return false
 }

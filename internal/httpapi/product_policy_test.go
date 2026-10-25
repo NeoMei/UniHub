@@ -282,3 +282,157 @@ func TestMalformedDirectProductOptionsFailClosed(t *testing.T) {
 		}
 	}
 }
+
+func TestModelPoolReportingPolicy(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if e := database.Migrate(ctx, p); e != nil {
+		t.Fatal(e)
+	}
+	a := accounts.New(p)
+	b := billing.New(p, a, noLedger{})
+	for _, tc := range []struct {
+		product string
+		scopes  []string
+		token   string
+		want    int
+	}{
+		{"llmrouter", []string{"accounts:read", "usage:all-products", "usage:read"}, "product-alice", 200},
+		{"llmrouter", []string{"accounts:read", "usage:read"}, "product-alice", 403},
+		{"superwagie", []string{"accounts:read", "usage:all-products"}, "product-alice", 403},
+	} {
+		c := products.Client{ProductID: tc.product, ClientID: "pool", Scopes: tc.scopes}
+		h := New(verifier{}, a, wallet.New(p, a, noLedger{}), Options{Billing: b, ProductVerifiers: map[string]auth.Verifier{"pool": productVerifier{}}, ProductAccess: map[string]products.Client{"pool": c}})
+		w := call(h, "GET", "/v1/accounts", tc.token, "", "")
+		var as []accounts.Account
+		if json.Unmarshal(w.Body.Bytes(), &as) != nil || len(as) != 1 {
+			t.Fatalf("accounts %s", w.Body)
+		}
+		for _, suffix := range []string{"/model-pool/calls", "/model-pool/usage/summary"} {
+			w = call(h, "GET", "/v1/accounts/"+as[0].ID+suffix, tc.token, "", "")
+			if w.Code != tc.want {
+				t.Fatalf("%s %s: %d %s", tc.product, suffix, w.Code, w.Body)
+			}
+		}
+		if w = call(h, "GET", "/v1/accounts/not-mine/model-pool/calls", tc.token, "", ""); w.Code != 403 {
+			t.Fatalf("foreign: %d", w.Code)
+		}
+	}
+}
+
+func TestModelPoolAggregateIsolationAndCurrentRole(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if e := database.Migrate(ctx, p); e != nil {
+		t.Fatal(e)
+	}
+	a := accounts.New(p)
+	b := billing.New(p, a, noLedger{})
+	alice, e := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://test", Subject: "alice"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	bob, e := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://test", Subject: "bob"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	team, e := a.CreateTeam(ctx, alice.ID, "pool team")
+	if e != nil {
+		t.Fatal(e)
+	}
+	inv, e := a.Invite(ctx, alice.ID, team.ID, bob.ID, "member")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = a.AcceptInvitation(ctx, bob.ID, inv.ID); e != nil {
+		t.Fatal(e)
+	}
+	c := products.Client{ProductID: "llmrouter", ClientID: "pool", Scopes: []string{"usage:read", "usage:all-products"}}
+	h := New(verifier{}, a, wallet.New(p, a, noLedger{}), Options{Billing: b, ProductVerifiers: map[string]auth.Verifier{"pool": anyProductVerifier{}}, ProductAccess: map[string]products.Client{"pool": c}})
+	for i, origin := range []string{"superwagie", "agentwiki", "llmrouter"} {
+		v := billing.Call{CallID: origin + "-pool-call", AccountID: team.ID, ActorID: alice.ID, OriginProductID: origin, Rate: billing.Rate{Model: "pool-model"}, Status: "SETTLED", Charged: "3", Held: "5", Usage: &billing.Usage{Input: "2", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}}
+		if origin == "agentwiki" {
+			v.ChargeAsset = billing.CashAsset
+		}
+		v.ProviderCost = "private-cost"
+		v.CredentialID = "private-credential"
+		raw, _ := json.Marshal(v)
+		if _, e = p.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot,created_at) VALUES($1,$2,'pool',$3,$4)`, v.CallID, team.ID, raw, time.Now().Add(-time.Minute+time.Duration(i)*time.Millisecond)); e != nil {
+			t.Fatal(e)
+		}
+	}
+	base := "/v1/accounts/" + team.ID
+	get := func(path, token string, status int) []byte {
+		t.Helper()
+		w := call(h, "GET", path, token, "", "")
+		if w.Code != status {
+			t.Fatalf("%s %s: %d %s", token, path, w.Code, w.Body)
+		}
+		return w.Body.Bytes()
+	}
+	var first billing.CallPage
+	if e = json.Unmarshal(get(base+"/model-pool/calls?limit=1", "product-alice", 200), &first); e != nil || first.Total != "3" || !first.HasMore {
+		t.Fatalf("aggregate %#v %v", first, e)
+	}
+	cursor := url.QueryEscape(first.NextCursor)
+	other, e := a.CreateTeam(ctx, alice.ID, "other pool team")
+	if e != nil {
+		t.Fatal(e)
+	}
+	get("/v1/accounts/"+other.ID+"/model-pool/calls?cursor="+cursor, "product-alice", 400)
+
+	get(base+"/model-pool/calls?limit=1&cursor="+cursor, "product-alice", 200)
+	get(base+"/model-pool/calls?limit=1&origin_product_id=superwagie&cursor="+cursor, "product-alice", 400)
+	get(base+"/model-pool/calls?limit=1&asset=CNY%2F6&cursor="+cursor, "product-alice", 400)
+	get("/v1/accounts/not-mine/model-pool/calls?cursor="+cursor, "product-alice", 403)
+	var own billing.CallPage
+	json.Unmarshal(get(base+"/calls", "product-alice", 200), &own)
+	if own.Total != "1" || own.Items[0].OriginProductID != "llmrouter" {
+		t.Fatalf("ordinary widened %#v", own)
+	}
+	json.Unmarshal(get(base+"/model-pool/calls?origin_product_id=agentwiki", "product-alice", 200), &own)
+	if own.Total != "1" || own.Items[0].OriginProductID != "agentwiki" {
+		t.Fatalf("filter %#v", own)
+	}
+	get(base+"/calls?origin_product_id=agentwiki", "product-alice", 403)
+	get(base+"/model-pool/calls/agentwiki-pool-call?origin_product_id=agentwiki", "product-alice", 200)
+	get(base+"/model-pool/calls/agentwiki-pool-call?origin_product_id=superwagie", "product-alice", 404)
+	var summary billing.UsageSummary
+	rawSummary := get(base+"/model-pool/usage/summary", "product-alice", 200)
+	if e = json.Unmarshal(rawSummary, &summary); e != nil {
+		t.Fatal(e)
+	}
+	if summary.Asset != "mixed" || summary.ChargesByAsset[billing.CreditAsset] != "6" || summary.ChargesByAsset[billing.CashAsset] != "3" {
+		t.Fatalf("mixed assets %#v", summary)
+	}
+	if strings.Contains(string(rawSummary), "private-") {
+		t.Fatalf("private data leaked %s", rawSummary)
+	}
+	get(base+"/model-pool/usage/summary?asset=CREDIT%2F6", "product-alice", 200)
+	// Console owner and legacy product identities cannot acquire this capability.
+	get(base+"/model-pool/calls", "alice", 403)
+	for _, role := range []string{"member", "admin", "billing_admin"} {
+		if role != "member" {
+			if e = a.ChangeRole(ctx, alice.ID, team.ID, bob.ID, role); e != nil {
+				t.Fatal(e)
+			}
+		}
+		status := 403
+		if role == "billing_admin" {
+			status = 200
+		}
+		for _, suffix := range []string{"/model-pool/calls", "/model-pool/calls/agentwiki-pool-call", "/model-pool/usage/summary"} {
+			get(base+suffix, "product-bob", status)
+		}
+	}
+	// A finance cursor cannot be reused by another actor or after role removal.
+	get(base+"/model-pool/calls?cursor="+cursor, "product-bob", 400)
+	if e = a.ChangeRole(ctx, alice.ID, team.ID, bob.ID, "member"); e != nil {
+		t.Fatal(e)
+	}
+	get(base+"/model-pool/calls?cursor="+cursor, "product-bob", 403)
+	legacy := New(verifier{}, a, wallet.New(p, a, noLedger{}), Options{Billing: b, ProductVerifiers: map[string]auth.Verifier{"llmrouter": productVerifier{}}})
+	if w := call(legacy, "GET", base+"/model-pool/calls", "product-alice", "", ""); w.Code != 403 {
+		t.Fatalf("legacy %d", w.Code)
+	}
+}

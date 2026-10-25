@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.2.0"
+  "version": "0.3.0"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -1894,6 +1894,234 @@
           "schema":
             "type": "string"
           "description": "Product origin forced from verified client; explicit different product is 403."
+  "/v1/accounts/{account}/model-pool/calls":
+    "get":
+      "operationId": "modelPoolCalls"
+      "summary": "calls"
+      "description": "Registered llmrouter client with usage:all-products and current account owner or billing_admin only. Optional origin restricts the unified pool report."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/CallPage"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "usage:all-products"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "from"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+            "format": "date-time"
+          "description": "Inclusive RFC3339; defaults to to-30 days."
+        -
+          "name": "to"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+            "format": "date-time"
+          "description": "Exclusive RFC3339; defaults to now. Max window 90 days."
+        -
+          "name": "model"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "origin_product_id"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": "Optional exact source-product filter within the unified model pool."
+        -
+          "name": "limit"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "integer"
+            "minimum": 1
+            "maximum": 100
+            "default": 50
+          "description": ""
+        -
+          "name": "cursor"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": "Opaque signed live traversal cursor, bound to filter/actor/account/current role. Omitted time bounds restored on continuation. Process restart expires cursor."
+        -
+          "name": "asset"
+          "in": "query"
+          "required": false
+          "schema":
+            "$ref": "#/components/schemas/BillingAsset"
+          "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
+  "/v1/accounts/{account}/model-pool/calls/{call}":
+    "get":
+      "operationId": "modelPoolCall"
+      "summary": "getCall"
+      "description": "Registered llmrouter client with usage:all-products and current account owner or billing_admin only. Optional origin restricts the unified pool report."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/CallView"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "usage:all-products"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "call"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "origin_product_id"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": "Optional exact source-product filter within the unified model pool."
+  "/v1/accounts/{account}/model-pool/usage/summary":
+    "get":
+      "operationId": "modelPoolUsage"
+      "summary": "usageSummary"
+      "description": "Registered llmrouter client with usage:all-products and current account owner or billing_admin only. Optional origin restricts the unified pool report. Only settled charges are summed separately by asset. Mixed assets omit charged and return charges_by_asset."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/UsageSummary"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "usage:all-products"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "Account ID"
+        -
+          "name": "from"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+            "format": "date-time"
+          "description": "Inclusive RFC3339; defaults to to-30 days."
+        -
+          "name": "to"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+            "format": "date-time"
+          "description": "Exclusive RFC3339; defaults to now. Max window 90 days."
+        -
+          "name": "model"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "name": "origin_product_id"
+          "in": "query"
+          "required": false
+          "schema":
+            "type": "string"
+          "description": "Optional exact source-product filter within the unified model pool."
+        -
+          "name": "asset"
+          "in": "query"
+          "required": false
+          "schema":
+            "$ref": "#/components/schemas/BillingAsset"
+          "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
   "/v1/accounts/{account}/model-credentials":
     "post":
       "operationId": "issueModelCredential"

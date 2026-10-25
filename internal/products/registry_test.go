@@ -111,3 +111,12 @@ func TestCORSIdentityJSONWithoutBearer(t *testing.T) {
 		reached = false
 	}
 }
+
+func TestAllProductsUsageScopeIsLlmrouterOnly(t *testing.T) {
+	for _, product := range []string{"llmrouter", "superwagie", "agentwiki"} {
+		_, err := Parse([]byte(`[{"product_id":"` + product + `","client_id":"pool","scopes":["usage:all-products"]}]`))
+		if (err == nil) != (product == "llmrouter") {
+			t.Errorf("product %s: %v", product, err)
+		}
+	}
+}

@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-SCOPES=set('identity:read accounts:read accounts:write members:read members:write catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:read model-credentials:write'.split())
+SCOPES=set('identity:read accounts:read accounts:write members:read members:write catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:read model-credentials:write'.split())
 FIELDS={'product_id','client_id','application','organization','redirect_uris','origins','scopes','billing_products','password_login','registration'}
 SLUG=re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 NAME=re.compile(r'^[A-Za-z][A-Za-z0-9_-]{1,63}$')
@@ -51,6 +51,7 @@ def validate_client(c,managed=True):
   if not isinstance(c.get(field,[]),list) or any(not isinstance(x,str) for x in c.get(field,[])) or len(set(c.get(field,[])))!=len(c.get(field,[])):raise PolicyError('Policy fields must be unique string lists')
  if managed and not c.get('redirect_uris'):raise PolicyError('At least one exact redirect URI is required')
  if set(c.get('scopes',[]))-SCOPES:raise PolicyError('Unknown product scope')
+ if 'usage:all-products' in c.get('scopes',[]) and c.get('product_id')!='llmrouter':raise PolicyError('usage:all-products requires llmrouter')
  if any(not SLUG.fullmatch(x) for x in c.get('billing_products',[])):raise PolicyError('Invalid billing product')
  if any(not valid_url(x,True) for x in c.get('origins',[])) or any(not valid_url(x) for x in c.get('redirect_uris',[])):raise PolicyError('Unsafe exact redirect URI or Origin')
  return c
