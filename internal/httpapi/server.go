@@ -14,6 +14,7 @@ import (
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
 	"unihub/internal/billing"
+	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
 	"unihub/internal/products"
@@ -30,6 +31,13 @@ type Options struct {
 	OperatorVerifier auth.Verifier
 	ProductVerifiers map[string]auth.Verifier
 	ProductAccess    map[string]products.Client
+	Identity         ProfileService
+}
+type ProfileService interface {
+	Profile(context.Context, string) (identityapi.Profile, error)
+	UpdateDisplayName(context.Context, string, string) (identityapi.Profile, error)
+	ChangePassword(context.Context, string, string, string) error
+	SessionAllowed(context.Context, string) bool
 }
 type api struct {
 	verifier auth.Verifier
@@ -47,6 +55,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 	})
 	add := func(pattern string, f action) { m.HandleFunc(pattern, s.authenticated(f)) }
 	s.invitationQueryRoutes(add)
+	if o.Identity != nil {
+		s.profileRoutes(add)
+	}
 	if o.Billing != nil {
 		s.billingRoutes(m, add)
 	}
@@ -333,6 +344,10 @@ func (s *api) authenticated(next action) http.HandlerFunc {
 		u, e := s.accounts.EnsureIdentity(r.Context(), accounts.Identity{Issuer: c.Issuer, Subject: c.Subject, Name: c.Name, Email: c.Email})
 		if e != nil {
 			writeError(w, e)
+			return
+		}
+		if h != "" && s.options.Identity != nil && !s.options.Identity.SessionAllowed(r.Context(), strings.TrimPrefix(h, "Bearer ")) {
+			fail(w, 401, "unauthorized")
 			return
 		}
 		if e = next(w, r, u); e != nil {

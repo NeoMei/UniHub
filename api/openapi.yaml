@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.0"
+  "version": "0.4.1"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -149,6 +149,113 @@
           "application/json":
             "schema":
               "$ref": "#/components/schemas/TokenRequest"
+  "/v1/me/profile":
+    "get":
+      "operationId": "getIdentityProfile"
+      "description": "Sandbox self profile; accounts:read required. Login username is immutable. Responses are no-store."
+      "responses":
+        "200":
+          "description": "Current profile"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/IdentityProfile"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+    "patch":
+      "operationId": "updateIdentityDisplayName"
+      "description": "Sandbox; profile:write required. Only display_name is accepted, up to 80 Unicode characters; empty clears it."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "additionalProperties": false
+              "required": ["display_name"]
+              "properties":
+                "display_name": {"type": "string", "maxLength": 80}
+      "responses":
+        "200":
+          "description": "Updated profile"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/IdentityProfile"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+  "/v1/me/password":
+    "post":
+      "operationId": "changeIdentityPassword"
+      "description": "Sandbox; profile:write required. Verifies current password and provider policy. Success revokes provider tokens and matching UniHub browser sessions; sign in again. Never automatically retry an uncertain result."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "additionalProperties": false
+              "required": ["current_password", "new_password"]
+              "properties":
+                "current_password": {"type": "string", "writeOnly": true}
+                "new_password": {"type": "string", "writeOnly": true}
+      "responses":
+        "204": {"description": "Password changed; sign in again"}
+        "400":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+  "/v1/me/avatar":
+    "get":
+      "operationId": "getIdentityAvatar"
+      "description": "Sandbox; authenticated accounts:read required. Returns stored normalized PNG, never a public URL."
+      "responses":
+        "200":
+          "description": "Private PNG; no-store"
+          "content":
+            "image/png":
+              "schema": {"type": "string", "format": "binary"}
+        "401":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+    "put":
+      "operationId": "putIdentityAvatar"
+      "description": "Sandbox; profile:write required. JSON <=1 MiB. Decoded PNG/JPEG and normalized PNG <=512 KiB, dimensions <=1024x1024. URL, SVG and WebP input rejected."
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "additionalProperties": false
+              "required": ["content_type", "data_base64"]
+              "properties":
+                "content_type": {"type": "string", "enum": ["image/png", "image/jpeg"]}
+                "data_base64": {"type": "string", "format": "byte"}
+      "responses":
+        "200":
+          "description": "Updated profile"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/IdentityProfile"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "413":
+          "$ref": "#/components/responses/Error"
   "/v1/me":
     "get":
       "operationId": "me"
@@ -2266,6 +2373,17 @@
           "schema":
             "$ref": "#/components/schemas/Error"
   "schemas":
+    "IdentityProfile":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["id", "username", "display_name", "avatar_url", "email", "version"]
+      "properties":
+        "id": {"type": "string", "description": "Immutable UniHub user ID"}
+        "username": {"type": "string", "description": "Fixed provider login name"}
+        "display_name": {"type": "string", "maxLength": 80}
+        "avatar_url": {"type": "string", "enum": ["", "/v1/me/avatar"]}
+        "email": {"type": "string"}
+        "version": {"type": "string", "description": "Opaque profile version"}
     "IntegerString":
       "type": "string"
       "pattern": "^(0|[1-9][0-9]*)$"

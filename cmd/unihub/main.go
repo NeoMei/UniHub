@@ -113,17 +113,21 @@ func run() error {
 			return e
 		}
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess})
+	identity, err := identityapi.New(startup, pool, identityapi.Options{Issuer: c.Issuer, ManagementClientID: c.IdentityManagementClientID, ManagementClientSecret: c.IdentityManagementSecret, SigningKey: c.IdentityKey, Clients: c.ProductAccess, Production: c.Production, AuditRedactionVerified: c.IdentityAuditVerified, TrustLoopbackProxy: c.IdentityTrustLoopbackProxy})
+	if err != nil {
+		return err
+	}
+	var profileService httpapi.ProfileService
+	if identity.ProfileEnabled() {
+		profileService = identity
+	}
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, Identity: profileService})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir})
 		if err != nil {
 			return err
 		}
 		handler = browser.Handler(handler)
-	}
-	identity, err := identityapi.New(startup, pool, identityapi.Options{Issuer: c.Issuer, ManagementClientID: c.IdentityManagementClientID, ManagementClientSecret: c.IdentityManagementSecret, SigningKey: c.IdentityKey, Clients: c.ProductAccess, Production: c.Production, AuditRedactionVerified: c.IdentityAuditVerified, TrustLoopbackProxy: c.IdentityTrustLoopbackProxy})
-	if err != nil {
-		return err
 	}
 	handler = products.CORS(identity.Handler(handler), c.ProductAccess)
 	handler = publicapi.Handler(handler)

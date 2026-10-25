@@ -46,7 +46,7 @@ AUDITED_RECORD_SHA = 'cbc348261a902aa30ce14da39555c3b269d28b904f62ab82e431890ac6
 PROVISIONER_APPLICATION = 'app-unihub-provisioner'
 PROVISIONER_CLIENT = 'unihub-provisioner'
 PRIVACY_CHECKS = ('registration', 'password_login', 'pkce_nonce_state', 'audit_records_redacted', 'webhook_payloads_redacted', 'proxy_logs_redacted')
-PRODUCT_SCOPES = {'identity:read','accounts:read','accounts:write','members:read','members:write','catalog:read','subscriptions:read','credits:read','wallets:read','recharges:read','recharges:write','transfers:write','operations:read','orders:read','orders:write','settings:read','settings:write','refunds:write','usage:read','usage:all-products','model-credentials:write'}
+PRODUCT_SCOPES = {'identity:read','profile:write','accounts:read','accounts:write','members:read','members:write','catalog:read','subscriptions:read','credits:read','wallets:read','recharges:read','recharges:write','transfers:write','operations:read','orders:read','orders:write','settings:read','settings:write','refunds:write','usage:read','usage:all-products','model-credentials:write'}
 
 
 class DeploymentError(Exception):

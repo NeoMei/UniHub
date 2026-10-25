@@ -30,7 +30,8 @@ type Client struct {
 var productID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var supportedScopes = map[string]bool{
 	"identity:read": true, "accounts:read": true, "accounts:write": true,
-	"members:read": true, "members:write": true, "catalog:read": true,
+	"profile:write": true,
+	"members:read":  true, "members:write": true, "catalog:read": true,
 	"subscriptions:read": true, "credits:read": true, "wallets:read": true,
 	"recharges:read": true, "recharges:write": true, "transfers:write": true,
 	"operations:read": true, "orders:read": true, "orders:write": true,

@@ -33,7 +33,7 @@ class HeadlessDeploymentTests(unittest.TestCase):
         for relative in ['bin/unihub','web/dist/index.html','casdoor-web/index.html','casdoor-web/swagger/index.html','casdoor-web/assets/unihub/unihub-logo-v1.png','casdoor-web/assets/unihub/unihub-icon-v1.png']:
             file=self.release/relative;file.parent.mkdir(parents=True,exist_ok=True);file.write_text('fixture')
         self.credentials=bundle.prepare(self.root,self.release,{})
-        self.registry=[{'product_id':'superwagie','client_id':'superwagie-headless','application':'app-superwagie-headless','organization':'unihub','redirect_uris':['http://localhost:57991/api/platform-account/callback'],'origins':['http://localhost:57991'],'scopes':['accounts:read','wallets:read','orders:write','usage:read'],'billing_products':['superwagie','llmrouter'],'password_login':True,'registration':True}]
+        self.registry=[{'product_id':'superwagie','client_id':'superwagie-headless','application':'app-superwagie-headless','organization':'unihub','redirect_uris':['http://localhost:57991/api/platform-account/callback'],'origins':['http://localhost:57991'],'scopes':['accounts:read','profile:write','wallets:read','orders:write','usage:read'],'billing_products':['superwagie','llmrouter'],'password_login':True,'registration':True}]
 
     def test_staging_is_additive_private_and_runtime_identity_remains_disabled(self):
         original=dict(self.credentials)
@@ -47,7 +47,7 @@ class HeadlessDeploymentTests(unittest.TestCase):
         public=Path(runtime['PRODUCT_CLIENTS_FILE']);self.assertEqual(stat.S_IMODE(public.stat().st_mode),0o644)
         self.assertEqual(stat.S_IMODE(public.parent.stat().st_mode),0o755)
         self.assertNotIn('shared',public.parts)
-        config=json.loads(public.read_text());self.assertFalse(config[0]['password_login']);self.assertFalse(config[0]['registration'])
+        config=json.loads(public.read_text());self.assertFalse(config[0]['password_login']);self.assertFalse(config[0]['registration']);self.assertIn('profile:write',config[0]['scopes'])
         seed=json.loads((self.root/'shared/casdoor/conf/init_data.json').read_text())
         app=next(a for a in seed['applications'] if a['name']==bundle.PROVISIONER_APPLICATION)
         self.assertEqual(app['organization'],'unihub');self.assertFalse(app['isShared']);self.assertTrue(app['disableSignin']);self.assertFalse(app['enablePassword']);self.assertFalse(app['enableSignUp']);self.assertEqual(app['redirectUris'],[])

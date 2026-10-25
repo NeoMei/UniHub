@@ -26,6 +26,7 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 		return c.ProductID == "llmrouter" && c.HasScope("usage:all-products")
 	}
 	scope := map[string]string{
+		"GET /v1/me/profile": "accounts:read", "PATCH /v1/me/profile": "profile:write", "POST /v1/me/password": "profile:write", "GET /v1/me/avatar": "accounts:read", "PUT /v1/me/avatar": "profile:write",
 		"GET /v1/products/{product}/billing-profile": "catalog:read", "GET /v1/billing-presets": "catalog:read",
 		"GET /v1/me": "accounts:read", "GET /v1/capabilities": "accounts:read",
 		"GET /v1/accounts": "accounts:read", "POST /v1/accounts": "accounts:write",

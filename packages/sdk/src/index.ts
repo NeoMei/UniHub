@@ -13,6 +13,7 @@ export interface Registration { username: string; password: string; email?: stri
 export interface RegistrationResult { registration_id: string; status: 'CREATED' | 'UNKNOWN'; login_required?: boolean; retry_after?: number }
 export interface TokenSet { access_token: string; id_token: string; token_type: 'Bearer'; scope: string; expires_in: number }
 export interface User { id: string; name: string; email: string }
+export interface IdentityProfile { id: string; username: string; display_name: string; avatar_url: '' | '/v1/me/avatar'; email: string; version: string }
 export interface Account { id: string; kind: string; name: string; role: string }
 export interface Member { user_id: string; name: string; email: string; role: string }
 export interface Invitation { id: string; account_id: string; recipient_id: string; role: string }
@@ -86,6 +87,10 @@ export class UniHubClient {
  }
  private path(account: string,suffix=''): string {return `/v1/accounts/${segment(account)}${suffix}`;}
  me(): Promise<User>{return this.request('GET','/v1/me');}
+ profile(): Promise<IdentityProfile>{return this.request('GET','/v1/me/profile');}
+ updateDisplayName(displayName: string): Promise<IdentityProfile>{return this.request('PATCH','/v1/me/profile',{body:{display_name:displayName}});}
+ changePassword(currentPassword: string,newPassword: string): Promise<void>{return this.request('POST','/v1/me/password',{body:{current_password:currentPassword,new_password:newPassword}});}
+ putAvatar(contentType: 'image/png'|'image/jpeg',dataBase64: string): Promise<IdentityProfile>{return this.request('PUT','/v1/me/avatar',{body:{content_type:contentType,data_base64:dataBase64}});}
  accounts(): Promise<Account[]>{return this.request('GET','/v1/accounts');}
  capabilities(): Promise<Record<string,unknown>>{return this.request('GET','/v1/capabilities');}
  createTeam(name: string): Promise<Account>{return this.request('POST','/v1/accounts',{body:{name}});}

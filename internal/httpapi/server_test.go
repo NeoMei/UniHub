@@ -1,9 +1,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,10 +15,45 @@ import (
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
 	"unihub/internal/database"
+	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
+	"unihub/internal/products"
 	"unihub/internal/testutil"
 	"unihub/internal/wallet"
 )
+
+type profileFixture struct {
+	profile identityProfile
+	revoked bool
+	avatar  []byte
+}
+
+type identityProfile = identityapi.Profile
+
+func (f *profileFixture) Profile(context.Context, string) (identityProfile, error) {
+	return f.profile, nil
+}
+func (f *profileFixture) UpdateDisplayName(_ context.Context, _ string, name string) (identityProfile, error) {
+	f.profile.DisplayName = name
+	f.profile.Version = "2"
+	return f.profile, nil
+}
+func (f *profileFixture) ChangePassword(_ context.Context, user, current, next string) error {
+	if user == "" || current != "old" || next != "new" {
+		return accounts.ErrInvalid
+	}
+	f.revoked = true
+	return nil
+}
+func (f *profileFixture) SessionAllowed(_ context.Context, _ string) bool { return !f.revoked }
+func (f *profileFixture) PutAvatar(_ context.Context, _ string, _ string, data []byte) (identityProfile, error) {
+	f.avatar = bytes.Clone(data)
+	f.profile.AvatarURL = "/v1/me/avatar"
+	return f.profile, nil
+}
+func (f *profileFixture) Avatar(context.Context, string) (string, []byte, error) {
+	return "image/png", f.avatar, nil
+}
 
 type verifier struct{}
 
@@ -82,6 +121,76 @@ func TestAPIRejectsMissingAuthAndCrossAccountAccess(t *testing.T) {
 	}
 	if w := call(h, "POST", path, "alice", `{"amount":"1000000"}`, "key"); w.Code != 201 {
 		t.Fatalf("order: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestProfileContractAndPasswordRevokesSession(t *testing.T) {
+	p := testutil.Database(t)
+	if e := database.Migrate(context.Background(), p); e != nil {
+		t.Fatal(e)
+	}
+	a := accounts.New(p)
+	f := &profileFixture{profile: identityProfile{ID: "alice", Username: "alice", DisplayName: "Alice", AvatarURL: "https://avatar.test/a.png", Email: "alice@example.test", Version: "1"}}
+	h := New(verifier{}, a, wallet.New(p, a, noLedger{}), Options{Identity: f})
+	w := call(h, "GET", "/v1/me/profile", "alice", "", "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"username":"alice"`) {
+		t.Fatalf("profile: %d %s", w.Code, w.Body)
+	}
+	w = call(h, "PATCH", "/v1/me/profile", "alice", `{"display_name":"New name"}`, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"display_name":"New name"`) {
+		t.Fatalf("display name: %d %s", w.Code, w.Body)
+	}
+	w = call(h, "PATCH", "/v1/me/profile", "alice", `{"username":"changed"}`, "")
+	if w.Code != 400 {
+		t.Fatalf("username mutation: %d %s", w.Code, w.Body)
+	}
+	w = call(h, "POST", "/v1/me/password", "alice", `{"current_password":"old","new_password":"new"}`, "")
+	if w.Code != 204 {
+		t.Fatalf("password: %d %s", w.Code, w.Body)
+	}
+	w = call(h, "GET", "/v1/me/profile", "alice", "", "")
+	if w.Code != 401 {
+		t.Fatalf("revoked session: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestProfileProductScopesAndBoundedAvatar(t *testing.T) {
+	p := testutil.Database(t)
+	if err := database.Migrate(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	a := accounts.New(p)
+	f := &profileFixture{profile: identityProfile{Username: "alice", DisplayName: "Alice", Version: "1"}}
+	options := Options{Identity: f, ProductVerifiers: map[string]auth.Verifier{"client": productVerifier{}}, ProductAccess: map[string]products.Client{"client": {ProductID: "superwagie", ClientID: "client", Scopes: []string{"accounts:read"}}}}
+	h := New(verifier{}, a, wallet.New(p, a, noLedger{}), options)
+	if w := call(h, "GET", "/v1/me/profile", "product-alice", "", ""); w.Code != 200 {
+		t.Fatalf("profile read %d %s", w.Code, w.Body)
+	}
+	if w := call(h, "PATCH", "/v1/me/profile", "product-alice", `{"display_name":"Changed"}`, ""); w.Code != 403 {
+		t.Fatalf("write scope missing %d", w.Code)
+	}
+	client := options.ProductAccess["client"]
+	client.Scopes = append(client.Scopes, "profile:write")
+	options.ProductAccess["client"] = client
+	h = New(verifier{}, a, wallet.New(p, a, noLedger{}), options)
+	if w := call(h, "PATCH", "/v1/me/profile", "product-alice", `{"display_name":"Changed","is_admin":true}`, ""); w.Code != 400 {
+		t.Fatalf("field injection %d", w.Code)
+	}
+	var imageData bytes.Buffer
+	png.Encode(&imageData, image.NewRGBA(image.Rect(0, 0, 2, 2)))
+	body, _ := json.Marshal(map[string]string{"content_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString(imageData.Bytes())})
+	if w := call(h, "PUT", "/v1/me/avatar", "product-alice", string(body), ""); w.Code != 200 {
+		t.Fatalf("avatar write %d %s", w.Code, w.Body)
+	}
+	w := call(h, "GET", "/v1/me/avatar", "product-alice", "", "")
+	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), imageData.Bytes()) || w.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("avatar read %d", w.Code)
+	}
+	if w = call(h, "GET", "/v1/me/avatar", "", "", ""); w.Code != 401 {
+		t.Fatalf("anonymous avatar %d", w.Code)
+	}
+	if w = call(h, "PUT", "/v1/me/avatar", "product-alice", `{"content_type":"image/png","data_base64":"`+strings.Repeat("A", 1<<20)+`"}`, ""); w.Code != 413 {
+		t.Fatalf("oversized avatar %d %s", w.Code, w.Body)
 	}
 }
 

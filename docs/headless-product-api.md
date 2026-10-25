@@ -48,6 +48,16 @@ SDK不持久化 token、不写 Cookie/localStorage、不自动刷新。BFF 可�
 
 ## Scope 与领域权限
 
+### 沙盒个人资料
+
+当前开发模式提供 `GET /v1/me/profile`，返回 `id`、固定登录 `username`、可修改的 `display_name`、`avatar_url`、`email` 和不透明 `version` 字符串。`PATCH /v1/me/profile` 只接受 `{display_name}`，最多 80 个 Unicode 字符，可清空。登录账号名不能修改，资料定位始终使用已认证的 issuer 和 subject，昵称为空不会改变身份。
+
+`POST /v1/me/password` 接受 `{current_password,new_password}`，校验旧密码及当前 Casdoor 密码策略，成功返回 204 并要求重新登录。旧令牌经 Casdoor 活跃状态检查失效，UniHub 对应浏览器会话被删除。失败结果不自动重试，未知结果应由用户重新登录核实。
+
+`PUT /v1/me/avatar` 接受 JSON `{content_type,data_base64}`。类型为 `image/png` 或 `image/jpeg`，JSON 最大 1 MiB，原图及转码后的 PNG 最大 512 KiB，宽高均不超过 1024。服务端解码后统一保存 PNG，不接受 URL、SVG、WebP 或任意文件路径。认证 GET `/v1/me/avatar` 返回 PNG；不存在返回 404。`avatar_url` 只会为空或 `/v1/me/avatar`，产品通过自身认证代理读取。
+
+资料和头像 GET 使用 `accounts:read`；昵称、密码和头像写入使用显式的 `profile:write`。这些接口只在非生产且 headless 身份配置已启用时挂载，适用于当前公开 sandbox。所有成功和失败响应均不应缓存。SDK 提供 `profile`、`updateDisplayName`、`changePassword` 和 `putAvatar`，密码与令牌只保留在调用进程内存。
+
 | Scope | API |
 | --- | --- |
 | `accounts:read` / `accounts:write` | me/accounts/capabilities / 创建团队；仅 me 也可用 identity:read |
