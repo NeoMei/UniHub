@@ -20,7 +20,7 @@ it("keeps a product-linked team selected across login and never falls back to pe
   let authenticated=false;
   vi.stubGlobal("fetch",vi.fn(async(path:string)=>new Response(JSON.stringify(path==="/auth/session"?{authenticated,user:{id:"alice",name:"Alice"},sandbox:true}:path==="/v1/accounts"?[{id:"personal",name:"Personal",kind:"personal",role:"owner"},{id:"team",name:"Team",kind:"team",role:"owner"}]:[]),{status:200})));
   const first=render(<App/>);
-  await screen.findByRole("link",{name:/登录 UniHub/});
+  await screen.findByRole("link",{name:/登录归一/});
   first.unmount();
   // OIDC returns to the root; the public account hint must survive in this tab.
   window.history.replaceState(null,"","/"); authenticated=true;

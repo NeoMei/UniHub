@@ -1,6 +1,6 @@
-# UniHub 品牌
+# 归一（UniHub）品牌
 
-产品显示名称统一为 **UniHub**，区分大小写。工程、数据库、容器前缀保持 `unihub`。描述语为“统一身份与账户中心”；业务介绍可使用“统一用户与计费平台”。自有产品名称 SuperWagie、AgentWiki、llmrouter 等继续保留。
+产品中文名称为 **归一**，英文名称为 **UniHub**，英文区分大小写。中文界面使用“归一”，双语展示使用“归一（UniHub）”。原有 UniHub Logo 继续保留。工程、数据库、容器前缀保持 `unihub`。描述语为“统一身份与账户中心”；业务介绍可使用“统一用户与计费平台”。自有产品名称 SuperWagie、AgentWiki、llmrouter 等继续保留。
 
 ## 标识
 

@@ -124,14 +124,14 @@ export default function App() {
   if (session.loading)
     return (
       <div className="auth-page">
-        <img src="/assets/unihub-logo-v1.png" alt="UniHub" />
+        <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
         <p role="status">正在连接你的账户…</p>
       </div>
     );
   if (session.error)
     return (
       <div className="auth-page">
-        <img src="/assets/unihub-logo-v1.png" alt="UniHub" />
+        <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
         <Notice kind="error">{session.error}</Notice>
         <button onClick={() => setVersion((v) => v + 1)}>重新连接</button>
       </div>
@@ -140,18 +140,18 @@ export default function App() {
     return (
       <div className="login-page">
         <div className="login-brand">
-          <img src="/assets/unihub-logo-v1.png" alt="UniHub" />
+          <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
           <h1>一个身份，连接你的产品。</h1>
           <p>集中管理个人与团队账户、产品会员、模型额度与资金。</p>
         </div>
         <div className="login-card">
-          <h2>欢迎使用 UniHub</h2>
+          <h2>欢迎使用归一</h2>
           <p>登录后，继续管理你的账户。</p>
           {session.data?.sandbox && <Notice>测试环境 · 不涉及真实支付</Notice>}
           <a className="button primary" href="/auth/login">
-            登录 UniHub <ArrowRight size={17} />
+            登录归一（UniHub） <ArrowRight size={17} />
           </a>
-          <small>统一身份与账户中心</small>
+          <small>归一 UniHub · 统一身份与账户中心</small>
         </div>
       </div>
     );
@@ -180,8 +180,8 @@ export default function App() {
           className="brand"
           onClick={() => setPage("overview")}
         >
-          <img src="/assets/unihub-logo-v1.png" alt="UniHub" />
-          <span>统一身份与账户中心</span>
+          <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
+          <span>归一 · 统一身份与账户中心</span>
         </a>
         <nav aria-label="主导航">
           {navigation.map(({ id, label, icon: Icon }) => (
@@ -196,7 +196,7 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <span className="sidebar-footer">统一身份与账户中心</span>
+        <span className="sidebar-footer">归一 UniHub · 统一身份与账户中心</span>
       </aside>
       <div className="workspace">
         <header className="topbar">
@@ -436,7 +436,7 @@ function AccountConsole({
         prepaidProducts.length > 0 && (
           <Notice>
             {prepaidProducts.map((p) => p.name).join("、")} 已启用现金按量服务。
-            使用入口由各产品自己的界面提供，UniHub 是可选的账户管理入口。
+            使用入口由各产品自己的界面提供，归一（UniHub）是可选的账户管理入口。
             现金模型用量从当前付费账户的 llmrouter 产品钱包扣款，额度不足不会自动转为现金扣款。
           </Notice>
         )}
@@ -518,7 +518,7 @@ function AccountConsole({
             </Panel>
             <section className="related">
               <h2>让产品围绕同一账户协作</h2>
-              <p>在 UniHub，一个账户即可管理多产品的会员、模型额度与资金。</p>
+              <p>在归一（UniHub），一个账户即可管理多产品的会员、模型额度与资金。</p>
               <button onClick={() => setPage("credits")}>
                 <Database size={21} />
                 查看模型额度
