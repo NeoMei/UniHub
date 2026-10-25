@@ -15,7 +15,7 @@ func cashRate(id string) Rate {
 }
 func TestRateAssetsAreDenominationsWithoutConversion(t *testing.T) {
 	r := cashRate("r")
-	u := Usage{"3", "0", "0", "0", "0"}
+	u := Usage{Input: "3", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 	if n, e := CalculateCharge(r, u); e != nil || n != "3" {
 		t.Fatalf("cash charge %s %v", n, e)
 	}
@@ -82,7 +82,7 @@ func TestPrepaidUsageWithoutSubscriptionUsesOnlyRouterCash(t *testing.T) {
 	cashBalance(t, f, wallet.Address(f.account, "llmrouter"), 20)
 	cashBalance(t, f, wallet.Address(f.account, "superwagie"), 1000)
 	cashBalance(t, f, wallet.Address(f.account, ""), 1000000000)
-	u := Usage{"30", "0", "0", "0", "0"}
+	u := Usage{Input: "30", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 	call, e = f.s.Settle(ctx, "router", SettlementRequest{CallID: call.CallID, Usage: &u})
 	if e != nil || call.Charged != "30" {
 		t.Fatalf("settle %+v %v", call, e)
@@ -195,7 +195,7 @@ func TestPrepaidPolicyRevocationStopsNewHoldsButOldSettlementCapsCharge(t *testi
 	if _, e = cashReserve(t, f, "new-policy", cid, "1"); !errors.Is(e, accounts.ErrForbidden) {
 		t.Fatalf("reserve escaped policy %v", e)
 	}
-	u := Usage{"70", "0", "0", "0", "0"}
+	u := Usage{Input: "70", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 	f.s.ledger = &responseLoss{Ledger: f.l, remaining: 1}
 	if _, e = f.s.Settle(ctx, "router", SettlementRequest{CallID: call.CallID, Usage: &u}); !errors.Is(e, ErrPending) {
 		t.Fatalf("loss %v", e)

@@ -197,7 +197,7 @@ def build(args):
         add(runtime, 'release-manifest.json', source_manifest)
         generated = stage/'output'; generated.mkdir()
         archive(generated/f'unihub-{version}-linux-amd64.tar.gz', runtime, f'unihub-{version}-linux-amd64', epoch)
-        sdk = {}; tracked(sdk, ['packages/sdk/src', 'packages/sdk/package.json', 'docs/headless-product-api.md', 'docs/composable-billing.md', 'docs/composable-billing-validation-2026-10-25.md', 'examples/billing', 'VERSION', 'CHANGELOG.md'])
+        sdk = {}; tracked(sdk, ['packages/sdk/src', 'packages/sdk/package.json', 'docs/headless-product-api.md', 'docs/composable-billing.md', 'docs/composable-billing-validation-2026-10-25.md', 'docs/native-metering.md', 'examples/billing', 'VERSION', 'CHANGELOG.md'])
         archive(generated/f'unihub-sdk-{version}-source.tar.gz', sdk, f'unihub-sdk-{version}', epoch)
         if context_manifest:
             context = {name:regular(Path(args.identity_artifacts)/name) for name in sorted(IDENTITY_FILES)}

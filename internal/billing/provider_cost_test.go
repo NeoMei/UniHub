@@ -35,7 +35,7 @@ func TestSettlementOptionalProviderCostRemainsIndependentAndIdempotent(t *testin
 			if err != nil || missing.Status != "MISSING_USAGE" || missing.ProviderCost != tc.cost {
 				t.Fatalf("missing usage: %+v %v", missing, err)
 			}
-			req.Usage = &Usage{"150", "0", "0", "0", "0"}
+			req.Usage = &Usage{Input: "150", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 			for range 2 {
 				got, err := f.s.Settle(ctx, "router", req)
 				if err != nil || got.Status != "SETTLED" || got.Charged != "100" || got.PlatformDifference != "50" || got.ProviderCost != tc.cost {
@@ -78,7 +78,7 @@ func TestSettlementRejectsInvalidProvidedCostWithoutChangingHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, cost := range []string{"-1", "1.5", "invalid", " ", " 0", "+1", "9223372036854775808"} {
-		if _, err := f.s.Settle(ctx, "router", SettlementRequest{"call", &Usage{"50", "0", "0", "0", "0"}, cost}); !errors.Is(err, ErrInvalid) {
+		if _, err := f.s.Settle(ctx, "router", SettlementRequest{"call", &Usage{Input: "50", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}, cost}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("cost %q: %v", cost, err)
 		}
 	}

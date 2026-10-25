@@ -31,15 +31,15 @@ func TestAnchoredCalendarClampsAndRestoresOriginalDay(t *testing.T) {
 }
 func TestRateSumsFractionsBeforeCeiling(t *testing.T) {
 	r := Rate{Semantics: "exclusive_v1", Input: Rational{"1", "3"}, Output: Rational{"1", "3"}, CacheRead: Rational{"0", "1"}, CacheWrite: Rational{"0", "1"}, Reasoning: Rational{"0", "1"}}
-	got, e := CalculateCharge(r, Usage{"1", "1", "0", "0", "0"})
+	got, e := CalculateCharge(r, Usage{Input: "1", Output: "1", CacheRead: "0", CacheWrite: "0", Reasoning: "0"})
 	if e != nil || got != "1" {
 		t.Fatalf("charge %s %v", got, e)
 	}
-	_, e = CalculateCharge(r, Usage{"-1", "1", "0", "0", "0"})
+	_, e = CalculateCharge(r, Usage{Input: "-1", Output: "1", CacheRead: "0", CacheWrite: "0", Reasoning: "0"})
 	if e == nil {
 		t.Fatal("negative usage accepted")
 	}
-	_, e = CalculateCharge(r, Usage{"9223372036854775807", "9223372036854775807", "0", "0", "0"})
+	_, e = CalculateCharge(r, Usage{Input: "9223372036854775807", Output: "9223372036854775807", CacheRead: "0", CacheWrite: "0", Reasoning: "0"})
 	if e != nil {
 		t.Fatal(e)
 	}

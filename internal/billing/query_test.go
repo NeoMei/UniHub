@@ -28,7 +28,7 @@ func TestUsageQueriesUseFinalAmountsAndHideInternalObservations(t *testing.T) {
 	if err != nil || fresh.CreatedAt == nil || fresh.TimeSource != "reserve_received" || fresh.CreatedAt.Before(time.Now().Add(-time.Minute)) {
 		t.Fatalf("new timestamp %+v %v", fresh, err)
 	}
-	if _, err := f.s.Settle(ctx, "router", SettlementRequest{"usage-settled", &Usage{"150", "2", "3", "4", "5"}, "900"}); err != nil {
+	if _, err := f.s.Settle(ctx, "router", SettlementRequest{"usage-settled", &Usage{Input: "150", Output: "2", CacheRead: "3", CacheWrite: "4", Reasoning: "5"}, "900"}); err != nil {
 		t.Fatal(err)
 	}
 	when := dt("2026-10-20T12:00:00Z")
@@ -48,7 +48,7 @@ func TestUsageQueriesUseFinalAmountsAndHideInternalObservations(t *testing.T) {
 	if _, err := f.s.pool.Exec(ctx, `UPDATE billing_commands SET status='UNKNOWN' WHERE kind='reserve' AND request_key='usage-pending-command'`); err != nil {
 		t.Fatal(err)
 	}
-	queryInsert(t, f.s, Call{CallID: "other-origin", AccountID: f.account, ActorID: f.actor, OriginProductID: "agentwiki", Rate: Rate{Model: "test"}, Status: "SETTLED", Charged: "999999", Usage: &Usage{"999999", "0", "0", "0", "0"}}, &when)
+	queryInsert(t, f.s, Call{CallID: "other-origin", AccountID: f.account, ActorID: f.actor, OriginProductID: "agentwiki", Rate: Rate{Model: "test"}, Status: "SETTLED", Charged: "999999", Usage: &Usage{Input: "999999", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}}, &when)
 	filter := CallFilter{From: when.Add(-time.Hour), To: when.Add(time.Hour), OriginProductID: "superwagie"}
 	summary, err := f.s.QueryUsageSummary(ctx, f.actor, f.account, filter)
 	if err != nil || summary.CallsTotal != "4" || summary.SettledCalls != "1" || summary.MissingUsageCalls != "1" || summary.UnknownCalls != "2" || summary.Charged != "100" || summary.Usage.Input != "150" || summary.Usage.Output != "2" || summary.Usage.CacheRead != "3" || summary.Usage.CacheWrite != "4" || summary.Usage.Reasoning != "5" || summary.UsageComplete || summary.Scope.Visibility != "account" {
@@ -122,11 +122,11 @@ func TestUsageQueriesKeysetScopeAndCursorBinding(t *testing.T) {
 			otherAccount = account.ID
 		}
 	}
-	queryInsert(t, s, Call{CallID: "personal-call", AccountID: otherAccount, ActorID: owner.ID, OriginProductID: "superwagie", Rate: Rate{Model: "model-a"}, Status: "SETTLED", Charged: "999999", Usage: &Usage{"999999", "0", "0", "0", "0"}}, &when)
+	queryInsert(t, s, Call{CallID: "personal-call", AccountID: otherAccount, ActorID: owner.ID, OriginProductID: "superwagie", Rate: Rate{Model: "model-a"}, Status: "SETTLED", Charged: "999999", Usage: &Usage{Input: "999999", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}}, &when)
 	for i := range 205 {
-		queryInsert(t, s, Call{CallID: fmt.Sprintf("page-%03d", i), AccountID: team.ID, ActorID: owner.ID, OriginProductID: "superwagie", Rate: Rate{Model: "model-a"}, Status: "SETTLED", Held: "5", Charged: "3", Usage: &Usage{"2", "0", "0", "0", "0"}}, &when)
+		queryInsert(t, s, Call{CallID: fmt.Sprintf("page-%03d", i), AccountID: team.ID, ActorID: owner.ID, OriginProductID: "superwagie", Rate: Rate{Model: "model-a"}, Status: "SETTLED", Held: "5", Charged: "3", Usage: &Usage{Input: "2", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}}, &when)
 	}
-	queryInsert(t, s, Call{CallID: "member-call", AccountID: team.ID, ActorID: member.ID, OriginProductID: "superwagie", Rate: Rate{Model: "model-b"}, Status: "SETTLED", Held: "50", Charged: "30", Usage: &Usage{"20", "0", "0", "0", "0"}}, &when)
+	queryInsert(t, s, Call{CallID: "member-call", AccountID: team.ID, ActorID: member.ID, OriginProductID: "superwagie", Rate: Rate{Model: "model-b"}, Status: "SETTLED", Held: "50", Charged: "30", Usage: &Usage{Input: "20", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}}, &when)
 	queryInsert(t, s, Call{CallID: "legacy-unknown", AccountID: team.ID, ActorID: owner.ID, OriginProductID: "superwagie", Rate: Rate{Model: "model-a"}, Status: "PENDING", Held: "0", Charged: "0"}, nil)
 	filter := CallFilter{OriginProductID: "superwagie", Model: "model-a"}
 	seen, cursor := map[string]bool{}, ""
@@ -262,7 +262,7 @@ func TestUsageSummaryExactIntegerTotalsAndMalformedStoredValues(t *testing.T) {
 	s := New(p, a, nil)
 	when := dt("2026-10-20T12:00:00Z")
 	for _, id := range []string{"big-a", "big-b"} {
-		queryInsert(t, s, Call{CallID: id, AccountID: as[0].ID, ActorID: u.ID, OriginProductID: "superwagie", Status: "SETTLED", Charged: "9223372036854775807", Usage: &Usage{"9223372036854775807", "0", "0", "0", "0"}}, &when)
+		queryInsert(t, s, Call{CallID: id, AccountID: as[0].ID, ActorID: u.ID, OriginProductID: "superwagie", Status: "SETTLED", Charged: "9223372036854775807", Usage: &Usage{Input: "9223372036854775807", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}}, &when)
 	}
 	summary, err := s.QueryUsageSummary(ctx, u.ID, as[0].ID, CallFilter{})
 	if err != nil || summary.Charged != "18446744073709551614" || summary.Usage.Input != "18446744073709551614" || !summary.UsageComplete || summary.Asset != "CREDIT/6" {

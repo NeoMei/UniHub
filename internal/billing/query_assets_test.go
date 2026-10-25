@@ -12,8 +12,8 @@ func TestUsageSeparatesCashAndCreditsAndBindsAssetCursor(t *testing.T) {
 	ctx := context.Background()
 	when := time.Now().UTC()
 	for _, c := range []Call{
-		{CallID: "a-credit", AccountID: f.account, ActorID: f.actor, OriginProductID: "superwagie", Rate: Rate{Model: "m"}, Status: "SETTLED", Charged: "3", Usage: &Usage{"1", "0", "0", "0", "0"}},
-		{CallID: "b-cash", AccountID: f.account, ActorID: f.actor, OriginProductID: "superwagie", ChargeAsset: CashAsset, FundingMode: FundingPrepaidCash, Rate: Rate{Model: "m", Asset: CashAsset}, Status: "SETTLED", Charged: "7", Usage: &Usage{"2", "0", "0", "0", "0"}},
+		{CallID: "a-credit", AccountID: f.account, ActorID: f.actor, OriginProductID: "superwagie", Rate: Rate{Model: "m"}, Status: "SETTLED", Charged: "3", Usage: &Usage{Input: "1", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}},
+		{CallID: "b-cash", AccountID: f.account, ActorID: f.actor, OriginProductID: "superwagie", ChargeAsset: CashAsset, FundingMode: FundingPrepaidCash, Rate: Rate{Model: "m", Asset: CashAsset}, Status: "SETTLED", Charged: "7", Usage: &Usage{Input: "2", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}},
 		{CallID: "c-cash", AccountID: f.account, ActorID: f.actor, OriginProductID: "superwagie", ChargeAsset: CashAsset, FundingMode: FundingPrepaidCash, Rate: Rate{Model: "m", Asset: CashAsset}, Status: "RESERVED", Charged: "0"},
 	} {
 		queryInsert(t, f.s, c, &when)

@@ -9,10 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
+	"sort"
 	"strings"
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
+	"unihub/internal/metering"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -41,6 +44,7 @@ type QueryScope struct {
 // CallView intentionally has no provider-cost, platform-difference, digest,
 // credential, allocation or request/response-content fields.
 type CallView struct {
+	Rate             *Rate      `json:"rate,omitempty"`
 	Scope            QueryScope `json:"scope"`
 	FinancialDetails bool       `json:"financial_details"`
 	Asset            string     `json:"asset"`
@@ -70,27 +74,33 @@ type CallPage struct {
 	Accuracy         string     `json:"accuracy"`
 	Consistency      string     `json:"consistency"`
 }
+type NativeUsageTotal struct {
+	Operation    string                 `json:"operation"`
+	Measurements []metering.Measurement `json:"measurements"`
+}
+
 type UsageSummary struct {
-	ChargesByAsset    map[string]string `json:"charges_by_asset,omitempty"`
-	Scope             QueryScope        `json:"scope"`
-	Filter            CallFilter        `json:"filter"`
-	FinancialDetails  bool              `json:"financial_details"`
-	CallsTotal        string            `json:"calls_total"`
-	SettledCalls      string            `json:"settled_calls"`
-	PendingCalls      string            `json:"pending_calls"`
-	MissingUsageCalls string            `json:"missing_usage_calls"`
-	UnknownCalls      string            `json:"unknown_calls"`
-	RejectedCalls     string            `json:"rejected_calls"`
-	ReleasedCalls     string            `json:"released_calls"`
-	ByStatus          map[string]string `json:"by_status"`
-	Charged           string            `json:"charged,omitempty"`
-	Asset             string            `json:"asset"`
-	Usage             Usage             `json:"usage"`
-	UsageComplete     bool              `json:"usage_complete"`
-	UnknownTime       string            `json:"unknown_time"`
-	AsOf              time.Time         `json:"as_of"`
-	Accuracy          string            `json:"accuracy"`
-	Consistency       string            `json:"consistency"`
+	NativeUsage       []NativeUsageTotal `json:"native_usage,omitempty"`
+	ChargesByAsset    map[string]string  `json:"charges_by_asset,omitempty"`
+	Scope             QueryScope         `json:"scope"`
+	Filter            CallFilter         `json:"filter"`
+	FinancialDetails  bool               `json:"financial_details"`
+	CallsTotal        string             `json:"calls_total"`
+	SettledCalls      string             `json:"settled_calls"`
+	PendingCalls      string             `json:"pending_calls"`
+	MissingUsageCalls string             `json:"missing_usage_calls"`
+	UnknownCalls      string             `json:"unknown_calls"`
+	RejectedCalls     string             `json:"rejected_calls"`
+	ReleasedCalls     string             `json:"released_calls"`
+	ByStatus          map[string]string  `json:"by_status"`
+	Charged           string             `json:"charged,omitempty"`
+	Asset             string             `json:"asset"`
+	Usage             Usage              `json:"usage"`
+	UsageComplete     bool               `json:"usage_complete"`
+	UnknownTime       string             `json:"unknown_time"`
+	AsOf              time.Time          `json:"as_of"`
+	Accuracy          string             `json:"accuracy"`
+	Consistency       string             `json:"consistency"`
 }
 
 // Process-local signing keeps cursors opaque and prevents callers from changing
@@ -243,6 +253,7 @@ func scanCallView(row pgx.Row, scope QueryScope, finance bool) (CallView, error)
 	out.Model = c.Rate.Model
 	out.Usage = c.Usage
 	if finance {
+		out.Rate = &c.Rate
 		out.Held = c.Held
 		out.Charged = c.Charged
 	}
@@ -359,7 +370,10 @@ func (s *Service) QueryCall(ctx context.Context, actor, account, callID, origin 
 
 // PostgreSQL numeric sums do not overflow int64 across many valid per-call
 // int64 counters. No float conversion, rounding, held amounts, or estimated rows.
-const validUsageSQL = `(c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND (c.snapshot#>>'{usage,input}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,output}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,cache_read}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,cache_write}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,reasoning}') ~ '^(0|[1-9][0-9]*)$')`
+const validLegacyUsageSQL = `(c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND (c.snapshot#>>'{usage,input}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,output}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,cache_read}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,cache_write}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,reasoning}') ~ '^(0|[1-9][0-9]*)$')`
+
+const nativeUsageSQL = `(c.snapshot#>>'{rate,semantics}'='metered_v2' AND c.snapshot#>>'{usage,metered,state}'='confirmed')`
+const validUsageSQL = `(` + validLegacyUsageSQL + ` OR ` + nativeUsageSQL + `)`
 
 func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, f CallFilter) (UsageSummary, error) {
 	out := UsageSummary{Asset: CreditAsset, ByStatus: map[string]string{}}
@@ -380,7 +394,7 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	args := callQueryArgs(out.Scope, f)
 	selects := []string{`count(*)::text`, `count(*) FILTER(WHERE ` + callReportStatus + `='SETTLED')::text`, `count(*) FILTER(WHERE ` + callReportStatus + ` IN ('PENDING','RESERVED'))::text`, `count(*) FILTER(WHERE ` + callReportStatus + `='MISSING_USAGE')::text`, `count(*) FILTER(WHERE ` + callReportStatus + `='UNKNOWN')::text`, `count(*) FILTER(WHERE ` + callReportStatus + ` IN ('REJECTED','CANCELED'))::text`, `count(*) FILTER(WHERE ` + callReportStatus + `='RELEASED')::text`}
 	for _, name := range []string{"input", "output", "cache_read", "cache_write", "reasoning"} {
-		selects = append(selects, `COALESCE(sum(CASE WHEN `+callReportStatus+`='SETTLED' AND `+validUsageSQL+` THEN (c.snapshot#>>'{usage,`+name+`}')::numeric ELSE 0 END),0)::text`)
+		selects = append(selects, `COALESCE(sum(CASE WHEN `+callReportStatus+`='SETTLED' AND `+validLegacyUsageSQL+` THEN (c.snapshot#>>'{usage,`+name+`}')::numeric ELSE 0 END),0)::text`)
 	}
 	selects = append(selects, `COALESCE(bool_and(`+callReportStatus+` IN ('SETTLED','RELEASED','REJECTED','CANCELED') AND (`+callReportStatus+`<>'SETTLED' OR `+validUsageSQL+`)),true)`, `count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND (NOT COALESCE(c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$',false) OR (c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND NOT COALESCE(`+validUsageSQL+`,false))))`)
 	var invalid int64
@@ -391,6 +405,78 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	if invalid > 0 {
 		return out, fmt.Errorf("billing: invalid stored call counters")
 	}
+	// Aggregate native quantities independently of money and legacy counters.
+	nativeRows, nativeErr := tx.Query(ctx, `SELECT c.snapshot FROM billing_calls c `+callStatusJoin+` WHERE `+callBaseWhere+callTimeWhere+` AND `+callReportStatus+`='SETTLED' AND c.snapshot#>>'{rate,semantics}'='metered_v2'`, args...)
+	if nativeErr != nil {
+		return out, nativeErr
+	}
+	type dimension struct{ operation, key, unit, provider string }
+	totals := map[dimension]*big.Rat{}
+	for nativeRows.Next() {
+		var data []byte
+		var call Call
+		if nativeErr = nativeRows.Scan(&data); nativeErr != nil {
+			break
+		}
+		if nativeErr = json.Unmarshal(data, &call); nativeErr != nil {
+			break
+		}
+		if call.Usage == nil {
+			nativeErr = ErrInvalid
+			break
+		}
+		if _, nativeErr = CalculateCharge(call.Rate, *call.Usage); nativeErr != nil {
+			break
+		}
+		for _, measurement := range call.Usage.Metered.Measurements {
+			d := dimension{call.Usage.Metered.Operation, measurement.Key, measurement.Unit, measurement.ProviderUnit}
+			n, _ := new(big.Int).SetString(measurement.Quantity.Value, 10)
+			q := new(big.Rat).SetFrac(n, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(measurement.Quantity.Scale)), nil))
+			if totals[d] == nil {
+				totals[d] = new(big.Rat)
+			}
+			totals[d].Add(totals[d], q)
+		}
+	}
+	if nativeErr == nil {
+		nativeErr = nativeRows.Err()
+	}
+	nativeRows.Close()
+	if nativeErr != nil {
+		return out, fmt.Errorf("billing: invalid stored native usage: %w", nativeErr)
+	}
+	dimensions := make([]dimension, 0, len(totals))
+	for d := range totals {
+		dimensions = append(dimensions, d)
+	}
+	sort.Slice(dimensions, func(i, j int) bool {
+		a, b := dimensions[i], dimensions[j]
+		if a.operation != b.operation {
+			return a.operation < b.operation
+		}
+		if a.key != b.key {
+			return a.key < b.key
+		}
+		if a.unit != b.unit {
+			return a.unit < b.unit
+		}
+		return a.provider < b.provider
+	})
+	for _, d := range dimensions {
+		scale := 9
+		n := new(big.Int).Mul(totals[d].Num(), big.NewInt(1000000000))
+		n.Quo(n, totals[d].Denom())
+		for scale > 0 && new(big.Int).Mod(n, big.NewInt(10)).Sign() == 0 {
+			n.Quo(n, big.NewInt(10))
+			scale--
+		}
+		if len(out.NativeUsage) == 0 || out.NativeUsage[len(out.NativeUsage)-1].Operation != d.operation {
+			out.NativeUsage = append(out.NativeUsage, NativeUsageTotal{Operation: d.operation, Measurements: []metering.Measurement{}})
+		}
+		index := len(out.NativeUsage) - 1
+		out.NativeUsage[index].Measurements = append(out.NativeUsage[index].Measurements, metering.Measurement{Key: d.key, Unit: d.unit, ProviderUnit: d.provider, Quantity: metering.Quantity{Value: n.String(), Scale: scale}})
+	}
+
 	// A total across CREDIT and CNY would be meaningless. Determine the
 	// selected asset set from all matching calls, and sum settled money per asset.
 	assetRows, e := tx.Query(ctx, `SELECT `+callAssetSQL+`,COALESCE(sum(CASE WHEN `+callReportStatus+`='SETTLED' AND c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$' THEN (c.snapshot->>'charged')::numeric ELSE 0 END),0)::text FROM billing_calls c `+callStatusJoin+` WHERE `+callBaseWhere+callTimeWhere+` GROUP BY `+callAssetSQL, args...)

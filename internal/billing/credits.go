@@ -352,6 +352,9 @@ func (s *Service) Settle(ctx context.Context, service string, r SettlementReques
 		if e = s.clear(ctx, c, call.AccountID); e != nil {
 			return e
 		}
+		if e = validateRate(call.Rate); e != nil {
+			return e
+		}
 		charge, e := CalculateCharge(call.Rate, *r.Usage)
 		if e != nil {
 			return e

@@ -129,7 +129,7 @@ func TestPurchaseReplayUpgradesSharedPoolAndExpiry(t *testing.T) {
 		t.Fatal(call)
 	}
 	f.s.now = func() time.Time { return dt("2024-03-01T00:00:00Z") }
-	u := Usage{"500000", "0", "0", "0", "0"}
+	u := Usage{Input: "500000", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 	c, e := f.s.Settle(ctx, "router", SettlementRequest{"call", &u, "0"})
 	if e != nil || c.Charged != "500000" {
 		t.Fatalf("settle %+v %v", c, e)
