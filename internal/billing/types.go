@@ -5,6 +5,7 @@ package billing
 import (
 	"errors"
 	"time"
+	"unihub/internal/metering"
 )
 
 var (
@@ -141,23 +142,25 @@ type Rational struct {
 	Denominator string `json:"denominator"`
 }
 type Rate struct {
-	Asset      string   `json:"asset"`
-	ID         string   `json:"id"`
-	Model      string   `json:"model"`
-	Status     string   `json:"status"`
-	Semantics  string   `json:"semantics"` // exclusive_v1: each count excludes every other count
-	Input      Rational `json:"input"`
-	Output     Rational `json:"output"`
-	CacheRead  Rational `json:"cache_read"`
-	CacheWrite Rational `json:"cache_write"`
-	Reasoning  Rational `json:"reasoning"`
+	Asset      string          `json:"asset"`
+	ID         string          `json:"id"`
+	Model      string          `json:"model"`
+	Status     string          `json:"status"`
+	Semantics  string          `json:"semantics"` // exclusive_v1: each count excludes every other count
+	Input      Rational        `json:"input"`
+	Output     Rational        `json:"output"`
+	CacheRead  Rational        `json:"cache_read"`
+	CacheWrite Rational        `json:"cache_write"`
+	Reasoning  Rational        `json:"reasoning"`
+	Metered    *metering.Price `json:"metered,omitempty"`
 }
 type Usage struct {
-	Input      string `json:"input"`
-	Output     string `json:"output"`
-	CacheRead  string `json:"cache_read"`
-	CacheWrite string `json:"cache_write"`
-	Reasoning  string `json:"reasoning"`
+	Input      string          `json:"input"`
+	Output     string          `json:"output"`
+	CacheRead  string          `json:"cache_read"`
+	CacheWrite string          `json:"cache_write"`
+	Reasoning  string          `json:"reasoning"`
+	Metered    *metering.Usage `json:"metered,omitempty"`
 }
 type ReserveRequest struct {
 	CallID          string `json:"call_id"`

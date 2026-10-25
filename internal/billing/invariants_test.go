@@ -82,7 +82,7 @@ func TestMissingUsageKeepsHoldAndFinalExcessIsPlatformDifference(t *testing.T) {
 	if bs[0].Reserved != "100" {
 		t.Fatal("missing usage released")
 	}
-	u := Usage{"150", "0", "0", "0", "0"}
+	u := Usage{Input: "150", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 	c, e = f.s.Settle(ctx, "router", SettlementRequest{"call", &u, "20"})
 	if e != nil || c.Charged != "100" || c.PlatformDifference != "50" {
 		t.Fatalf("final %+v %v", c, e)
@@ -312,7 +312,7 @@ func TestRevokedCredentialCannotStartOrIncreaseReservation(t *testing.T) {
 	if _, e = f.s.Reserve(ctx, "router", r); !errors.Is(e, accounts.ErrForbidden) {
 		t.Fatalf("reserve revoked %v", e)
 	}
-	u := Usage{"50", "0", "0", "0", "0"}
+	u := Usage{Input: "50", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 	if _, e = f.s.Settle(ctx, "router", SettlementRequest{"call", &u, "0"}); e != nil {
 		t.Fatal("submitted could not finish", e)
 	}
@@ -393,7 +393,7 @@ func TestTeamRemovalStopsNewHoldsButSubmittedCallFinishes(t *testing.T) {
 	if _, e = f.s.Reserve(ctx, "router", r); !errors.Is(e, accounts.ErrForbidden) {
 		t.Fatalf("removed reserve %v", e)
 	}
-	usage := Usage{"50", "0", "0", "0", "0"}
+	usage := Usage{Input: "50", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 	if _, e = f.s.Settle(ctx, "router", SettlementRequest{"teamcall", &usage, "0"}); e != nil {
 		t.Fatal("submitted call lost payer", e)
 	}

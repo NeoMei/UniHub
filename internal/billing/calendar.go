@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unihub/internal/metering"
 )
 
 // MonthAnchor always derives from the original UTC anchor, preserving its day.
@@ -51,7 +52,34 @@ func str(n int64) string { return strconv.FormatInt(n, 10) }
 // CalculateCharge requires mutually exclusive counters, sums exact fractions,
 // then rounds up once. Intermediate arithmetic never uses floats or int64 sums.
 func CalculateCharge(r Rate, u Usage) (string, error) {
+	if err := validateRate(r); err != nil {
+		return "", err
+	}
+	if r.Semantics == "metered_v2" {
+		if u.Input != "" || u.Output != "" || u.CacheRead != "" || u.CacheWrite != "" || u.Reasoning != "" {
+			return "", ErrInvalid
+		}
+		if r.Metered == nil || u.Metered == nil {
+			return "", ErrInvalid
+		}
+		v, err := metering.Calculate(*r.Metered, *u.Metered)
+		if err != nil {
+			return "", err
+		}
+		q, rem := new(big.Int), new(big.Int)
+		q.QuoRem(v.Num(), v.Denom(), rem)
+		if rem.Sign() > 0 {
+			q.Add(q, big.NewInt(1))
+		}
+		if !q.IsInt64() {
+			return "", ErrInvalid
+		}
+		return q.String(), nil
+	}
 	if (normalizedAsset(r.Asset) != CreditAsset && normalizedAsset(r.Asset) != CashAsset) || r.Semantics != "exclusive_v1" {
+		return "", ErrInvalid
+	}
+	if u.Metered != nil {
 		return "", ErrInvalid
 	}
 	total := new(big.Rat)
@@ -98,4 +126,29 @@ func prorate(delta int64, remaining, total time.Duration) (string, error) {
 		return "", ErrInvalid
 	}
 	return q.String(), nil
+}
+
+// validateRate rejects ambiguous mixed contracts before publication or settlement.
+func validateRate(r Rate) error {
+	if normalizedAsset(r.Asset) != CreditAsset && normalizedAsset(r.Asset) != CashAsset {
+		return ErrInvalid
+	}
+	if r.Semantics == "metered_v2" {
+		if r.Metered == nil || r.Input != (Rational{}) || r.Output != (Rational{}) || r.CacheRead != (Rational{}) || r.CacheWrite != (Rational{}) || r.Reasoning != (Rational{}) {
+			return ErrInvalid
+		}
+		return metering.ValidatePrice(*r.Metered)
+	}
+	if r.Semantics != "exclusive_v1" || r.Metered != nil {
+		return ErrInvalid
+	}
+	for _, rate := range []Rational{r.Input, r.Output, r.CacheRead, r.CacheWrite, r.Reasoning} {
+		if _, err := integer(rate.Numerator, false); err != nil {
+			return err
+		}
+		if _, err := integer(rate.Denominator, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }

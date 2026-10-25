@@ -31,7 +31,7 @@ func TestOpaqueCashCallIDsRoundTripWithoutBlockingAccount(t *testing.T) {
 		if e != nil || call.Held != "40" {
 			t.Fatalf("topup opaque id %q: %+v %v", callID, call, e)
 		}
-		usage := Usage{"10", "0", "0", "0", "0"}
+		usage := Usage{Input: "10", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 		call, e = f.s.Settle(ctx, "router", SettlementRequest{CallID: callID, Usage: &usage})
 		if e != nil || call.Charged != "10" {
 			t.Fatalf("settle opaque id %q: %+v %v", callID, call, e)
@@ -81,7 +81,7 @@ func TestExistingCashHoldWithoutAddressSnapshotStillFinalizes(t *testing.T) {
 			if e != nil || updated.Held != "40" {
 				t.Fatalf("legacy topup %+v %v", updated, e)
 			}
-			usage := Usage{"10", "0", "0", "0", "0"}
+			usage := Usage{Input: "10", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}
 			if _, e := f.s.Settle(ctx, "router", SettlementRequest{CallID: call.CallID, Usage: &usage}); e != nil {
 				t.Fatal(e)
 			}

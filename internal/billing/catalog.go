@@ -164,7 +164,7 @@ func (s *Service) PublishRate(ctx context.Context, actor string, r Rate) (Rate, 
 		return Rate{}, ErrInvalid
 	}
 	r.Asset = normalizedAsset(r.Asset)
-	if _, e := CalculateCharge(r, Usage{"0", "0", "0", "0", "0"}); e != nil {
+	if e := validateRate(r); e != nil {
 		return Rate{}, e
 	}
 	r.Status = "published"

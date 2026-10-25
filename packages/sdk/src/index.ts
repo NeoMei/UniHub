@@ -24,14 +24,23 @@ export interface Subscription { id: string; account_id: string; product_id: stri
 export interface Order { id: string; account_id: string; actor_id: string; product_id: string; offer: Offer; amount: IntegerString; payment_status: string; fulfillment_status: string; refund_status?: string; [key: string]: unknown }
 export interface Quote { id: string; account_id: string; subscription_id: string; offer: Offer; amount: IntegerString; grant_amount: IntegerString; expires_at: string; [key: string]: unknown }
 export interface Authorization { product_id: string; purpose: 'funding'|'renewal'; enabled: boolean; version: number; max_per_operation: IntegerString; max_total: IntegerString; expires_at: string; used?: IntegerString; actor_id?: string }
-export interface Usage { input: IntegerString; output: IntegerString; cache_read: IntegerString; cache_write: IntegerString; reasoning: IntegerString }
+export interface MeteringQuantity { value: string; scale: number }
+export interface MeteringRational { numerator: string; denominator: string }
+export interface MeteringTerm { key: string; unit: string; provider_unit?: string; price: MeteringRational; step?: MeteringQuantity; minimum?: MeteringQuantity }
+export interface MeteringPrice { version: "metered_v2"; operation: string; policy: string; terms: MeteringTerm[] }
+export interface MeteringMeasurement { key: string; unit: string; provider_unit?: string; quantity: MeteringQuantity }
+export interface MeteringUsage { version: "metered_v2"; operation: string; state: string; source: string; measurements: MeteringMeasurement[]; provider_request_id?: string }
+export interface Usage { input: IntegerString; output: IntegerString; cache_read: IntegerString; cache_write: IntegerString; reasoning: IntegerString; metered?: MeteringUsage }
 export interface QueryScope { account_id: string; origin_product_id?: string; actor_id?: string; visibility: 'actor'|'account' }
 export interface CallFilter { from?: string; to?: string; model?: string; origin_product_id?: string; asset?: BillingAsset }
 export interface CallQuery extends CallFilter { limit?: number; cursor?: string }
-export interface CallView { scope: QueryScope; financial_details: boolean; asset: BillingAsset; call_id: string; account_id: string; actor_id: string; origin_product_id: string; model: string; status: string; created_at: string|null; time_source: string; task_id?: string; held?: IntegerString; charged?: IntegerString; usage?: Usage }
+export interface Rate { asset: BillingAsset; id: string; model: string; status: string; semantics: string; metered?: MeteringPrice }
+
+export interface CallView { rate?: Rate; scope: QueryScope; financial_details: boolean; asset: BillingAsset; call_id: string; account_id: string; actor_id: string; origin_product_id: string; model: string; status: string; created_at: string|null; time_source: string; task_id?: string; held?: IntegerString; charged?: IntegerString; usage?: Usage }
 export interface CallPage { scope: QueryScope; filter: CallFilter; financial_details: boolean; items: CallView[]; next_cursor?: string; has_more: boolean; total: IntegerString; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
 /** mixed omits charged. All charge amounts are omitted without a finance role. */
-export interface UsageSummary { scope: QueryScope; filter: CallFilter; financial_details: boolean; calls_total: IntegerString; settled_calls: IntegerString; pending_calls: IntegerString; missing_usage_calls: IntegerString; unknown_calls: IntegerString; rejected_calls: IntegerString; released_calls: IntegerString; by_status: Record<string,IntegerString>; charged?: IntegerString; charges_by_asset?: Partial<Record<BillingAsset,IntegerString>>; asset: BillingAsset | 'mixed'; usage: Usage; usage_complete: boolean; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
+export interface NativeUsageTotal { operation: string; measurements: MeteringMeasurement[] }
+export interface UsageSummary { native_usage?: NativeUsageTotal[]; scope: QueryScope; filter: CallFilter; financial_details: boolean; calls_total: IntegerString; settled_calls: IntegerString; pending_calls: IntegerString; missing_usage_calls: IntegerString; unknown_calls: IntegerString; rejected_calls: IntegerString; released_calls: IntegerString; by_status: Record<string,IntegerString>; charged?: IntegerString; charges_by_asset?: Partial<Record<BillingAsset,IntegerString>>; asset: BillingAsset | 'mixed'; usage: Usage; usage_complete: boolean; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
 export interface Resources { account_id: string; product_id: string; billing_profile?: BillingProfile; subscriptions: Subscription[]; credits?: { asset: 'CREDIT/6'; pool: 'llmrouter'; spendable: IntegerString; reserved: IntegerString; frozen: IntegerString }; wallets?: Balance[]; payments: {mode: string; real_payments_configured: boolean}; as_of: string }
 export interface ClientOptions { baseUrl: string; clientId: string; redirectUri: string; fetch?: typeof globalThis.fetch; crypto?: Crypto }
 export interface RequestOptions { body?: unknown; idempotencyKey?: string; signal?: AbortSignal }
