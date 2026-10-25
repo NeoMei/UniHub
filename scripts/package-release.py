@@ -164,7 +164,7 @@ def build(args):
         command(['npm', '--prefix', 'web', 'run', 'build'], env=env)
         runtime = {}
         tracked(runtime, ['deploy/server', 'deploy/identity', 'docs', 'branding', 'README.md', 'CONTEXT.md', 'VERSION', 'CHANGELOG.md',
-                          'scripts/headless_e2e.py', 'scripts/product_client.py', 'scripts/prepare-branding.py', 'scripts/package-release.py'])
+                          'scripts/headless_e2e.py', 'scripts/product_client.py', 'scripts/product_billing.py', 'scripts/prepare-branding.py', 'scripts/package-release.py', 'examples/billing', 'integrations/llmrouter'])
         add(runtime, 'bin/unihub', stage/'unihub')
         add(runtime, 'bin/unihub-identity-acceptance', stage/'unihub-identity-acceptance')
         add_tree(runtime, ROOT/'web/dist', 'web/dist')
@@ -197,7 +197,7 @@ def build(args):
         add(runtime, 'release-manifest.json', source_manifest)
         generated = stage/'output'; generated.mkdir()
         archive(generated/f'unihub-{version}-linux-amd64.tar.gz', runtime, f'unihub-{version}-linux-amd64', epoch)
-        sdk = {}; tracked(sdk, ['packages/sdk/src', 'packages/sdk/package.json', 'docs/headless-product-api.md', 'VERSION', 'CHANGELOG.md'])
+        sdk = {}; tracked(sdk, ['packages/sdk/src', 'packages/sdk/package.json', 'docs/headless-product-api.md', 'docs/composable-billing.md', 'docs/composable-billing-validation-2026-10-25.md', 'examples/billing', 'VERSION', 'CHANGELOG.md'])
         archive(generated/f'unihub-sdk-{version}-source.tar.gz', sdk, f'unihub-sdk-{version}', epoch)
         if context_manifest:
             context = {name:regular(Path(args.identity_artifacts)/name) for name in sorted(IDENTITY_FILES)}

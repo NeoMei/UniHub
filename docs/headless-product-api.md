@@ -2,7 +2,7 @@
 
 UniHub 提供身份、账户/团队、产品钱包、商业订单、共享模型额度和调用查询的后台 JSON API。产品自己持有页面、交互和功能判断；不需要打开 UniHub 控制台。服务端始终复核身份、成员关系、scope、财务角色和资源归属，产品界面显示某个按钮不会授予权限。
 
-机器契约见 [OpenAPI](../api/openapi.yaml)（[当前服务器](https://unihub.quukk.com/openapi.yaml)），本地 TypeScript SDK 在 [packages/sdk](../packages/sdk)。SDK 为 `@unihub/sdk` 0.1.0，private，尚未发布；零运行时依赖，使用 Node 24、Bun 或浏览器原生 fetch/WebCrypto。源码入口是 `packages/sdk/src/index.ts`，由产品构建工具直接编译，或复制到工作区依赖中。SDK不提供UI、不推断产品业务权限、不存管理密钥。
+机器契约见 [OpenAPI](../api/openapi.yaml)（[当前服务器](https://unihub.quukk.com/openapi.yaml)），本地 TypeScript SDK 在 [packages/sdk](../packages/sdk)。SDK 为 `@unihub/sdk` 0.2.0，private，尚未发布；零运行时依赖，使用 Node 24、Bun 或浏览器原生 fetch/WebCrypto。源码入口是 `packages/sdk/src/index.ts`，由产品构建工具直接编译，或复制到工作区依赖中。SDK不提供UI、不推断产品业务权限、不存管理密钥。
 
 ## 每个客户端独立登记
 
