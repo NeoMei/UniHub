@@ -318,6 +318,11 @@ function PortalAction({ authenticated, onOpenConsole, compact = false }: PortalA
 
 function ProductPortal({ sandbox, authenticated = false, onOpenConsole }: { sandbox?: boolean; authenticated?: boolean; onOpenConsole?: () => void }) {
   const [view, setView] = useState<PortalView>(portalViewFromPath);
+  useEffect(() => {
+    const onPopState = () => setView(portalViewFromPath());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
   const navigate = (next: PortalView) => {
     const path = next === "home" ? "/" : `/${next}`;
     window.history.pushState({}, "", path);
