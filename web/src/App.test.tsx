@@ -65,6 +65,9 @@ it("provides a real usage guide route from the public portal", async () => {
   expect(screen.getByText("在 UniHub 完成")).toBeDefined();
   expect(screen.getByText("SuperWagie")).toBeDefined();
   expect(screen.getByText(/模型路由、供应商凭证/)).toBeDefined();
+  expect(screen.getByRole("heading", { name: "产品功能与使用方法" })).toBeDefined();
+  expect(screen.getAllByText("核心功能").length).toBe(3);
+  expect(screen.getAllByText("开始使用").length).toBe(3);
   fireEvent.click(screen.getByRole("link", { name: "首页" }));
   expect(await screen.findByRole("heading", { name: /一个身份，/ })).toBeDefined();
 });
