@@ -20,7 +20,7 @@ it("keeps a product-linked team selected across login and never falls back to pe
   let authenticated=false;
   vi.stubGlobal("fetch",vi.fn(async(path:string)=>new Response(JSON.stringify(path==="/auth/session"?{authenticated,user:{id:"alice",name:"Alice"},sandbox:true}:path==="/v1/accounts"?[{id:"personal",name:"Personal",kind:"personal",role:"owner"},{id:"team",name:"Team",kind:"team",role:"owner"}]:[]),{status:200})));
   const first=render(<App/>);
-  await screen.findByRole("link",{name:/登录归一/});
+  await screen.findAllByRole("link",{name:/登录归一/});
   first.unmount();
   // OIDC returns to the root; the public account hint must survive in this tab.
   window.history.replaceState(null,"","/"); authenticated=true;
@@ -43,12 +43,44 @@ it("shows the UniHub product portal before login", async () => {
     return new Response(JSON.stringify(data), { status: 200 });
   }));
   render(<App />);
-  const hero = await screen.findByRole("heading", { name: /一个身份/ });
+  const hero = await screen.findByRole("heading", { name: /一个身份，/ });
   expect(hero.textContent).toContain("连接你的产品");
-  expect(screen.getAllByRole("link", { name: "进入控制台" }).length).toBeGreaterThan(0);
-  expect(screen.getByRole("link", { name: "产品能力" }).getAttribute("href")).toBe("#product");
-  expect(screen.getByText("统一账户")).toBeDefined();
-  expect(screen.getByText("跨产品协作")).toBeDefined();
+  expect(screen.getAllByRole("link", { name: "登录归一（UniHub）" }).length).toBeGreaterThan(0);
+  expect(screen.getByRole("link", { name: "使用指南" }).getAttribute("href")).toBe("/guide");
+  expect(screen.queryByRole("link", { name: "产品能力" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "使用方式" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "设置边界" })).toBeNull();
+  expect(screen.getByText("一个身份")).toBeDefined();
+  expect(screen.getByText("一套关系")).toBeDefined();
+});
+it("provides a real usage guide route from the public portal", async () => {
+  window.history.replaceState(null, "", "/guide");
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const data = path === "/auth/session" ? { authenticated: false, sandbox: true } : [];
+    return new Response(JSON.stringify(data), { status: 200 });
+  }));
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "从账户开始，把每一步走清楚" })).toBeDefined();
+  expect(screen.getByText("选择账户")).toBeDefined();
+  expect(screen.getByText("在 UniHub 完成")).toBeDefined();
+  fireEvent.click(screen.getByRole("link", { name: "首页" }));
+  expect(await screen.findByRole("heading", { name: /一个身份，/ })).toBeDefined();
+});
+it("lets an authenticated user open the product portal and return to the console", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const data = path === "/auth/session"
+      ? { authenticated: true, sandbox: true, user: { id: "u1", name: "Alice" }, csrf_token: "csrf" }
+      : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }]
+      : path === "/v1/me/profile" ? { id: "u1", username: "alice", display_name: "Alice", email: "alice@example.com", version: "1" }
+      : [];
+    return new Response(JSON.stringify(data), { status: 200 });
+  }));
+  render(<App />);
+  await screen.findByRole("heading", { name: "账户概览" });
+  fireEvent.click(screen.getByRole("link", { name: /归一 UniHub/ }));
+  expect(await screen.findByRole("heading", { name: /一个身份，/ })).toBeDefined();
+  fireEvent.click(screen.getAllByRole("link", { name: "进入控制台" })[0]);
+  expect(await screen.findByRole("heading", { name: "账户概览" })).toBeDefined();
 });
 it("keeps team member cash and finance APIs out of the browser while allowing credits and memberships", async () => {
   const calls: string[] = [];
@@ -139,7 +171,7 @@ it("loads the user profile and shows avatar plus account settings menu", async (
   expect(await screen.findByRole("heading", { name: "账户设置" })).toBeDefined();
   expect(screen.getByText("alice@example.com")).toBeDefined();
 });
-it("shows product-owned settings with an explicit UniHub ownership boundary", async () => {
+it("does not expose a product settings page in the account console", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     const data = path === "/auth/session"
       ? { authenticated: true, sandbox: false, user: { id: "u1", name: "Alice" }, csrf_token: "csrf" }
@@ -151,13 +183,9 @@ it("shows product-owned settings with an explicit UniHub ownership boundary", as
   }));
   render(<App />);
   await screen.findByRole("heading", { name: "账户概览" });
-  fireEvent.click(screen.getByRole("button", { name: "产品设置" }));
-  expect(await screen.findByRole("heading", { name: "产品设置" })).toBeDefined();
-  expect(screen.getAllByText("UniHub 管理")).toHaveLength(2);
-  expect(screen.getAllByText("会员、模型额度、钱包与账单")).toHaveLength(2);
-  expect(screen.getAllByText("产品内设置")).toHaveLength(2);
-  expect(screen.getByText("模型提供商与 API Key")).toBeDefined();
-  expect(screen.getByRole("link", { name: /打开 SuperWagie 设置/ }).getAttribute("href")).toBe("https://superwagie.quukk.com/settings");
+  expect(screen.queryByRole("button", { name: "产品设置" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "已接入产品" })).toBeNull();
+  expect(screen.queryByText("产品设置在哪里完成")).toBeNull();
 });
 it("saves the display name and submits password changes from account settings", async () => {
   const calls: Array<{ path: string; init?: RequestInit }> = [];

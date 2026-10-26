@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   ArrowRight,
+  BookOpen,
   Box,
   CircleUserRound,
   CreditCard,
@@ -11,8 +12,6 @@ import {
   LogOut,
   RefreshCw,
   Settings,
-  SlidersHorizontal,
-  ExternalLink,
   ShieldCheck,
   Users,
   Wallet as WalletIcon,
@@ -63,7 +62,6 @@ export type Page =
   | "wallets"
   | "bills"
   | "members"
-  | "product-settings"
   | "settings";
 export type ActionSpec = {
   title: string;
@@ -89,7 +87,6 @@ const navigation = [
   { id: "wallets", label: "钱包与充值", icon: WalletIcon },
   { id: "bills", label: "账单", icon: CreditCard },
   { id: "members", label: "团队成员", icon: Users },
-  { id: "product-settings", label: "产品设置", icon: SlidersHorizontal },
   { id: "settings", label: "支付自动化", icon: Settings },
 ] as const;
 const roles: Record<string, string> = {
@@ -120,6 +117,7 @@ export default function App() {
   const [selected, setSelected] = useState(initialAccount);
   const [page, setPage] = useState<Page>("overview");
   const [profileOpen, setProfileOpen] = useState(false);
+  const [portalOpen, setPortalOpen] = useState(() => ["/guide", "/products"].includes(window.location.pathname));
   const [busy, setBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
   const account = selected
@@ -169,13 +167,25 @@ export default function App() {
       setBusy(false);
     }
   }
+  if (portalOpen)
+    return (
+      <ProductPortal
+        sandbox={session.data.sandbox}
+        authenticated
+        onOpenConsole={() => setPortalOpen(false)}
+      />
+    );
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <a
-          href="#overview"
+          href="/"
           className="brand"
-          onClick={() => setPage("overview")}
+          onClick={(event) => {
+            event.preventDefault();
+            setProfileOpen(false);
+            setPortalOpen(true);
+          }}
         >
           <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
           <span>归一 · 统一身份与账户中心</span>
@@ -276,78 +286,150 @@ export default function App() {
   );
 }
 
-function ProductPortal({ sandbox }: { sandbox?: boolean }) {
-  const capabilities = [
-    { icon: <CircleUserRound />, title: "统一账户", copy: "一个账户连接个人与团队，统一管理身份、成员与权限。" },
-    { icon: <Users />, title: "跨产品协作", copy: "在不同产品之间切换付费账户，共享团队关系与协作边界。" },
-    { icon: <CreditCard />, title: "额度与账单", copy: "集中查看会员、模型额度、钱包与账单，让使用更透明。" },
-    { icon: <Settings />, title: "产品设置边界", copy: "看清 UniHub 与产品各自负责的设置，安全进入对应工作台。" },
-  ];
-  const steps = [
-    ["01", "创建或选择账户", "用个人账户开始，也可以切换到已加入的团队。"],
-    ["02", "连接你的产品", "查看产品会员、模型额度和可用的协作能力。"],
-    ["03", "管理使用与资金", "从一个入口核对额度、账单、钱包和支付自动化。"],
-    ["04", "回到产品完成工作", "产品保留自己的工作区和运行时设置，UniHub 负责统一连接。"],
-  ];
+type PortalView = "home" | "guide" | "products";
+function portalViewFromPath(): PortalView {
+  if (window.location.pathname === "/guide") return "guide";
+  if (window.location.pathname === "/products") return "products";
+  return "home";
+}
+
+type PortalActionProps = {
+  authenticated: boolean;
+  onOpenConsole?: () => void;
+  compact?: boolean;
+};
+function PortalAction({ authenticated, onOpenConsole, compact = false }: PortalActionProps) {
+  const href = authenticated ? "/console" : "/auth/login";
+  const label = authenticated ? "进入控制台" : "登录归一（UniHub）";
+  return (
+    <a
+      className={compact ? "button portal-cta portal-cta-compact" : "button portal-cta"}
+      href={href}
+      onClick={authenticated ? (event) => {
+        event.preventDefault();
+        window.history.pushState({}, "", "/console");
+        onOpenConsole?.();
+      } : undefined}
+    >
+      {label} <ArrowRight size={compact ? 16 : 17} />
+    </a>
+  );
+}
+
+function ProductPortal({ sandbox, authenticated = false, onOpenConsole }: { sandbox?: boolean; authenticated?: boolean; onOpenConsole?: () => void }) {
+  const [view, setView] = useState<PortalView>(portalViewFromPath);
+  const navigate = (next: PortalView) => {
+    const path = next === "home" ? "/" : `/${next}`;
+    window.history.pushState({}, "", path);
+    setView(next);
+  };
   return (
     <div className="portal-page">
       <header className="portal-nav">
-        <a className="portal-brand" href="/">
+        <a className="portal-brand" href="/" onClick={(event) => { event.preventDefault(); navigate("home"); }}>
           <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
           <span>归一</span>
         </a>
         <nav aria-label="产品导航">
-          <a href="#product">产品能力</a>
-          <a href="#how-it-works">使用方式</a>
-          <a href="#boundaries">设置边界</a>
+          <a className={view === "home" ? "active" : ""} href="/" onClick={(event) => { event.preventDefault(); navigate("home"); }}>首页</a>
+          <a className={view === "guide" ? "active" : ""} href="/guide" onClick={(event) => { event.preventDefault(); navigate("guide"); }}><BookOpen size={15} />使用指南</a>
+          <a className={view === "products" ? "active" : ""} href="/products" onClick={(event) => { event.preventDefault(); navigate("products"); }}>产品矩阵</a>
         </nav>
         <div className="portal-actions">
-          <a className="portal-login" href="/auth/login">登录归一（UniHub）</a>
-          <a className="button portal-cta" href="/auth/login">进入控制台 <ArrowRight size={16} /></a>
+          <PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} compact />
         </div>
       </header>
       <main>
-        <section className="portal-hero">
-          <div className="portal-hero-copy">
-            <h1>一个身份，<span>连接你的产品。</span></h1>
-            <p>用一个 UniHub 账户，统一访问和管理所有产品。身份、权限、账单与额度被妥善连接，让协作更简单，体验更一致。</p>
-            <div className="portal-hero-actions">
-              <a className="button portal-cta" href="/auth/login">进入控制台 <ArrowRight size={17} /></a>
-              <a className="button portal-secondary" href="#product">了解产品能力</a>
-            </div>
-            {sandbox && <Notice>测试环境 · 不涉及真实支付</Notice>}
-          </div>
-          <div className="portal-console-preview" aria-label="UniHub 控制台预览">
-            <div className="preview-topbar"><strong>UniHub</strong><span className="preview-avatar">N</span></div>
-            <div className="preview-body">
-              <div className="preview-sidebar"><span className="selected">⌂　账户概览</span><span>▣　产品与服务</span><span>♧　团队与权限</span><span>▤　账单与额度</span><span>⚙　设置</span></div>
-              <div className="preview-content">
-                <div className="preview-heading"><span>账户概览</span><small>统一管理你的产品、团队与账单。</small></div>
-                <div className="preview-metrics"><span><b>3</b>已启用产品</span><span><b>2</b>团队成员</span><span><b>¥ 0.00</b>账户余额</span></div>
-                <div className="preview-products"><strong>我的产品</strong><span><i className="preview-dot teal" />SuperWagie <small>已启用　›</small></span><span><i className="preview-dot blue" />AgentWiki <small>已启用　›</small></span><span><i className="preview-dot violet" />llmrouter <small>已启用　›</small></span></div>
-              </div>
-            </div>
-          </div>
-        </section>
-        <section className="portal-section portal-intro" id="product">
-          <div className="portal-section-heading"><h2>从账户开始，让生产力自然连接</h2><p>UniHub 将身份、协作、账单与设置整合在一起，帮助你更高效地使用所有产品。</p></div>
-          <div className="portal-capabilities">
-            {capabilities.map(({ icon, title, copy }) => <article key={title}><div className="portal-capability-icon">{icon}</div><h3>{title}</h3><p>{copy}</p><a href="#how-it-works">了解更多 <ArrowRight size={14} /></a></article>)}
-          </div>
-        </section>
-        <section className="portal-section portal-flow" id="how-it-works">
-          <div className="portal-section-heading"><h2>一套账户，四步开始</h2><p>把账户关系留在 UniHub，把具体工作留在产品里。</p></div>
-          <div className="portal-steps">{steps.map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}</div>
-        </section>
-        <section className="portal-section portal-boundaries" id="boundaries">
-          <div><span className="portal-overline">设置边界</span><h2>统一连接，保留产品自己的工作方式</h2><p>UniHub 管理身份、账户、会员、额度和账单。模型提供商、项目、会话、提示词、插件与通知偏好，继续由每个产品负责。</p></div>
-          <div className="portal-boundary-list"><span><b>UniHub</b>身份 · 团队 · 会员 · 额度 · 钱包 · 账单</span><span><b>产品工作台</b>模型 · 项目 · 知识库 · 会话 · 运行时偏好</span></div>
-        </section>
-        <section className="portal-final-cta"><h2>现在开始，进入你的 UniHub 控制台</h2><p>统一管理产品、团队、账单与设置，让一切更简单、更高效。</p><a className="button portal-cta" href="/auth/login">进入控制台 <ArrowRight size={17} /></a></section>
+        {view === "home" && <PortalHome authenticated={authenticated} sandbox={sandbox} onOpenConsole={onOpenConsole} onNavigate={navigate} />}
+        {view === "guide" && <PortalGuide authenticated={authenticated} onOpenConsole={onOpenConsole} onNavigate={navigate} />}
+        {view === "products" && <PortalProducts authenticated={authenticated} onOpenConsole={onOpenConsole} onNavigate={navigate} />}
       </main>
       <footer className="portal-footer"><span>归一 UniHub · 统一身份与账户中心</span><span>© 2026 UniHub</span></footer>
     </div>
   );
+}
+
+type PortalPageProps = {
+  authenticated: boolean;
+  onOpenConsole?: () => void;
+  onNavigate: (view: PortalView) => void;
+};
+function PortalHome({ authenticated, sandbox, onOpenConsole, onNavigate }: PortalPageProps & { sandbox?: boolean }) {
+  const capabilities = [
+    { icon: <CircleUserRound />, title: "一个身份", copy: "个人与团队账户由 UniHub 统一承载，登录一次即可连接你的产品。" },
+    { icon: <Users />, title: "一套关系", copy: "成员、角色与付费账户保持一致，跨产品协作不再重复配置。" },
+    { icon: <CreditCard />, title: "一处核对", copy: "会员、模型额度、钱包与账单集中呈现，使用和资金更清楚。" },
+  ];
+  const products = [
+    ["SuperWagie", "AI 工作台", "在桌面端完成写作、知识与自动化工作。", "teal"],
+    ["AgentWiki", "知识协作", "沉淀页面、经验与上下文，让人和 Agent 共享知识。", "blue"],
+    ["llmrouter", "模型服务", "为接入产品提供统一的模型路由、额度与用量能力。", "violet"],
+  ];
+  return (
+    <>
+      <section className="portal-hero">
+        <div className="portal-hero-copy">
+          <h1>一个身份，<span>连接你的产品。</span></h1>
+          <p>UniHub 是所有产品共用的账户入口。登录、团队、会员、额度与账单在这里统一管理，具体工作仍回到最适合它的产品里完成。</p>
+          <div className="portal-hero-actions">
+            <PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} />
+            <a className="portal-guide-link" href="/guide" onClick={(event) => { event.preventDefault(); onNavigate("guide"); }}>先看使用指南 <ArrowRight size={15} /></a>
+          </div>
+          {sandbox && <Notice>测试环境 · 不涉及真实支付</Notice>}
+        </div>
+        <aside className="portal-welcome" aria-label="UniHub 入口">
+          <img src="/assets/unihub-logo-v1.png" alt="" />
+          <h2>{authenticated ? "欢迎回来" : "从这里开始"}</h2>
+          <p>{authenticated ? "继续管理你的产品、账户与团队" : "登录 UniHub，开始连接你的产品"}</p>
+          <PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} />
+        </aside>
+      </section>
+      <section className="portal-section portal-concept">
+        <div className="portal-section-heading"><span className="portal-kicker">核心概念</span><h2>把账户关系留在 UniHub</h2><p>产品各自保持自己的工作方式，UniHub 负责把身份与账户能力稳定地连接起来。</p></div>
+        <div className="portal-capabilities">
+          {capabilities.map(({ icon, title, copy }) => <article key={title}><div className="portal-capability-icon">{icon}</div><h3>{title}</h3><p>{copy}</p></article>)}
+        </div>
+      </section>
+      <section className="portal-section portal-products-section">
+        <div className="portal-section-heading"><span className="portal-kicker">产品矩阵</span><h2>从一个账户进入每个产品</h2><p>UniHub 连接产品，不替产品承担工作台本身的设置。</p></div>
+        <div className="portal-product-grid">
+          {products.map(([name, type, copy, tone]) => <article className={`portal-product-card ${tone}`} key={name}><div className="portal-product-mark"><Box size={20} /></div><div><span>{type}</span><h3>{name}</h3></div><p>{copy}</p><a href="/products" onClick={(event) => { event.preventDefault(); onNavigate("products"); }}>查看接入说明 <ArrowRight size={14} /></a></article>)}
+        </div>
+      </section>
+      <section className="portal-section portal-flow">
+        <div className="portal-section-heading"><span className="portal-kicker">开始使用</span><h2>从登录到使用，三步开始</h2></div>
+        <div className="portal-steps"><article><span>01</span><h3>登录 UniHub</h3><p>使用统一身份登录，个人账户会自动准备好。</p></article><article><span>02</span><h3>选择付费账户</h3><p>按需切换个人或团队账户，成员和权限由账户决定。</p></article><article><span>03</span><h3>进入产品工作</h3><p>从产品矩阵选择工作入口，继续使用产品自己的工作台。</p></article></div>
+      </section>
+    </>
+  );
+}
+
+function PortalGuide({ authenticated, onOpenConsole, onNavigate }: PortalPageProps) {
+  const items = [
+    ["01", "登录 UniHub", "点击右上角主入口完成登录。登录态下同一个入口会直接显示“进入控制台”。"],
+    ["02", "选择账户", "在控制台顶部选择个人账户或团队账户。账户决定成员、角色、会员、额度与账单范围。"],
+    ["03", "进入产品", "从产品矩阵选择工作入口，再回到对应产品完成项目、会话和运行时工作。"],
+    ["04", "核对使用", "会员、模型额度、钱包与账单在 UniHub 查看；具体用量由产品和模型服务按接入协议记录。"],
+  ];
+  return <>
+    <section className="portal-page-title"><span className="portal-kicker">使用指南</span><h1>从账户开始，把每一步走清楚</h1><p>UniHub 负责统一连接，产品负责具体工作。你可以按这条路径完成登录、选账户、进产品和核对用量。</p><PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} /></section>
+    <section className="portal-section portal-guide-section"><div className="portal-guide-list">{items.map(([number, title, copy]) => <article key={number}><span>{number}</span><div><h2>{title}</h2><p>{copy}</p></div></article>)}</div></section>
+    <section className="portal-section portal-boundary-section"><div><span className="portal-kicker">账户关系</span><h2>UniHub 管账户，产品提供工作</h2><p>UniHub 统一身份、账户、团队成员、会员、额度、钱包和账单；产品负责提供具体工作空间和运行服务。</p></div><div className="portal-boundary-list"><div><b>在 UniHub 完成</b><span>登录 · 账户 · 成员 · 会员 · 额度 · 钱包 · 账单</span></div><div><b>在产品工作区完成</b><span>工作项目 · 知识库 · 会话 · 运行任务</span></div></div></section>
+    <section className="portal-guide-next"><h2>还没决定从哪里开始？</h2><p>先看看当前已接入的产品，再选择最适合你的工作入口。</p><a href="/products" onClick={(event) => { event.preventDefault(); onNavigate("products"); }}>查看产品矩阵 <ArrowRight size={16} /></a></section>
+  </>;
+}
+
+function PortalProducts({ authenticated, onOpenConsole, onNavigate }: PortalPageProps) {
+  const products = [
+    ["SuperWagie", "AI 工作台", "写作、知识、自动化与桌面端工作流。", "已接入"],
+    ["AgentWiki", "知识协作", "页面、来源、图谱与 Agent 共同知识。", "已接入"],
+    ["llmrouter", "模型服务", "统一模型路由、额度消耗与用量记录。", "已接入"],
+  ];
+  return <>
+    <section className="portal-page-title"><span className="portal-kicker">产品矩阵</span><h1>一个账户，连接正在使用的产品</h1><p>产品接入 UniHub 后，共享统一身份与账户能力；每个产品仍保留自己的工作台和使用方式。</p><PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} /></section>
+    <section className="portal-section portal-products-detail"><div className="portal-product-grid">{products.map(([name, type, copy, status]) => <article className="portal-product-card" key={name}><div className="portal-product-card-top"><div className="portal-product-mark"><Box size={20} /></div><span className="portal-status">{status}</span></div><span>{type}</span><h2>{name}</h2><p>{copy}</p><div className="portal-product-meta"><span>统一登录</span><span>账户额度</span><span>成员权限</span></div></article>)}</div></section>
+    <section className="portal-guide-next"><h2>需要更具体的使用路径？</h2><p>使用指南会告诉你每一步由 UniHub 还是产品本身负责。</p><a href="/guide" onClick={(event) => { event.preventDefault(); onNavigate("guide"); }}>打开使用指南 <ArrowRight size={16} /></a></section>
+  </>;
 }
 
 function AccountConsole({
@@ -471,7 +553,6 @@ function AccountConsole({
     wallets: "统一钱包与产品钱包分开记账，资金始终归属当前账户。",
     bills: "核对会员订单、退款与钱包记账状态。",
     members: "管理当前团队的访问与角色。",
-    "product-settings": "查看每个产品的设置边界，从这里进入产品专属设置。",
     settings: "授权须明确开启，自动续费与自动划拨分别管理。",
   };
   const subsTable = (data: Subscription[]) => (
@@ -754,9 +835,6 @@ function AccountConsole({
           onTeamCreated={refreshAccounts}
         />
       )}
-      {page === "product-settings" && (
-        <ProductSettings products={products.data || []} />
-      )}
       {page === "settings" &&
         (finance ? (
           <SettingsPage {...shared} settings={settings} />
@@ -998,86 +1076,6 @@ export function OperationTable({
       </ResourceState>
     </Panel>
   );
-}
-
-function ProductSettings({ products }: { products: Product[] }) {
-  return (
-    <section className="product-settings-page">
-      <Panel className="settings-intro">
-        <div className="settings-intro-icon"><ShieldCheck size={25} /></div>
-        <div>
-          <h2>设置边界清晰，账户体验保持一致</h2>
-          <p>UniHub 管理身份、账户、会员、额度和账单；产品自己的工作方式仍由产品设置负责。</p>
-        </div>
-      </Panel>
-      {products.length ? (
-        <div className="product-settings-grid">
-          {products.map((product) => {
-            const link = productSettingsLink(product.id);
-            const localSettings = productLocalSettings(product.id);
-            return (
-              <article className="product-settings-card" key={product.id}>
-                <div className="product-settings-card-head">
-                  <div className="product-settings-logo"><Box size={21} /></div>
-                  <div>
-                    <h2>{product.name}</h2>
-                    <span className="status good">已接入 UniHub</span>
-                  </div>
-                </div>
-                <div className="ownership-block">
-                  <h3>UniHub 管理</h3>
-                  <p>{productManagedSummary(product)}</p>
-                </div>
-                <div className="ownership-block local">
-                  <h3>产品内设置</h3>
-                  <ul>
-                    {localSettings.map((setting) => <li key={setting}>{setting}</li>)}
-                  </ul>
-                </div>
-                {link ? (
-                  <a className="button secondary product-settings-link" href={link} target="_blank" rel="noreferrer">
-                    打开 {product.name} 设置 <ExternalLink size={15} />
-                  </a>
-                ) : (
-                  <span className="settings-link-note">产品设置入口即将提供</span>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      ) : (
-        <Empty title="暂无已接入产品" />
-      )}
-    </section>
-  );
-}
-
-function productManagedSummary(product: Product) {
-  const profile = product.billing_profile;
-  const items: string[] = [];
-  if (!profile || profile.subscription.enabled) items.push("会员");
-  if (!profile || profile.included_credits.enabled || profile.usage.enabled) items.push("模型额度");
-  if (profile?.addons.enabled) items.push("加量包");
-  items.push("钱包与账单");
-  return items.join("、");
-}
-
-function productLocalSettings(id: string) {
-  const settings: Record<string, string[]> = {
-    superwagie: ["模型提供商与 API Key", "会话与权限", "项目与技能", "外观与通知"],
-    agentwiki: ["空间与页面权限", "知识库与索引", "模型调用", "通知偏好"],
-    llmrouter: ["模型路由与费率", "API 访问", "用量与日志", "通知偏好"],
-  };
-  return settings[id] || ["产品工作区", "运行时偏好", "访问与通知"];
-}
-
-function productSettingsLink(id: string) {
-  const links: Record<string, string> = {
-    superwagie: "https://superwagie.quukk.com/settings",
-    agentwiki: "https://agentwiki.quukk.com/settings",
-    llmrouter: "https://llmapi.quukk.com/console",
-  };
-  return links[id];
 }
 
 function ProfileSettings({
