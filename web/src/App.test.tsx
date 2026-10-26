@@ -87,6 +87,7 @@ it("lets an authenticated user open the product portal and return to the console
   expect(await screen.findByRole("heading", { name: "账户概览" })).toBeDefined();
   fireEvent.click(screen.getByRole("link", { name: /归一 UniHub/ }));
   expect(await screen.findByRole("heading", { name: /一个身份，/ })).toBeDefined();
+  expect(screen.getByRole("link", { name: /Alice/ })).toBeDefined();
   fireEvent.click(screen.getAllByRole("link", { name: "进入控制台" })[0]);
   expect(await screen.findByRole("heading", { name: "账户概览" })).toBeDefined();
 });

@@ -189,23 +189,6 @@ a {
   width: 3px;
   border-radius: 4px;
 }
-.sidebar .portal-links {
-  margin: 0 0 18px;
-  padding: 0 0 16px;
-  gap: 3px;
-  border-bottom: 1px solid #edf2f4;
-}
-.sidebar .portal-links button {
-  min-height: 38px;
-  padding: 8px 23px;
-  gap: 13px;
-  color: #5d7380;
-  font-size: 13px;
-}
-.sidebar .portal-links button:hover {
-  color: var(--teal);
-  background: #f4f8f9;
-}
 .sidebar svg {
   stroke-width: 1.7;
 }
@@ -229,6 +212,30 @@ a {
   gap: 25px;
   background: #fff;
   border-bottom: 1px solid #edf2f4;
+}
+.console-topnav {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: auto;
+}
+.console-topnav button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #607481;
+  background: transparent;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.console-topnav button:hover,
+.console-topnav button:last-child {
+  color: var(--teal);
+  background: #edf8f8;
 }
 .account-control {
   display: flex;
@@ -1380,6 +1387,29 @@ td strong {
 }
 .portal-nav nav a:hover,
 .portal-nav nav a.active { color: #2563eb; }
+.portal-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 12px;
+  color: #526477;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.portal-user-avatar {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: #2563eb;
+  background: #e8f0ff;
+  font-size: 12px;
+  font-weight: 750;
+}
+.portal-user:hover { color: #2563eb; }
 .portal-cta {
   min-height: 44px;
   padding: 11px 18px;
@@ -1590,6 +1620,8 @@ td strong {
   .portal-brand img { width: 99px; }
   .portal-brand span { padding-left: 8px; }
   .portal-nav nav { display: none; }
+  .portal-user { margin-left: auto; font-size: 12px; }
+  .portal-user span:not(.portal-user-avatar) { display: none; }
   .portal-hero { display: block; min-height: 0; padding: 57px 18px 64px; }
   .portal-hero-copy h1,
   .portal-page-title h1 { font-size: 45px; letter-spacing: -1.8px; }

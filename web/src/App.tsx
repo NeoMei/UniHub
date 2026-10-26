@@ -3,6 +3,7 @@ import {
   ArrowRight,
   BookOpen,
   Box,
+  ChevronDown,
   CircleUserRound,
   CreditCard,
   FileText,
@@ -178,6 +179,8 @@ export default function App() {
       <ProductPortal
         sandbox={session.data.sandbox}
         authenticated
+        user={session.data.user}
+        profile={profileView || profile.data}
         onOpenConsole={() => setPortalOpen(false)}
       />
     );
@@ -196,11 +199,6 @@ export default function App() {
           <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
           <span>归一 · 统一身份与账户中心</span>
         </a>
-        <nav className="portal-links" aria-label="产品站导航">
-          <button onClick={() => openPortal("home")}><House size={17} /><span>首页</span></button>
-          <button onClick={() => openPortal("guide")}><BookOpen size={17} /><span>使用指南</span></button>
-          <button onClick={() => openPortal("products")}><Box size={17} /><span>产品矩阵</span></button>
-        </nav>
         <nav aria-label="主导航">
           {navigation.map(({ id, label, icon: Icon }) => (
             <button
@@ -221,6 +219,12 @@ export default function App() {
       </aside>
       <div className="workspace">
         <header className="topbar">
+          <nav className="console-topnav" aria-label="产品站导航">
+            <button onClick={() => openPortal("home")}><House size={17} /><span>首页</span></button>
+            <button onClick={() => openPortal("guide")}><BookOpen size={17} /><span>使用指南</span></button>
+            <button onClick={() => openPortal("products")}><Box size={17} /><span>产品矩阵</span></button>
+            <button onClick={() => setPage("overview")}><CircleUserRound size={17} /><span>控制台</span></button>
+          </nav>
           <div className="account-control">
             <CircleUserRound size={18} />
             <label className="sr-only" htmlFor="account">
@@ -326,7 +330,7 @@ function PortalAction({ authenticated, onOpenConsole }: PortalActionProps) {
   );
 }
 
-function ProductPortal({ sandbox, authenticated = false, onOpenConsole }: { sandbox?: boolean; authenticated?: boolean; onOpenConsole?: () => void }) {
+function ProductPortal({ sandbox, authenticated = false, user, profile, onOpenConsole }: { sandbox?: boolean; authenticated?: boolean; user?: Session["user"]; profile?: Profile; onOpenConsole?: () => void }) {
   const [view, setView] = useState<PortalView>(portalViewFromPath);
   useEffect(() => {
     const onPopState = () => setView(portalViewFromPath());
@@ -351,6 +355,7 @@ function ProductPortal({ sandbox, authenticated = false, onOpenConsole }: { sand
           <a className={view === "products" ? "active" : ""} href="/products" onClick={(event) => { event.preventDefault(); navigate("products"); }}>产品矩阵</a>
           <a href={authenticated ? "/console" : "/auth/login"} onClick={authenticated ? (event) => { event.preventDefault(); window.history.replaceState({}, "", "/console"); onOpenConsole?.(); } : undefined}>控制台</a>
         </nav>
+        {authenticated && <a className="portal-user" href="/console" onClick={(event) => { event.preventDefault(); window.history.replaceState({}, "", "/console"); onOpenConsole?.(); }}><span className="portal-user-avatar">{(profile?.display_name || user?.name || "U").slice(0, 1).toUpperCase()}</span><span>{profile?.display_name || user?.name || "我的账户"}</span><ChevronDown size={15} /></a>}
       </header>
       <main>
         {view === "home" && <PortalHome authenticated={authenticated} sandbox={sandbox} onOpenConsole={onOpenConsole} onNavigate={navigate} />}
