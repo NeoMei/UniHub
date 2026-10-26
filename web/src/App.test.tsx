@@ -108,3 +108,64 @@ it("shows product-owned prepaid guidance and zero-credit memberships from existi
   expect(screen.queryByText(/每月包含额度/)).toBeNull();
   expect(calls.some((path) => /billing-profile|\/(wallets|orders|settings|operations)$/.test(path))).toBe(false);
 });
+it("loads the user profile and shows avatar plus account settings menu", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const data = path === "/auth/session"
+      ? { authenticated: true, sandbox: false, user: { id: "u1", name: "Alice" }, csrf_token: "csrf" }
+      : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }]
+      : path === "/v1/me/profile" ? { id: "u1", username: "alice", display_name: "Alice Zhang", avatar_url: "/v1/me/avatar", email: "alice@example.com", version: "1" }
+      : [];
+    return new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json" } });
+  }));
+  render(<App />);
+  const avatar = await screen.findByRole("img", { name: "Alice Zhang" });
+  expect(avatar.getAttribute("src")).toBe("/v1/me/avatar?version=1");
+  fireEvent.click(screen.getByRole("button", { name: /账户设置/ }));
+  expect(await screen.findByRole("heading", { name: "账户设置" })).toBeDefined();
+  expect(screen.getByText("alice@example.com")).toBeDefined();
+});
+it("shows product-owned settings with an explicit UniHub ownership boundary", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const data = path === "/auth/session"
+      ? { authenticated: true, sandbox: false, user: { id: "u1", name: "Alice" }, csrf_token: "csrf" }
+      : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }]
+      : path === "/v1/me/profile" ? { id: "u1", username: "alice", display_name: "Alice Zhang", email: "alice@example.com", version: "1" }
+      : path === "/v1/products" ? [{ id: "superwagie", name: "SuperWagie" }, { id: "agentwiki", name: "AgentWiki" }]
+      : [];
+    return new Response(JSON.stringify(data), { status: 200 });
+  }));
+  render(<App />);
+  await screen.findByRole("heading", { name: "账户概览" });
+  fireEvent.click(screen.getByRole("button", { name: "产品设置" }));
+  expect(await screen.findByRole("heading", { name: "产品设置" })).toBeDefined();
+  expect(screen.getAllByText("UniHub 管理")).toHaveLength(2);
+  expect(screen.getAllByText("会员、模型额度、钱包与账单")).toHaveLength(2);
+  expect(screen.getAllByText("产品内设置")).toHaveLength(2);
+  expect(screen.getByText("模型提供商与 API Key")).toBeDefined();
+  expect(screen.getByRole("link", { name: /打开 SuperWagie 设置/ }).getAttribute("href")).toBe("https://superwagie.quukk.com/settings");
+});
+it("saves the display name and submits password changes from account settings", async () => {
+  const calls: Array<{ path: string; init?: RequestInit }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    calls.push({ path, init });
+    const data = path === "/auth/session"
+      ? { authenticated: true, sandbox: false, user: { id: "u1", name: "Alice" }, csrf_token: "csrf" }
+      : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }]
+      : path === "/v1/me/profile" && init?.method === "PATCH" ? { id: "u1", username: "alice", display_name: "New Alice", email: "alice@example.com", version: "2" }
+      : path === "/v1/me/profile" ? { id: "u1", username: "alice", display_name: "Alice", email: "alice@example.com", version: "1" }
+      : path === "/v1/me/password" ? undefined
+      : [];
+    return new Response(data === undefined ? null : JSON.stringify(data), { status: path === "/v1/me/password" ? 204 : 200 });
+  }));
+  render(<App />);
+  await screen.findByRole("heading", { name: "账户概览" });
+  fireEvent.click(screen.getByRole("button", { name: /账户设置/ }));
+  fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "New Alice" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存个人资料" }));
+  await waitFor(() => expect(calls.some((call) => call.path === "/v1/me/profile" && call.init?.method === "PATCH")).toBe(true));
+  fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "old-password" } });
+  fireEvent.change(screen.getByLabelText("新密码"), { target: { value: "new-password" } });
+  fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "new-password" } });
+  fireEvent.click(screen.getByRole("button", { name: "更新密码" }));
+  await waitFor(() => expect(calls.some((call) => call.path === "/v1/me/password" && call.init?.method === "POST")).toBe(true));
+});

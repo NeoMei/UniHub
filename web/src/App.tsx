@@ -11,10 +11,13 @@ import {
   LogOut,
   RefreshCw,
   Settings,
+  SlidersHorizontal,
+  ExternalLink,
+  ShieldCheck,
   Users,
   Wallet as WalletIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { accountPath, errorText, idempotencyKey, request } from "./api";
 import type {
   Account,
@@ -26,6 +29,7 @@ import type {
   Order,
   Product,
   Session,
+  Profile,
   Subscription,
   Wallet,
 } from "./types";
@@ -59,6 +63,7 @@ export type Page =
   | "wallets"
   | "bills"
   | "members"
+  | "product-settings"
   | "settings";
 export type ActionSpec = {
   title: string;
@@ -84,7 +89,8 @@ const navigation = [
   { id: "wallets", label: "钱包与充值", icon: WalletIcon },
   { id: "bills", label: "账单", icon: CreditCard },
   { id: "members", label: "团队成员", icon: Users },
-  { id: "settings", label: "自动设置", icon: Settings },
+  { id: "product-settings", label: "产品设置", icon: SlidersHorizontal },
+  { id: "settings", label: "支付自动化", icon: Settings },
 ] as const;
 const roles: Record<string, string> = {
   owner: "所有者",
@@ -105,17 +111,24 @@ function initialAccount() {
 export default function App() {
   const [version, setVersion] = useState(0);
   const session = useResource<Session>("/auth/session", version);
+  const profile = useResource<Profile>(session.data?.authenticated ? "/v1/me/profile" : undefined, version);
+  const [profileView, setProfileView] = useState<Profile>();
   const accounts = useResource<Account[]>(
     session.data?.authenticated ? "/v1/accounts" : undefined,
     version,
   );
   const [selected, setSelected] = useState(initialAccount);
   const [page, setPage] = useState<Page>("overview");
+  const [profileOpen, setProfileOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
   const account = selected
     ? accounts.data?.find((a) => a.id === selected)
     : accounts.data?.[0];
+  useEffect(() => {
+    if (profile.data) setProfileView(profile.data);
+    else if (!session.data?.authenticated) setProfileView(undefined);
+  }, [profile.data, session.data?.authenticated]);
   useEffect(() => {
     if (accounts.data?.length && !selected) setSelected(accounts.data[0].id);
     if (selected && accounts.data?.some((item) => item.id === selected))
@@ -167,6 +180,7 @@ export default function App() {
         csrf: session.data?.csrf_token,
       });
       setSelected("");
+      setProfileView(undefined);
       window.sessionStorage.removeItem("unihub.account");
       setVersion((v) => v + 1);
     } catch (error) {
@@ -192,7 +206,10 @@ export default function App() {
               key={id}
               className={page === id ? "active" : ""}
               aria-current={page === id ? "page" : undefined}
-              onClick={() => setPage(id)}
+              onClick={() => {
+                setProfileOpen(false);
+                setPage(id);
+              }}
             >
               <Icon size={19} />
               <span>{label}</span>
@@ -233,10 +250,8 @@ export default function App() {
             )}
           </div>
           <div className="user-menu">
-            <span className="avatar">
-              {(session.data.user?.name || "U").slice(0, 1).toUpperCase()}
-            </span>
-            <span>{session.data.user?.name || "我的账户"}</span>
+            {(profileView || profile.data)?.avatar_url ? <img className="avatar avatar-image" src={`${(profileView || profile.data)!.avatar_url}?version=${encodeURIComponent((profileView || profile.data)!.version)}`} alt={(profileView || profile.data)?.display_name || "我的账户"} /> : <span className="avatar">{((profileView || profile.data)?.display_name || session.data.user?.name || "U").slice(0, 1).toUpperCase()}</span>}
+            <button className="profile-menu-button" aria-label="账户设置" onClick={() => setProfileOpen(true)}>{(profileView || profile.data)?.display_name || session.data.user?.name || "我的账户"}</button>
             <button
               className="icon-button"
               aria-label="退出登录"
@@ -253,7 +268,16 @@ export default function App() {
           {logoutError && <Notice kind="error">{logoutError}</Notice>}
           {accounts.error && <Notice kind="error">{accounts.error}</Notice>}
           {selected && accounts.data && !account && <Notice kind="error">所选账户不可访问，请明确选择一个账户。</Notice>}
-          {account ? (
+          {profileOpen ? (
+            <ProfileSettings
+              profile={profileView || profile.data}
+              loading={profile.loading}
+              error={profile.error}
+              session={session.data}
+              onClose={() => setProfileOpen(false)}
+              onChanged={setProfileView}
+            />
+          ) : account ? (
             <AccountConsole
               key={account.id}
               account={account}
@@ -392,6 +416,7 @@ function AccountConsole({
     wallets: "统一钱包与产品钱包分开记账，资金始终归属当前账户。",
     bills: "核对会员订单、退款与钱包记账状态。",
     members: "管理当前团队的访问与角色。",
+    "product-settings": "查看每个产品的设置边界，从这里进入产品专属设置。",
     settings: "授权须明确开启，自动续费与自动划拨分别管理。",
   };
   const subsTable = (data: Subscription[]) => (
@@ -673,7 +698,10 @@ function AccountConsole({
           canManage={managementRole(account.role)}
           onTeamCreated={refreshAccounts}
         />
-      )}{" "}
+      )}
+      {page === "product-settings" && (
+        <ProductSettings products={products.data || []} />
+      )}
       {page === "settings" &&
         (finance ? (
           <SettingsPage {...shared} settings={settings} />
@@ -914,5 +942,236 @@ export function OperationTable({
         )}
       </ResourceState>
     </Panel>
+  );
+}
+
+function ProductSettings({ products }: { products: Product[] }) {
+  return (
+    <section className="product-settings-page">
+      <Panel className="settings-intro">
+        <div className="settings-intro-icon"><ShieldCheck size={25} /></div>
+        <div>
+          <h2>设置边界清晰，账户体验保持一致</h2>
+          <p>UniHub 管理身份、账户、会员、额度和账单；产品自己的工作方式仍由产品设置负责。</p>
+        </div>
+      </Panel>
+      {products.length ? (
+        <div className="product-settings-grid">
+          {products.map((product) => {
+            const link = productSettingsLink(product.id);
+            const localSettings = productLocalSettings(product.id);
+            return (
+              <article className="product-settings-card" key={product.id}>
+                <div className="product-settings-card-head">
+                  <div className="product-settings-logo"><Box size={21} /></div>
+                  <div>
+                    <h2>{product.name}</h2>
+                    <span className="status good">已接入 UniHub</span>
+                  </div>
+                </div>
+                <div className="ownership-block">
+                  <h3>UniHub 管理</h3>
+                  <p>{productManagedSummary(product)}</p>
+                </div>
+                <div className="ownership-block local">
+                  <h3>产品内设置</h3>
+                  <ul>
+                    {localSettings.map((setting) => <li key={setting}>{setting}</li>)}
+                  </ul>
+                </div>
+                {link ? (
+                  <a className="button secondary product-settings-link" href={link} target="_blank" rel="noreferrer">
+                    打开 {product.name} 设置 <ExternalLink size={15} />
+                  </a>
+                ) : (
+                  <span className="settings-link-note">产品设置入口即将提供</span>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <Empty title="暂无已接入产品" />
+      )}
+    </section>
+  );
+}
+
+function productManagedSummary(product: Product) {
+  const profile = product.billing_profile;
+  const items: string[] = [];
+  if (!profile || profile.subscription.enabled) items.push("会员");
+  if (!profile || profile.included_credits.enabled || profile.usage.enabled) items.push("模型额度");
+  if (profile?.addons.enabled) items.push("加量包");
+  items.push("钱包与账单");
+  return items.join("、");
+}
+
+function productLocalSettings(id: string) {
+  const settings: Record<string, string[]> = {
+    superwagie: ["模型提供商与 API Key", "会话与权限", "项目与技能", "外观与通知"],
+    agentwiki: ["空间与页面权限", "知识库与索引", "模型调用", "通知偏好"],
+    llmrouter: ["模型路由与费率", "API 访问", "用量与日志", "通知偏好"],
+  };
+  return settings[id] || ["产品工作区", "运行时偏好", "访问与通知"];
+}
+
+function productSettingsLink(id: string) {
+  const links: Record<string, string> = {
+    superwagie: "https://superwagie.quukk.com/settings",
+    agentwiki: "https://agentwiki.quukk.com/settings",
+    llmrouter: "https://llmapi.quukk.com/console",
+  };
+  return links[id];
+}
+
+function ProfileSettings({
+  profile,
+  loading,
+  error,
+  session,
+  onClose,
+  onChanged,
+}: {
+  profile?: Profile;
+  loading: boolean;
+  error?: string;
+  session: Session;
+  onClose: () => void;
+  onChanged: (profile: Profile) => void;
+}) {
+  const [current, setCurrent] = useState(profile);
+  const [displayName, setDisplayName] = useState(profile?.display_name || "");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState("");
+  const [profileError, setProfileError] = useState("");
+  const [passwords, setPasswords] = useState({ current: "", next: "", confirm: "" });
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+
+  useEffect(() => {
+    setCurrent(profile);
+    setDisplayName(profile?.display_name || "");
+  }, [profile]);
+
+  async function saveProfile() {
+    setProfileError("");
+    setProfileMessage("");
+    setSavingProfile(true);
+    try {
+      const next = await request<Profile>("/v1/me/profile", {
+        method: "PATCH",
+        csrf: session.csrf_token,
+        body: { display_name: displayName.trim() },
+      });
+      setCurrent(next);
+      setProfileMessage("个人资料已保存。");
+      onChanged(next);
+    } catch (e) {
+      setProfileError((e as Error).message);
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  async function uploadAvatar(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!(file.type === "image/png" || file.type === "image/jpeg") || file.size > 512 * 1024) {
+      setProfileError("头像必须是 PNG 或 JPEG，且不超过 512KB。");
+      return;
+    }
+    setProfileError("");
+    setProfileMessage("");
+    setSavingProfile(true);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      const next = await request<Profile>("/v1/me/avatar", {
+        method: "PUT",
+        csrf: session.csrf_token,
+        body: { content_type: file.type, data_base64: btoa(binary) },
+      });
+      setCurrent(next);
+      setProfileMessage("头像已更新。");
+      onChanged(next);
+    } catch (e) {
+      setProfileError((e as Error).message);
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  async function changePassword(event: FormEvent) {
+    event.preventDefault();
+    setPasswordError("");
+    setPasswordMessage("");
+    if (passwords.next !== passwords.confirm) {
+      setPasswordError("两次输入的新密码不一致。");
+      return;
+    }
+    setSavingPassword(true);
+    try {
+      await request("/v1/me/password", {
+        method: "POST",
+        csrf: session.csrf_token,
+        body: { current_password: passwords.current, new_password: passwords.next },
+      });
+      setPasswords({ current: "", next: "", confirm: "" });
+      setPasswordMessage("密码已更新，请重新登录其他设备。");
+    } catch (e) {
+      setPasswordError((e as Error).message);
+    } finally {
+      setSavingPassword(false);
+    }
+  }
+
+  const avatar = current?.avatar_url ? `${current.avatar_url}?version=${encodeURIComponent(current.version)}` : "";
+  return (
+    <section className="profile-settings">
+      <div className="page-heading">
+        <div><h1>账户设置</h1><p>管理个人资料和登录安全，统一应用到所有产品。</p></div>
+        <button className="text-button" onClick={onClose}>返回账户概览</button>
+      </div>
+      {loading && <div className="loading" role="status">正在加载个人资料…</div>}
+      {error && <Notice kind="error">{error}</Notice>}
+      {!loading && !error && (
+        <div className="profile-settings-grid">
+          <Panel title="我的资料">
+            <div className="profile-hero">
+              {avatar ? <img className="profile-avatar" src={avatar} alt={current?.display_name || "我的账户"} /> : <span className="profile-avatar profile-avatar-fallback">{(current?.display_name || "U").slice(0, 1).toUpperCase()}</span>}
+              <label className="avatar-upload">更换头像<input type="file" accept="image/png,image/jpeg" onChange={uploadAvatar} disabled={savingProfile} /></label>
+            </div>
+            <div className="stack-form">
+              <label>显示名称<input value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label>
+              <dl>
+                <Detail label="登录邮箱">{current?.email || "—"}</Detail>
+                <Detail label="用户名">{current?.username || "—"}</Detail>
+              </dl>
+              {profileError && <Notice kind="error">{profileError}</Notice>}
+              {profileMessage && <Notice>{profileMessage}</Notice>}
+              <button onClick={saveProfile} disabled={savingProfile || !displayName.trim()}>保存个人资料</button>
+            </div>
+          </Panel>
+          <Panel title="登录与安全">
+            <div className="security-summary"><ShieldCheck size={20} /><div><strong>UniHub 统一身份</strong><p>认证由 Casdoor 管理，资料变更会同步到所有产品。</p></div></div>
+            <form className="stack-form" onSubmit={changePassword}>
+              <h3>修改密码</h3>
+              <label>当前密码<input type="password" autoComplete="current-password" value={passwords.current} onChange={(event) => setPasswords({ ...passwords, current: event.target.value })} /></label>
+              <label>新密码<input type="password" autoComplete="new-password" value={passwords.next} onChange={(event) => setPasswords({ ...passwords, next: event.target.value })} /></label>
+              <label>确认新密码<input type="password" autoComplete="new-password" value={passwords.confirm} onChange={(event) => setPasswords({ ...passwords, confirm: event.target.value })} /></label>
+              {passwordError && <Notice kind="error">{passwordError}</Notice>}
+              {passwordMessage && <Notice>{passwordMessage}</Notice>}
+              <button type="submit" disabled={savingPassword || !passwords.current || !passwords.next || !passwords.confirm}>更新密码</button>
+            </form>
+          </Panel>
+        </div>
+      )}
+    </section>
   );
 }
