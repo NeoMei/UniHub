@@ -7,8 +7,16 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import App from "./App";
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
+});
+afterAll(() => {
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
+});
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -223,4 +231,32 @@ it("saves the display name and submits password changes from account settings", 
   fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "new-password" } });
   fireEvent.click(screen.getByRole("button", { name: "更新密码" }));
   await waitFor(() => expect(calls.some((call) => call.path === "/v1/me/password" && call.init?.method === "POST")).toBe(true));
+});
+
+it("selects a newly created team after the create confirmation completes", async () => {
+  let created = false;
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    if (path === "/v1/accounts" && init?.method === "POST") {
+      created = true;
+      return new Response(JSON.stringify({ id: "team-new", name: "新团队", kind: "team", role: "owner" }), { status: 201 });
+    }
+    const data = path === "/auth/session"
+      ? { authenticated: true, sandbox: true, user: { id: "u1", name: "Alice" }, csrf_token: "csrf" }
+      : path === "/v1/accounts"
+        ? [
+            { id: "personal", name: "个人账户", kind: "personal", role: "owner" },
+            ...(created ? [{ id: "team-new", name: "新团队", kind: "team", role: "owner" }] : []),
+          ]
+        : path === "/v1/me/profile"
+          ? { id: "u1", username: "alice", display_name: "Alice", email: "alice@example.com", version: "1" }
+          : [];
+    return new Response(JSON.stringify(data), { status: 200 });
+  }));
+  render(<App />);
+  await screen.findByRole("heading", { name: "账户概览" });
+  fireEvent.click(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", { name: "团队成员" }));
+  fireEvent.change(screen.getByLabelText("团队名称"), { target: { value: "新团队" } });
+  fireEvent.click(screen.getByRole("button", { name: "创建团队" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
+  await waitFor(() => expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("team-new"));
 });

@@ -71,7 +71,7 @@ SDK不持久化 token、不写 Cookie/localStorage、不自动刷新。BFF 可�
 | `usage:read` | 来源产品调用列表、明细和汇总 |
 | `model-credentials:write` | 本来源产品短期模型凭证签发/撤销 |
 
-财务查询与命令仍须账户 owner 或 billing_admin。admin 管理普通成员不等于财务权限；新 owner 必须本人接受邀请；最后 owner 不可移除。邀请列表只含仍有效的待接受项，最多最近 100 条，没有通用分页。GET `/v1/invitations` 只看本人收件，GET `/v1/accounts/{account}/invitations` 仅团队 owner/admin 查看。
+财务查询与命令仍须账户 owner 或 billing_admin。admin 管理普通成员不等于财务权限；新 owner 必须本人接受邀请；最后 owner 不可移除。邀请列表只含仍有效的待接受项，最多最近 100 条，没有通用分页。GET `/v1/invitations` 只看本人收件，GET `/v1/accounts/{account}/invitations` 仅团队 owner/admin 查看；DELETE `/v1/accounts/{account}/invitations/{invitation}` 用于撤销待处理邀请，admin 只能撤销普通成员邀请。
 
 产品列表只返回获准资源，详情和命令先检查产品归属。请求体不能自称 actor、其他 account、费用或最终 usage。模型凭证 origin 缺省由服务端填写；显式其他 origin 被拒绝，撤销同样约束产品。可信预占/结算只对独立 llmrouter 服务身份开放，不属于产品 SDK。
 

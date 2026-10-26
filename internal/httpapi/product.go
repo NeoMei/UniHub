@@ -33,6 +33,7 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 		"GET /v1/accounts/{account}/members": "members:read",
 		"GET /v1/invitations":                "members:read", "GET /v1/accounts/{account}/invitations": "members:read",
 		"POST /v1/accounts/{account}/invitations": "members:write", "POST /v1/invitations/{invitation}/accept": "members:write",
+		"DELETE /v1/accounts/{account}/invitations/{invitation}": "members:write",
 		"PATCH /v1/accounts/{account}/members/{member}": "members:write", "DELETE /v1/accounts/{account}/members/{member}": "members:write",
 		"GET /v1/products": "catalog:read", "GET /v1/catalog": "catalog:read",
 		"GET /v1/accounts/{account}/subscriptions": "subscriptions:read", "GET /v1/accounts/{account}/credits": "credits:read",

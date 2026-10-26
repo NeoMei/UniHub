@@ -9,6 +9,7 @@ import {
 import { accountPath, idempotencyKey, request } from "./api";
 import type {
   Authorization,
+  Invitation,
   Member,
   Offer,
   Operation,
@@ -508,12 +509,16 @@ export function Members({
   session,
   act,
   members,
+  incomingInvitations,
+  teamInvitations,
   canManage,
   onTeamCreated,
 }: Shared & {
   members: Resource<Member[]>;
+  incomingInvitations: Resource<Invitation[]>;
+  teamInvitations: Resource<Invitation[]>;
   canManage: boolean;
-  onTeamCreated: () => void;
+  onTeamCreated: (accountId?: string) => void;
 }) {
   const [name, setName] = useState("");
   const [user, setUser] = useState("");
@@ -533,9 +538,9 @@ export function Members({
           。团队将拥有独立钱包、会员、额度与账单。
         </p>
       ),
-      onResult: () => {
+      onResult: (data) => {
         setName("");
-        onTeamCreated();
+        onTeamCreated((data as { id: string }).id);
       },
     });
   }
@@ -557,25 +562,51 @@ export function Members({
       },
     });
   }
-  function accept() {
+  function acceptById(id: string) {
     setError("");
     act({
       title: "确认接受团队邀请",
-      path: `/v1/invitations/${encodeURIComponent(invitation.trim())}/accept`,
+      path: `/v1/invitations/${encodeURIComponent(id)}/accept`,
       content: (
         <p>
           接受邀请后，此身份将加入该邀请指定的团队。邀请编号：
-          <span className="mono">{invitation.trim()}</span>
+          <span className="mono">{id}</span>
         </p>
       ),
-      onResult: () => {
+      onResult: (data) => {
         setInvitation("");
-        onTeamCreated();
+        onTeamCreated((data as { id: string }).id);
       },
     });
   }
+  function accept() {
+    if (invitation.trim()) acceptById(invitation.trim());
+  }
+  function roleLabel(value: string) {
+    return { owner: "所有者", admin: "管理员", billing_admin: "财务管理员", member: "成员" }[value] || value;
+  }
   return (
     <>
+      <Panel title="待处理的团队邀请">
+        <ResourceState resource={incomingInvitations} empty="暂无待处理邀请">
+          {(data) => (
+            <Table headers={["团队账户", "角色", "邀请编号", "操作"]}>
+              {data.map((item) => (
+                <tr key={item.id}>
+                  <td className="mono">{item.account_id}</td>
+                  <td>{roleLabel(item.role)}</td>
+                  <td className="mono selectable">{item.id}</td>
+                  <td>
+                    <button className="text-button" aria-label={`接受邀请 ${item.id}`} onClick={() => acceptById(item.id)}>
+                      接受
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </Table>
+          )}
+        </ResourceState>
+      </Panel>
       <Panel title={account.kind === "team" ? "团队成员" : "账户成员"}>
         <ResourceState resource={members} empty="暂无成员">
           {(data) => (
@@ -599,31 +630,31 @@ export function Members({
                     <td>
                       {m.user_id !== session.user?.id && (
                         <div className="row-actions">
-                          {m.role === "member" && account.role === "owner" && (
-                            <button
-                              className="text-button"
-                              onClick={() =>
-                                act({
-                                  title: "更改成员角色",
-                                  method: "PATCH",
-                                  path: accountPath(
-                                    account.id,
-                                    `members/${encodeURIComponent(m.user_id)}`,
-                                  ),
-                                  body: { role: "billing_admin" },
-                                  content: (
-                                    <p>
-                                      将 {m.name || m.user_id}{" "}
-                                      设为财务管理员，允许查看账单和管理资金授权。
-                                    </p>
-                                  ),
-                                })
-                              }
-                            >
-                              设为财务
-                            </button>
+                          {account.role === "owner" && m.role !== "owner" && (
+                            <label>
+                              <span className="sr-only">设置{m.name || m.user_id}角色</span>
+                              <select
+                                aria-label={`设置${m.name || m.user_id}角色`}
+                                value={m.role}
+                                onChange={(event) => {
+                                  const nextRole = event.target.value;
+                                  if (nextRole === m.role) return;
+                                  act({
+                                    title: "更改成员角色",
+                                    method: "PATCH",
+                                    path: accountPath(account.id, `members/${encodeURIComponent(m.user_id)}`),
+                                    body: { role: nextRole },
+                                    content: <p>将 {m.name || m.user_id} 设为{roleLabel(nextRole)}。</p>,
+                                  });
+                                }}
+                              >
+                                <option value="member">成员</option>
+                                <option value="admin">管理员</option>
+                                <option value="billing_admin">财务管理员</option>
+                              </select>
+                            </label>
                           )}
-                          {m.role !== "owner" && (
+                          {m.role !== "owner" && (account.role === "owner" || (account.role === "admin" && m.role === "member")) && (
                             <button
                               className="text-button danger"
                               onClick={() =>
@@ -656,6 +687,39 @@ export function Members({
           )}
         </ResourceState>
       </Panel>
+      {canManage && account.kind === "team" && (
+        <Panel title="团队待处理邀请">
+          <ResourceState resource={teamInvitations} empty="暂无待处理邀请">
+            {(data) => (
+              <Table headers={["受邀用户", "角色", "邀请编号", "操作"]}>
+                {data.map((item) => (
+                  <tr key={item.id}>
+                    <td className="mono">{item.recipient_id}</td>
+                    <td>{roleLabel(item.role)}</td>
+                    <td className="mono selectable">{item.id}</td>
+                    <td>
+                      <button
+                        className="text-button danger"
+                        aria-label={`撤销邀请 ${item.id}`}
+                        onClick={() =>
+                          act({
+                            title: "撤销团队邀请",
+                            method: "DELETE",
+                            path: accountPath(account.id, `invitations/${encodeURIComponent(item.id)}`),
+                            content: <p>撤销发给 {item.recipient_id} 的邀请。</p>,
+                          })
+                        }
+                      >
+                        撤销
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </Table>
+            )}
+          </ResourceState>
+        </Panel>
+      )}
       {canManage && account.kind === "team" && (
         <Panel title="邀请成员">
           <div className="inline-form">

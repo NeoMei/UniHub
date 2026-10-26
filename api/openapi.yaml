@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.5"
+  "version": "0.4.6"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -577,6 +577,45 @@
                 - "user_id"
                 - "role"
               "additionalProperties": false
+    "delete":
+      "operationId": "revokeInvitation"
+      "summary": "revokeInvitation"
+      "description": "Owner may revoke any pending invitation; admin may revoke member invitations."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "204":
+          "description": "No content"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "x-product-scopes":
+        - "members:write"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+        -
+          "name": "invitation"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
   "/v1/invitations/{invitation}/accept":
     "post":
       "operationId": "acceptInvitation"

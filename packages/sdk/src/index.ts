@@ -97,6 +97,7 @@ export class UniHubClient {
  members(account: string): Promise<Member[]>{return this.request('GET',this.path(account,'/members'));}
  invitations(account?: string): Promise<Invitation[]>{return this.request('GET',account?this.path(account,'/invitations'):'/v1/invitations');}
  invite(account: string,userId: string,role: string): Promise<Invitation>{return this.request('POST',this.path(account,'/invitations'),{body:{user_id:userId,role}});}
+revokeInvitation(account: string,id: string): Promise<void>{return this.request('DELETE',this.path(account,`/invitations/${segment(id)}`));}
  inviteAccept(id: string): Promise<Account>{return this.request('POST',`/v1/invitations/${segment(id)}/accept`);}
  changeMemberRole(account: string,member: string,role: string): Promise<void>{return this.request('PATCH',this.path(account,`/members/${segment(member)}`),{body:{role}});}
  removeMember(account: string,member: string): Promise<void>{return this.request('DELETE',this.path(account,`/members/${segment(member)}`));}

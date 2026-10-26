@@ -25,6 +25,7 @@ func TestExplicitProductScopesDoNotInheritLegacyRoutes(t *testing.T) {
 		{"GET /v1/me", "accounts:read", true},
 		{"GET /v1/accounts/{account}/wallets", "wallets:read", true},
 		{"POST /v1/accounts", "accounts:write", true},
+		{"DELETE /v1/accounts/{account}/invitations/{invitation}", "members:write", true},
 		{"POST /v1/accounts/{account}/orders", "orders:write", true},
 		{"GET /v1/accounts/{account}/credits", "accounts:read", false},
 		{"POST /ops/v1/offers", "orders:write", false},

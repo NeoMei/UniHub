@@ -23,6 +23,7 @@ import type {
   Account,
   Authorization,
   Batch,
+  Invitation,
   Member,
   Offer,
   Operation,
@@ -290,7 +291,10 @@ export default function App() {
               page={page}
               setPage={setPage}
               setBusy={setBusy}
-              refreshAccounts={() => setVersion((v) => v + 1)}
+              refreshAccounts={(accountId) => {
+                if (accountId) setSelected(accountId);
+                setVersion((v) => v + 1);
+              }}
             />
           ) : (
             !accounts.loading && <Empty title="暂无可访问的账户" />
@@ -517,7 +521,7 @@ function AccountConsole({
   page: Page;
   setPage: (p: Page) => void;
   setBusy: (v: boolean) => void;
-  refreshAccounts: () => void;
+  refreshAccounts: (accountId?: string) => void;
 }) {
   const [version, setVersion] = useState(0);
   const [action, setAction] = useState<ActionSpec & { key: string }>();
@@ -549,6 +553,16 @@ function AccountConsole({
   );
   const members = useResource<Member[]>(
     page === "members" ? accountPath(account.id, "members") : undefined,
+    version,
+  );
+  const incomingInvitations = useResource<Invitation[]>(
+    page === "members" ? "/v1/invitations" : undefined,
+    version,
+  );
+  const teamInvitations = useResource<Invitation[]>(
+    page === "members" && account.kind === "team" && managementRole(account.role)
+      ? accountPath(account.id, "invitations")
+      : undefined,
     version,
   );
   const settings = useResource<Authorization[]>(
@@ -903,6 +917,8 @@ function AccountConsole({
         <Members
           {...shared}
           members={members}
+          incomingInvitations={incomingInvitations}
+          teamInvitations={teamInvitations}
           canManage={managementRole(account.role)}
           onTeamCreated={refreshAccounts}
         />

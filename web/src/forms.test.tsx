@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { Catalog, SettingsPage } from "./forms";
+import { Catalog, Members, SettingsPage } from "./forms";
 import type { ActionSpec, Shared } from "./App";
-import type { Offer, Quote, Subscription } from "./types";
+import type { Invitation, Offer, Quote, Subscription } from "./types";
 // jsdom does not implement native dialog methods used by the real Modal.
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
@@ -129,4 +129,58 @@ it("requires explicit unchecked authorization opt-in and does not auto-enable fu
     purpose: "funding",
     version: 0,
   });
+});
+
+it("shows incoming and team pending invitations and accepts an incoming invitation", () => {
+  const act = vi.fn<(spec: ActionSpec) => void>();
+  const onTeamCreated = vi.fn();
+  const incoming: Invitation = { id: "incoming-1", account_id: "team-1", recipient_id: "u1", role: "member" };
+  render(
+    <Members
+      {...shared}
+      act={act}
+      account={{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }}
+      members={{ data: [], loading: false }}
+      incomingInvitations={{ data: [incoming], loading: false }}
+      teamInvitations={{ data: [], loading: false }}
+      canManage={false}
+      onTeamCreated={onTeamCreated}
+    />,
+  );
+  expect(screen.getByText("待处理的团队邀请")).toBeDefined();
+  expect(screen.getByText("team-1")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "接受邀请 incoming-1" }));
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({
+    path: "/v1/invitations/incoming-1/accept",
+  }));
+  act.mock.calls[0][0].onResult?.({ id: "team-1" });
+  expect(onTeamCreated).toHaveBeenCalledWith("team-1");
+});
+
+it("lets an owner change non-owner roles and revoke a pending team invitation", () => {
+  const act = vi.fn<(spec: ActionSpec) => void>();
+  const pending: Invitation = { id: "pending-1", account_id: "team-1", recipient_id: "u2", role: "member" };
+  render(
+    <Members
+      {...shared}
+      act={act}
+      account={{ id: "team-1", name: "团队", kind: "team", role: "owner" }}
+      members={{ data: [{ user_id: "u2", name: "成员", email: "", role: "member" }], loading: false }}
+      incomingInvitations={{ data: [], loading: false }}
+      teamInvitations={{ data: [pending], loading: false }}
+      canManage
+      onTeamCreated={() => {}}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("设置成员角色"), { target: { value: "admin" } });
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({
+    method: "PATCH",
+    path: "/v1/accounts/team-1/members/u2",
+    body: { role: "admin" },
+  }));
+  fireEvent.click(screen.getByRole("button", { name: "撤销邀请 pending-1" }));
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({
+    method: "DELETE",
+    path: "/v1/accounts/team-1/invitations/pending-1",
+  }));
 });

@@ -57,6 +57,30 @@ func (s *Store) Invite(ctx context.Context, actorID, accountID, recipientID, rol
 	return inv, nil
 }
 
+// RevokeInvitation invalidates a pending invitation without changing team membership.
+// Owners may revoke any role; admins may revoke only member invitations, matching Invite.
+func (s *Store) RevokeInvitation(ctx context.Context, actorID, accountID, invitationID string) error {
+	return s.teamMutation(ctx, actorID, accountID, func(tx pgx.Tx, actorRole string) error {
+		var role string
+		var accepted, revoked bool
+		err := tx.QueryRow(ctx, `SELECT role,accepted_at IS NOT NULL,revoked_at IS NOT NULL FROM account_invitations WHERE id=$1 AND account_id=$2`, invitationID, accountID).Scan(&role, &accepted, &revoked)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if accepted || revoked {
+			return ErrConflict
+		}
+		if actorRole != "owner" && (actorRole != "admin" || role != "member") {
+			return ErrForbidden
+		}
+		_, err = tx.Exec(ctx, `UPDATE account_invitations SET revoked_at=now() WHERE id=$1 AND accepted_at IS NULL AND revoked_at IS NULL`, invitationID)
+		return err
+	})
+}
+
 func (s *Store) AcceptInvitation(ctx context.Context, userID, invitationID string) (Account, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

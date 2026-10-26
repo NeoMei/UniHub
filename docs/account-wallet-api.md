@@ -11,6 +11,7 @@
 | POST /v1/accounts | 创建企业团队，body 为 `{"name":"团队名称"}` |
 | GET /v1/accounts/{account}/members | 读取团队成员 |
 | POST /v1/accounts/{account}/invitations | body `{"user_id":"受邀用户ID","role":"member"}`；不会发送邮件/消息 |
+| DELETE /v1/accounts/{account}/invitations/{invitation} | owner 可撤销任意待处理邀请；admin 可撤销普通成员邀请 |
 | POST /v1/invitations/{invitation}/accept | 仅受邀用户可接受 |
 | PATCH /v1/accounts/{account}/members/{member} | body `{"role":"member"}` |
 | DELETE /v1/accounts/{account}/members/{member} | 撤销团队成员资格；不能移除最后一个 owner |

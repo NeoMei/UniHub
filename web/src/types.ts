@@ -31,6 +31,12 @@ export type Member = {
   email: string;
   role: string;
 };
+export type Invitation = {
+  id: string;
+  account_id: string;
+  recipient_id: string;
+  role: string;
+};
 export type Operation = {
   id: string;
   account_id: string;

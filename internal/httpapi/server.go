@@ -109,6 +109,13 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		}
 		return respond(w, 201, a)
 	})
+	add("DELETE /v1/accounts/{account}/invitations/{invitation}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		if e := s.accounts.RevokeInvitation(r.Context(), u.ID, r.PathValue("account"), r.PathValue("invitation")); e != nil {
+			return e
+		}
+		w.WriteHeader(204)
+		return nil
+	})
 	add("POST /v1/invitations/{invitation}/accept", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		a, e := s.accounts.AcceptInvitation(r.Context(), u.ID, r.PathValue("invitation"))
 		if e != nil {

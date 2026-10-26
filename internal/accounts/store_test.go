@@ -338,6 +338,62 @@ func TestInvitationRequiresRecipientAcceptanceAndAdminCannotGrantFinance(t *test
 	}
 }
 
+func TestAuthorizedManagersCanRevokePendingInvitations(t *testing.T) {
+	s, ctx := setup(t)
+	owner := identity(t, s, ctx, "revoke-owner")
+	admin := identity(t, s, ctx, "revoke-admin")
+	member := identity(t, s, ctx, "revoke-member")
+	team, err := s.CreateTeam(ctx, owner.ID, "Revoke team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminInvite, err := s.Invite(ctx, owner.ID, team.ID, admin.ID, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AcceptInvitation(ctx, admin.ID, adminInvite.ID); err != nil {
+		t.Fatal(err)
+	}
+	memberInvite, err := s.Invite(ctx, admin.ID, team.ID, member.ID, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RevokeInvitation(ctx, admin.ID, team.ID, memberInvite.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AcceptInvitation(ctx, member.ID, memberInvite.ID); !errors.Is(err, accounts.ErrConflict) {
+		t.Fatalf("revoked invitation accepted: %v", err)
+	}
+	if _, err = s.Invite(ctx, owner.ID, team.ID, member.ID, "member"); err != nil {
+		t.Fatalf("revoked invitation still blocks replacement: %v", err)
+	}
+}
+
+func TestAdminCannotRevokeElevatedInvitation(t *testing.T) {
+	s, ctx := setup(t)
+	owner := identity(t, s, ctx, "revoke-elevated-owner")
+	admin := identity(t, s, ctx, "revoke-elevated-admin")
+	target := identity(t, s, ctx, "revoke-elevated-target")
+	team, err := s.CreateTeam(ctx, owner.ID, "Elevated revoke team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	adminInvite, err := s.Invite(ctx, owner.ID, team.ID, admin.ID, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AcceptInvitation(ctx, admin.ID, adminInvite.ID); err != nil {
+		t.Fatal(err)
+	}
+	ownerInvite, err := s.Invite(ctx, owner.ID, team.ID, target.ID, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RevokeInvitation(ctx, admin.ID, team.ID, ownerInvite.ID); !errors.Is(err, accounts.ErrForbidden) {
+		t.Fatalf("admin revoked elevated invitation: %v", err)
+	}
+}
+
 func TestLastOwnerCannotBeRemovedOrDemoted(t *testing.T) {
 	s, ctx := setup(t)
 	o := identity(t, s, ctx, "owner")
