@@ -296,14 +296,13 @@ function portalViewFromPath(): PortalView {
 type PortalActionProps = {
   authenticated: boolean;
   onOpenConsole?: () => void;
-  compact?: boolean;
 };
-function PortalAction({ authenticated, onOpenConsole, compact = false }: PortalActionProps) {
+function PortalAction({ authenticated, onOpenConsole }: PortalActionProps) {
   const href = authenticated ? "/console" : "/auth/login";
   const label = authenticated ? "进入控制台" : "登录归一（UniHub）";
   return (
     <a
-      className={compact ? "button portal-cta portal-cta-compact" : "button portal-cta"}
+      className="button portal-cta"
       href={href}
       onClick={authenticated ? (event) => {
         event.preventDefault();
@@ -311,7 +310,7 @@ function PortalAction({ authenticated, onOpenConsole, compact = false }: PortalA
         onOpenConsole?.();
       } : undefined}
     >
-      {label} <ArrowRight size={compact ? 16 : 17} />
+      {label} <ArrowRight size={17} />
     </a>
   );
 }
@@ -339,10 +338,8 @@ function ProductPortal({ sandbox, authenticated = false, onOpenConsole }: { sand
           <a className={view === "home" ? "active" : ""} href="/" onClick={(event) => { event.preventDefault(); navigate("home"); }}>首页</a>
           <a className={view === "guide" ? "active" : ""} href="/guide" onClick={(event) => { event.preventDefault(); navigate("guide"); }}><BookOpen size={15} />使用指南</a>
           <a className={view === "products" ? "active" : ""} href="/products" onClick={(event) => { event.preventDefault(); navigate("products"); }}>产品矩阵</a>
+          <a href={authenticated ? "/console" : "/auth/login"} onClick={authenticated ? (event) => { event.preventDefault(); window.history.replaceState({}, "", "/console"); onOpenConsole?.(); } : undefined}>控制台</a>
         </nav>
-        <div className="portal-actions">
-          <PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} compact />
-        </div>
       </header>
       <main>
         {view === "home" && <PortalHome authenticated={authenticated} sandbox={sandbox} onOpenConsole={onOpenConsole} onNavigate={navigate} />}

@@ -1363,7 +1363,6 @@ td strong {
 }
 .portal-nav nav a:hover,
 .portal-nav nav a.active { color: #2563eb; }
-.portal-actions { display: flex; align-items: center; margin-left: 12px; }
 .portal-cta {
   min-height: 44px;
   padding: 11px 18px;
@@ -1374,7 +1373,6 @@ td strong {
   font-weight: 700;
 }
 .portal-cta:hover { color: #fff; background: linear-gradient(135deg, #087f84, #1766d3); }
-.portal-cta-compact { min-height: 42px; padding: 10px 17px; font-size: 14px; }
 .portal-hero {
   display: grid;
   grid-template-columns: minmax(0, 1.06fr) minmax(360px, .84fr);
@@ -1561,8 +1559,6 @@ td strong {
   .portal-brand img { width: 99px; }
   .portal-brand span { padding-left: 8px; }
   .portal-nav nav { display: none; }
-  .portal-actions { margin-left: auto; }
-  .portal-cta-compact { min-height: 35px; padding: 8px 11px; font-size: 11px; }
   .portal-hero { display: block; min-height: 0; padding: 57px 18px 64px; }
   .portal-hero-copy h1,
   .portal-page-title h1 { font-size: 45px; letter-spacing: -1.8px; }
