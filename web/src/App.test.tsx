@@ -35,6 +35,21 @@ it("keeps a product-linked team selected across login and never falls back to pe
   await screen.findByText("所选账户不可访问，请明确选择一个账户。");
   expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("revoked");
 });
+it("shows the UniHub product portal before login", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const data = path === "/auth/session"
+      ? { authenticated: false, sandbox: true }
+      : [];
+    return new Response(JSON.stringify(data), { status: 200 });
+  }));
+  render(<App />);
+  const hero = await screen.findByRole("heading", { name: /一个身份/ });
+  expect(hero.textContent).toContain("连接你的产品");
+  expect(screen.getAllByRole("link", { name: "进入控制台" }).length).toBeGreaterThan(0);
+  expect(screen.getByRole("link", { name: "产品能力" }).getAttribute("href")).toBe("#product");
+  expect(screen.getByText("统一账户")).toBeDefined();
+  expect(screen.getByText("跨产品协作")).toBeDefined();
+});
 it("keeps team member cash and finance APIs out of the browser while allowing credits and memberships", async () => {
   const calls: string[] = [];
   vi.stubGlobal(

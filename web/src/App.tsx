@@ -150,27 +150,7 @@ export default function App() {
       </div>
     );
   if (!session.data?.authenticated)
-    return (
-      <div className="login-page">
-        <div className="login-brand">
-          <div className="login-brand-mark">
-            <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
-            <span>归一</span>
-          </div>
-          <h1>一个身份，连接你的产品。</h1>
-          <p>集中管理个人与团队账户、产品会员、模型额度与资金。</p>
-        </div>
-        <div className="login-card">
-          <h2>欢迎使用归一</h2>
-          <p>登录后，继续管理你的账户。</p>
-          {session.data?.sandbox && <Notice>测试环境 · 不涉及真实支付</Notice>}
-          <a className="button primary" href="/auth/login">
-            登录归一（UniHub） <ArrowRight size={17} />
-          </a>
-          <small>归一 UniHub · 统一身份与账户中心</small>
-        </div>
-      </div>
-    );
+    return <ProductPortal sandbox={session.data?.sandbox} />;
   async function logout() {
     setBusy(true);
     setLogoutError("");
@@ -295,6 +275,81 @@ export default function App() {
     </div>
   );
 }
+
+function ProductPortal({ sandbox }: { sandbox?: boolean }) {
+  const capabilities = [
+    { icon: <CircleUserRound />, title: "统一账户", copy: "一个账户连接个人与团队，统一管理身份、成员与权限。" },
+    { icon: <Users />, title: "跨产品协作", copy: "在不同产品之间切换付费账户，共享团队关系与协作边界。" },
+    { icon: <CreditCard />, title: "额度与账单", copy: "集中查看会员、模型额度、钱包与账单，让使用更透明。" },
+    { icon: <Settings />, title: "产品设置边界", copy: "看清 UniHub 与产品各自负责的设置，安全进入对应工作台。" },
+  ];
+  const steps = [
+    ["01", "创建或选择账户", "用个人账户开始，也可以切换到已加入的团队。"],
+    ["02", "连接你的产品", "查看产品会员、模型额度和可用的协作能力。"],
+    ["03", "管理使用与资金", "从一个入口核对额度、账单、钱包和支付自动化。"],
+    ["04", "回到产品完成工作", "产品保留自己的工作区和运行时设置，UniHub 负责统一连接。"],
+  ];
+  return (
+    <div className="portal-page">
+      <header className="portal-nav">
+        <a className="portal-brand" href="/">
+          <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
+          <span>归一</span>
+        </a>
+        <nav aria-label="产品导航">
+          <a href="#product">产品能力</a>
+          <a href="#how-it-works">使用方式</a>
+          <a href="#boundaries">设置边界</a>
+        </nav>
+        <div className="portal-actions">
+          <a className="portal-login" href="/auth/login">登录归一（UniHub）</a>
+          <a className="button portal-cta" href="/auth/login">进入控制台 <ArrowRight size={16} /></a>
+        </div>
+      </header>
+      <main>
+        <section className="portal-hero">
+          <div className="portal-hero-copy">
+            <h1>一个身份，<span>连接你的产品。</span></h1>
+            <p>用一个 UniHub 账户，统一访问和管理所有产品。身份、权限、账单与额度被妥善连接，让协作更简单，体验更一致。</p>
+            <div className="portal-hero-actions">
+              <a className="button portal-cta" href="/auth/login">进入控制台 <ArrowRight size={17} /></a>
+              <a className="button portal-secondary" href="#product">了解产品能力</a>
+            </div>
+            {sandbox && <Notice>测试环境 · 不涉及真实支付</Notice>}
+          </div>
+          <div className="portal-console-preview" aria-label="UniHub 控制台预览">
+            <div className="preview-topbar"><strong>UniHub</strong><span className="preview-avatar">N</span></div>
+            <div className="preview-body">
+              <div className="preview-sidebar"><span className="selected">⌂　账户概览</span><span>▣　产品与服务</span><span>♧　团队与权限</span><span>▤　账单与额度</span><span>⚙　设置</span></div>
+              <div className="preview-content">
+                <div className="preview-heading"><span>账户概览</span><small>统一管理你的产品、团队与账单。</small></div>
+                <div className="preview-metrics"><span><b>3</b>已启用产品</span><span><b>2</b>团队成员</span><span><b>¥ 0.00</b>账户余额</span></div>
+                <div className="preview-products"><strong>我的产品</strong><span><i className="preview-dot teal" />SuperWagie <small>已启用　›</small></span><span><i className="preview-dot blue" />AgentWiki <small>已启用　›</small></span><span><i className="preview-dot violet" />llmrouter <small>已启用　›</small></span></div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section className="portal-section portal-intro" id="product">
+          <div className="portal-section-heading"><h2>从账户开始，让生产力自然连接</h2><p>UniHub 将身份、协作、账单与设置整合在一起，帮助你更高效地使用所有产品。</p></div>
+          <div className="portal-capabilities">
+            {capabilities.map(({ icon, title, copy }) => <article key={title}><div className="portal-capability-icon">{icon}</div><h3>{title}</h3><p>{copy}</p><a href="#how-it-works">了解更多 <ArrowRight size={14} /></a></article>)}
+          </div>
+        </section>
+        <section className="portal-section portal-flow" id="how-it-works">
+          <div className="portal-section-heading"><h2>一套账户，四步开始</h2><p>把账户关系留在 UniHub，把具体工作留在产品里。</p></div>
+          <div className="portal-steps">{steps.map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}</div>
+        </section>
+        <section className="portal-section portal-boundaries" id="boundaries">
+          <div><span className="portal-overline">设置边界</span><h2>统一连接，保留产品自己的工作方式</h2><p>UniHub 管理身份、账户、会员、额度和账单。模型提供商、项目、会话、提示词、插件与通知偏好，继续由每个产品负责。</p></div>
+          <div className="portal-boundary-list"><span><b>UniHub</b>身份 · 团队 · 会员 · 额度 · 钱包 · 账单</span><span><b>产品工作台</b>模型 · 项目 · 知识库 · 会话 · 运行时偏好</span></div>
+        </section>
+        <section className="portal-final-cta"><h2>现在开始，进入你的 UniHub 控制台</h2><p>统一管理产品、团队、账单与设置，让一切更简单、更高效。</p><a className="button portal-cta" href="/auth/login">进入控制台 <ArrowRight size={17} /></a></section>
+      </main>
+      <footer className="portal-footer"><span>归一 UniHub · 统一身份与账户中心</span><span>© 2026 UniHub</span></footer>
+    </div>
+  );
+}
+
 function AccountConsole({
   account,
   session,
