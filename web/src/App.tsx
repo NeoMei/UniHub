@@ -167,6 +167,12 @@ export default function App() {
       setBusy(false);
     }
   }
+  function openPortal(view: PortalView) {
+    const path = view === "home" ? "/" : `/${view}`;
+    window.history.pushState({}, "", path);
+    setProfileOpen(false);
+    setPortalOpen(true);
+  }
   if (portalOpen)
     return (
       <ProductPortal
@@ -190,6 +196,11 @@ export default function App() {
           <img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" />
           <span>归一 · 统一身份与账户中心</span>
         </a>
+        <nav className="portal-links" aria-label="产品站导航">
+          <button onClick={() => openPortal("home")}><House size={17} /><span>首页</span></button>
+          <button onClick={() => openPortal("guide")}><BookOpen size={17} /><span>使用指南</span></button>
+          <button onClick={() => openPortal("products")}><Box size={17} /><span>产品矩阵</span></button>
+        </nav>
         <nav aria-label="主导航">
           {navigation.map(({ id, label, icon: Icon }) => (
             <button
@@ -356,6 +367,38 @@ type PortalPageProps = {
   onOpenConsole?: () => void;
   onNavigate: (view: PortalView) => void;
 };
+const productDocs = [
+  {
+    name: "SuperWagie",
+    type: "AI 工作台",
+    summary: "面向写作、知识整理和自动化执行的桌面工作台。",
+    sections: [
+      ["适合什么", "在一个工作区里完成写作、知识检索、项目推进和自动化任务。"],
+      ["常用路径", "登录产品 → 选择项目或工作区 → 配置模型与知识来源 → 创建会话或任务。"],
+      ["UniHub 负责什么", "UniHub 提供统一身份、产品会员、模型额度和账户账单；模型提供商、项目、会话与客户端偏好在 SuperWagie 内完成。"],
+    ],
+  },
+  {
+    name: "AgentWiki",
+    type: "知识协作",
+    summary: "把页面、来源、图谱和 Agent 贡献沉淀为团队共同知识。",
+    sections: [
+      ["适合什么", "按空间组织页面与来源，追踪证据、关系和协作过程，让人和 Agent 共享上下文。"],
+      ["常用路径", "进入空间 → 浏览页面或图谱 → 查看来源与证据 → 通过 Agent 或协作功能补充知识。"],
+      ["UniHub 负责什么", "UniHub 管理登录身份、团队账户和产品权益；空间、页面、来源、图谱、Agent 权限与索引在 AgentWiki 内完成。"],
+    ],
+  },
+  {
+    name: "llmrouter",
+    type: "模型服务",
+    summary: "为接入产品提供统一的模型路由、凭证、用量和额度结算能力。",
+    sections: [
+      ["适合什么", "统一接入模型供应商，按产品和账户记录调用、用量、费率与结算状态。"],
+      ["常用路径", "由接入产品发起调用 → 选择允许的模型能力 → 记录用量 → 在 UniHub 核对额度和账单。"],
+      ["UniHub 负责什么", "UniHub 管理账户归属、额度和账单；模型路由、供应商凭证、费率和调用日志由 llmrouter 服务负责。"],
+    ],
+  },
+] as const;
 function PortalHome({ authenticated, sandbox, onOpenConsole, onNavigate }: PortalPageProps & { sandbox?: boolean }) {
   const capabilities = [
     { icon: <CircleUserRound />, title: "一个身份", copy: "个人与团队账户由 UniHub 统一承载，登录一次即可连接你的产品。" },
@@ -408,14 +451,16 @@ function PortalHome({ authenticated, sandbox, onOpenConsole, onNavigate }: Porta
 
 function PortalGuide({ authenticated, onOpenConsole, onNavigate }: PortalPageProps) {
   const items = [
-    ["01", "登录 UniHub", "点击右上角主入口完成登录。登录态下同一个入口会直接显示“进入控制台”。"],
+    ["01", "登录 UniHub", "在首页欢迎卡片中点击统一入口完成登录；登录态下同一个入口会直接显示“进入控制台”。"],
     ["02", "选择账户", "在控制台顶部选择个人账户或团队账户。账户决定成员、角色、会员、额度与账单范围。"],
     ["03", "进入产品", "从产品矩阵选择工作入口，再回到对应产品完成项目、会话和运行时工作。"],
     ["04", "核对使用", "会员、模型额度、钱包与账单在 UniHub 查看；具体用量由产品和模型服务按接入协议记录。"],
+    ["05", "从控制台回到产品站", "控制台左侧的产品站导航随时提供首页、使用指南和产品矩阵入口，不需要退出登录。"],
   ];
   return <>
     <section className="portal-page-title"><span className="portal-kicker">使用指南</span><h1>从账户开始，把每一步走清楚</h1><p>UniHub 负责统一连接，产品负责具体工作。你可以按这条路径完成登录、选账户、进产品和核对用量。</p><PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} /></section>
     <section className="portal-section portal-guide-section"><div className="portal-guide-list">{items.map(([number, title, copy]) => <article key={number}><span>{number}</span><div><h2>{title}</h2><p>{copy}</p></div></article>)}</div></section>
+    <section className="portal-section portal-docs-section"><div className="portal-section-heading"><span className="portal-kicker">产品文档</span><h2>先理解产品，再进入工作台</h2><p>这里是每个已接入产品的基础说明：它适合解决什么问题、通常怎么开始，以及哪些设置属于产品本身。</p></div><div className="portal-doc-grid">{productDocs.map((doc) => <article className="portal-doc-card" key={doc.name}><div className="portal-doc-card-head"><div><span>{doc.type}</span><h2>{doc.name}</h2></div><BookOpen size={20} /></div><p className="portal-doc-summary">{doc.summary}</p><div className="portal-doc-sections">{doc.sections.map(([title, copy]) => <div key={title}><h3>{title}</h3><p>{copy}</p></div>)}</div><a href="/products" onClick={(event) => { event.preventDefault(); onNavigate("products"); }}>查看接入状态 <ArrowRight size={14} /></a></article>)}</div></section>
     <section className="portal-section portal-boundary-section"><div><span className="portal-kicker">账户关系</span><h2>UniHub 管账户，产品提供工作</h2><p>UniHub 统一身份、账户、团队成员、会员、额度、钱包和账单；产品负责提供具体工作空间和运行服务。</p></div><div className="portal-boundary-list"><div><b>在 UniHub 完成</b><span>登录 · 账户 · 成员 · 会员 · 额度 · 钱包 · 账单</span></div><div><b>在产品工作区完成</b><span>工作项目 · 知识库 · 会话 · 运行任务</span></div></div></section>
     <section className="portal-guide-next"><h2>还没决定从哪里开始？</h2><p>先看看当前已接入的产品，再选择最适合你的工作入口。</p><a href="/products" onClick={(event) => { event.preventDefault(); onNavigate("products"); }}>查看产品矩阵 <ArrowRight size={16} /></a></section>
   </>;

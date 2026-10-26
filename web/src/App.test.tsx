@@ -63,6 +63,8 @@ it("provides a real usage guide route from the public portal", async () => {
   expect(await screen.findByRole("heading", { name: "从账户开始，把每一步走清楚" })).toBeDefined();
   expect(screen.getByText("选择账户")).toBeDefined();
   expect(screen.getByText("在 UniHub 完成")).toBeDefined();
+  expect(screen.getByText("SuperWagie")).toBeDefined();
+  expect(screen.getByText(/模型路由、供应商凭证/)).toBeDefined();
   fireEvent.click(screen.getByRole("link", { name: "首页" }));
   expect(await screen.findByRole("heading", { name: /一个身份，/ })).toBeDefined();
 });
@@ -77,6 +79,12 @@ it("lets an authenticated user open the product portal and return to the console
   }));
   render(<App />);
   await screen.findByRole("heading", { name: "账户概览" });
+  const portalNav = within(screen.getByRole("navigation", { name: "产品站导航" }));
+  expect(portalNav.getByRole("button", { name: "使用指南" })).toBeDefined();
+  fireEvent.click(portalNav.getByRole("button", { name: "使用指南" }));
+  expect(await screen.findByRole("heading", { name: "从账户开始，把每一步走清楚" })).toBeDefined();
+  fireEvent.click(screen.getByRole("link", { name: "控制台" }));
+  expect(await screen.findByRole("heading", { name: "账户概览" })).toBeDefined();
   fireEvent.click(screen.getByRole("link", { name: /归一 UniHub/ }));
   expect(await screen.findByRole("heading", { name: /一个身份，/ })).toBeDefined();
   fireEvent.click(screen.getAllByRole("link", { name: "进入控制台" })[0]);
