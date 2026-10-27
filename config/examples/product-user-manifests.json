@@ -4,12 +4,70 @@
     "instance_id": "default",
     "name": "LLMRouter",
     "entry_url": "https://router.example.test",
-    "version": 1,
-    "default_roles": ["member"],
+    "version": 2,
+    "default_roles": [
+      "member"
+    ],
     "roles": [
-      {"id": "member", "name": "Member", "permissions": ["product:use"]},
-      {"id": "channel_viewer", "name": "Channel viewer", "privileged": true, "permissions": ["product:use", "channel:read"]},
-      {"id": "channel_operator", "name": "Channel operator", "privileged": true, "permissions": ["product:use", "channel:read", "channel:operate", "channel:write"]}
+      {
+        "id": "member",
+        "name": "Member",
+        "permissions": [
+          "product:use"
+        ]
+      },
+      {
+        "id": "channel_viewer",
+        "name": "Channel viewer",
+        "privileged": true,
+        "permissions": [
+          "product:use",
+          "channel:read"
+        ]
+      },
+      {
+        "id": "channel_operator",
+        "name": "Channel operator",
+        "privileged": true,
+        "permissions": [
+          "product:use",
+          "channel:read",
+          "channel:operate",
+          "channel:write"
+        ]
+      },
+      {
+        "id": "product_viewer",
+        "name": "Product viewer",
+        "privileged": true,
+        "permissions": [
+          "product:use",
+          "channel:read",
+          "catalog:read",
+          "log:read",
+          "routing:read",
+          "settings:read"
+        ]
+      },
+      {
+        "id": "product_admin",
+        "name": "Product administrator",
+        "privileged": true,
+        "permissions": [
+          "product:use",
+          "channel:read",
+          "channel:operate",
+          "channel:write",
+          "channel:sensitive_write",
+          "catalog:read",
+          "catalog:write",
+          "log:read",
+          "routing:read",
+          "routing:write",
+          "settings:read",
+          "settings:write"
+        ]
+      }
     ]
   },
   {
@@ -18,7 +76,18 @@
     "name": "Notes",
     "entry_url": "https://notes.example.test",
     "version": 1,
-    "default_roles": ["member"],
-    "roles": [{"id": "member", "name": "Member", "permissions": ["product:use", "article:create"]}]
+    "default_roles": [
+      "member"
+    ],
+    "roles": [
+      {
+        "id": "member",
+        "name": "Member",
+        "permissions": [
+          "product:use",
+          "article:create"
+        ]
+      }
+    ]
   }
 ]

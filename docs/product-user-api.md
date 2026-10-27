@@ -72,3 +72,25 @@ model credential issuance, ordinary verification, new holds and top-ups. Histori
 model receipt proof and settlement/recovery of already dispatched commands remain
 available to the separately authenticated service, so reconciliation is not stranded.
 `/auth/session` and logout can remain available for ending a disabled session.
+
+
+## LLMRouter application access
+
+LLMRouter identity manifest version 2 keeps `member` as the only default role.
+Member access restores the actual product dashboard, model catalog and self-scoped
+usage/log views. The account panel is a separate `/unihub` entry in the product
+navigation, not a replacement for the product dashboard.
+
+`product_viewer` is explicitly assigned and grants product-level channel, catalog,
+technical log, routing and runtime-settings reads. `product_admin` additionally
+grants channel operations and writes, catalog/routing writes, and bounded product
+runtime-settings writes. Existing channel-only viewer/operator assignments keep
+their original permissions. All these product roles resolve online through the
+current product/instance assignment; none changes the stored native role or quota.
+
+Product administration does not confer central user/billing administration,
+native identity/password/PAT management, supplier secret viewing, platform
+credentials, native wallet/quota operations or deployment/provisioning authority.
+Identity, accounts, teams, wallet and billing remain managed by UniHub. Privileged
+product roles are never automatic defaults and require an explicit central user
+administrator assignment to the intended immutable subject.
