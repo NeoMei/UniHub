@@ -181,9 +181,25 @@ func (s *Service) PublishRate(ctx context.Context, actor string, r Rate) (Rate, 
 	return r, nil
 }
 func (s *Service) Rates(ctx context.Context) ([]Rate, error) {
-	return list[Rate](ctx, s.pool, `SELECT snapshot FROM billing_rates ORDER BY id`)
+	return list[Rate](ctx, s.pool, `SELECT snapshot FROM billing_rates WHERE status='published' ORDER BY id`)
 }
 
 func (s *Service) AllOffers(ctx context.Context, actor string) ([]Offer, error) {
 	return s.OfferDrafts(ctx, actor)
+}
+
+// RetireRate removes only prospective rate selection. Published snapshots and
+// existing call snapshots remain immutable for settlement/reconciliation.
+func (s *Service) RetireRate(ctx context.Context, actor, id string) error {
+	if e := s.operator(actor); e != nil {
+		return e
+	}
+	result, e := s.pool.Exec(ctx, `UPDATE billing_rates SET status='retired' WHERE id=$1`, id)
+	if e != nil {
+		return e
+	}
+	if result.RowsAffected() != 1 {
+		return accounts.ErrNotFound
+	}
+	return nil
 }

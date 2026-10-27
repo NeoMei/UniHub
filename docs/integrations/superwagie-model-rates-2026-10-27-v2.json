@@ -1,0 +1,698 @@
+{
+  "schema_version": 2,
+  "source": "Operator-configured native LLMRouter prices read 2026-10-27, not supplier invoice prices",
+  "conversion": {
+    "USD2RMB": "7.3",
+    "ratio_to_CNY_micro_per_token": "14.6",
+    "ModelPrice_to_CNY_micro_per_request": "7300000",
+    "rounding": "exact rational; ceil once on total usage"
+  },
+  "retire_rate_ids": [
+    "llmrouter-glm-5-3-cny-v1",
+    "llmrouter-glm-5-3-flash-cny-v1",
+    "llmrouter-glm-5-2-cny-v1",
+    "llmrouter-glm-5-1-cny-v1",
+    "llmrouter-glm-5-cny-v1",
+    "llmrouter-glm-5-turbo-cny-v1",
+    "llmrouter-glm-4-7-cny-v1",
+    "llmrouter-glm-4-6-cny-v1",
+    "llmrouter-glm-4-5-cny-v1",
+    "llmrouter-glm-4-5-air-cny-v1",
+    "llmrouter-deepseek-v4-pro-cny-v1",
+    "llmrouter-deepseek-v4-flash-cny-v1",
+    "llmrouter-deepseek-v4-flash-vision-exp-cny-v1",
+    "llmrouter-deepseek-v4-pro-a-cny-v1",
+    "llmrouter-deepseek-v4-flash-a-cny-v1",
+    "llmrouter-doubao-seed-2-0-pro-a-cny-v1",
+    "llmrouter-minimax-m3-a-cny-v1",
+    "llmrouter-qwen3-7-max-a-cny-v1",
+    "llmrouter-kimi-k2-7-code-cny-v1",
+    "llmrouter-kimi-k2-6-a-cny-v1",
+    "llmrouter-k3-cny-v1",
+    "llmrouter-glm-5-2-a-cny-v1"
+  ],
+  "rates": [
+    {
+      "id": "llmrouter-glm-5-3-cny-v2",
+      "model": "glm-5.3",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "7999997",
+        "denominator": "1000000"
+      },
+      "output": {
+        "numerator": "55999979",
+        "denominator": "2000000"
+      },
+      "cache_read": {
+        "numerator": "7999997",
+        "denominator": "1000000"
+      },
+      "cache_write": {
+        "numerator": "7999997",
+        "denominator": "800000"
+      },
+      "reasoning": {
+        "numerator": "55999979",
+        "denominator": "2000000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-5-3-flash-cny-v2",
+      "model": "glm-5.3-flash",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "metered_v2",
+      "metered": {
+        "version": "metered_v2",
+        "operation": "chat",
+        "policy": "sum",
+        "terms": [
+          {
+            "key": "requests",
+            "unit": "request",
+            "price": {
+              "numerator": "73",
+              "denominator": "1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "llmrouter-glm-5-2-cny-v2",
+      "model": "glm-5.2",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "7999997",
+        "denominator": "1000000"
+      },
+      "output": {
+        "numerator": "55999979",
+        "denominator": "2000000"
+      },
+      "cache_read": {
+        "numerator": "7999997",
+        "denominator": "4000000"
+      },
+      "cache_write": {
+        "numerator": "7999997",
+        "denominator": "800000"
+      },
+      "reasoning": {
+        "numerator": "55999979",
+        "denominator": "2000000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-5-1-cny-v2",
+      "model": "glm-5.1",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "30000007",
+        "denominator": "5000000"
+      },
+      "output": {
+        "numerator": "30000007",
+        "denominator": "1250000"
+      },
+      "cache_read": {
+        "numerator": "65010015169",
+        "denominator": "50000000000"
+      },
+      "cache_write": {
+        "numerator": "30000007",
+        "denominator": "4000000"
+      },
+      "reasoning": {
+        "numerator": "30000007",
+        "denominator": "1250000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-5-cny-v2",
+      "model": "glm-5",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "20000029",
+        "denominator": "5000000"
+      },
+      "output": {
+        "numerator": "180000261",
+        "denominator": "10000000"
+      },
+      "cache_read": {
+        "numerator": "20000029",
+        "denominator": "20000000"
+      },
+      "cache_write": {
+        "numerator": "20000029",
+        "denominator": "4000000"
+      },
+      "reasoning": {
+        "numerator": "180000261",
+        "denominator": "10000000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-5-turbo-cny-v2",
+      "model": "glm-5-turbo",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "12500009",
+        "denominator": "2500000"
+      },
+      "output": {
+        "numerator": "137500099",
+        "denominator": "6250000"
+      },
+      "cache_read": {
+        "numerator": "37500027",
+        "denominator": "31250000"
+      },
+      "cache_write": {
+        "numerator": "12500009",
+        "denominator": "2000000"
+      },
+      "reasoning": {
+        "numerator": "137500099",
+        "denominator": "6250000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-4-7-cny-v2",
+      "model": "glm-4.7",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "14999967",
+        "denominator": "5000000"
+      },
+      "output": {
+        "numerator": "700003459989",
+        "denominator": "50000000000"
+      },
+      "cache_read": {
+        "numerator": "14999967",
+        "denominator": "25000000"
+      },
+      "cache_write": {
+        "numerator": "14999967",
+        "denominator": "4000000"
+      },
+      "reasoning": {
+        "numerator": "700003459989",
+        "denominator": "50000000000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-4-6-cny-v2",
+      "model": "glm-4.6",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "4999989",
+        "denominator": "2500000"
+      },
+      "output": {
+        "numerator": "4999989",
+        "denominator": "625000"
+      },
+      "cache_read": {
+        "numerator": "4999989",
+        "denominator": "12500000"
+      },
+      "cache_write": {
+        "numerator": "4999989",
+        "denominator": "2000000"
+      },
+      "reasoning": {
+        "numerator": "4999989",
+        "denominator": "625000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-4-5-cny-v2",
+      "model": "glm-4.5",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "800007",
+        "denominator": "1000000"
+      },
+      "output": {
+        "numerator": "800007",
+        "denominator": "400000"
+      },
+      "cache_read": {
+        "numerator": "800007",
+        "denominator": "5000000"
+      },
+      "cache_write": {
+        "numerator": "800007",
+        "denominator": "800000"
+      },
+      "reasoning": {
+        "numerator": "800007",
+        "denominator": "400000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-4-5-air-cny-v2",
+      "model": "glm-4.5-air",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "800007",
+        "denominator": "1000000"
+      },
+      "output": {
+        "numerator": "2400021",
+        "denominator": "400000"
+      },
+      "cache_read": {
+        "numerator": "800007",
+        "denominator": "5000000"
+      },
+      "cache_write": {
+        "numerator": "800007",
+        "denominator": "800000"
+      },
+      "reasoning": {
+        "numerator": "2400021",
+        "denominator": "400000"
+      }
+    },
+    {
+      "id": "llmrouter-deepseek-v4-pro-cny-v2",
+      "model": "deepseek-v4-pro",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "14999967",
+        "denominator": "2500000"
+      },
+      "output": {
+        "numerator": "14999967",
+        "denominator": "625000"
+      },
+      "cache_read": {
+        "numerator": "1244997261",
+        "denominator": "12500000000"
+      },
+      "cache_write": {
+        "numerator": "14999967",
+        "denominator": "2000000"
+      },
+      "reasoning": {
+        "numerator": "14999967",
+        "denominator": "625000"
+      }
+    },
+    {
+      "id": "llmrouter-deepseek-v4-flash-cny-v2",
+      "model": "deepseek-v4-flash",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "4999989",
+        "denominator": "1250000"
+      },
+      "output": {
+        "numerator": "4999989",
+        "denominator": "312500"
+      },
+      "cache_read": {
+        "numerator": "4999989",
+        "denominator": "31250000"
+      },
+      "cache_write": {
+        "numerator": "4999989",
+        "denominator": "1000000"
+      },
+      "reasoning": {
+        "numerator": "4999989",
+        "denominator": "312500"
+      }
+    },
+    {
+      "id": "llmrouter-deepseek-v4-flash-vision-exp-cny-v2",
+      "model": "deepseek-v4-flash-vision-exp",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "metered_v2",
+      "metered": {
+        "version": "metered_v2",
+        "operation": "chat",
+        "policy": "sum",
+        "terms": [
+          {
+            "key": "requests",
+            "unit": "request",
+            "price": {
+              "numerator": "73",
+              "denominator": "1"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "llmrouter-deepseek-v4-pro-a-cny-v2",
+      "model": "DeepSeek-V4-Pro-A",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "19375003",
+        "denominator": "5000000"
+      },
+      "output": {
+        "numerator": "19375003",
+        "denominator": "2500000"
+      },
+      "cache_read": {
+        "numerator": "16100627493",
+        "denominator": "50000000000"
+      },
+      "cache_write": {
+        "numerator": "19375003",
+        "denominator": "4000000"
+      },
+      "reasoning": {
+        "numerator": "19375003",
+        "denominator": "2500000"
+      }
+    },
+    {
+      "id": "llmrouter-deepseek-v4-flash-a-cny-v2",
+      "model": "DeepSeek-V4-Flash-A",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "4843769",
+        "denominator": "5000000"
+      },
+      "output": {
+        "numerator": "4843769",
+        "denominator": "2500000"
+      },
+      "cache_read": {
+        "numerator": "2426728269",
+        "denominator": "12500000000"
+      },
+      "cache_write": {
+        "numerator": "4843769",
+        "denominator": "4000000"
+      },
+      "reasoning": {
+        "numerator": "4843769",
+        "denominator": "2500000"
+      }
+    },
+    {
+      "id": "llmrouter-doubao-seed-2-0-pro-a-cny-v2",
+      "model": "Doubao-Seed-2.0-Pro-A",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "3458813",
+        "denominator": "1250000"
+      },
+      "output": {
+        "numerator": "172916438309",
+        "denominator": "12500000000"
+      },
+      "cache_read": {
+        "numerator": "6914167187",
+        "denominator": "12500000000"
+      },
+      "cache_write": {
+        "numerator": "3458813",
+        "denominator": "1000000"
+      },
+      "reasoning": {
+        "numerator": "172916438309",
+        "denominator": "12500000000"
+      }
+    },
+    {
+      "id": "llmrouter-minimax-m3-a-cny-v2",
+      "model": "MiniMax-M3-A",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "10937517",
+        "denominator": "5000000"
+      },
+      "output": {
+        "numerator": "10937517",
+        "denominator": "1250000"
+      },
+      "cache_read": {
+        "numerator": "10937517",
+        "denominator": "25000000"
+      },
+      "cache_write": {
+        "numerator": "10937517",
+        "denominator": "4000000"
+      },
+      "reasoning": {
+        "numerator": "10937517",
+        "denominator": "1250000"
+      }
+    },
+    {
+      "id": "llmrouter-qwen3-7-max-a-cny-v2",
+      "model": "Qwen3.7-Max-A",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "22499987",
+        "denominator": "2500000"
+      },
+      "output": {
+        "numerator": "675022109987",
+        "denominator": "25000000000"
+      },
+      "cache_read": {
+        "numerator": "22499987",
+        "denominator": "12500000"
+      },
+      "cache_write": {
+        "numerator": "22499987",
+        "denominator": "2000000"
+      },
+      "reasoning": {
+        "numerator": "675022109987",
+        "denominator": "25000000000"
+      }
+    },
+    {
+      "id": "llmrouter-kimi-k2-7-code-cny-v2",
+      "model": "kimi-k2.7-code",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "6499993",
+        "denominator": "1000000"
+      },
+      "output": {
+        "numerator": "134998354617",
+        "denominator": "5000000000"
+      },
+      "cache_read": {
+        "numerator": "6499993",
+        "denominator": "5000000"
+      },
+      "cache_write": {
+        "numerator": "6499993",
+        "denominator": "800000"
+      },
+      "reasoning": {
+        "numerator": "134998354617",
+        "denominator": "5000000000"
+      }
+    },
+    {
+      "id": "llmrouter-kimi-k2-6-a-cny-v2",
+      "model": "Kimi-K2.6-A",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "28110767",
+        "denominator": "5000000"
+      },
+      "output": {
+        "numerator": "583832519823",
+        "denominator": "25000000000"
+      },
+      "cache_read": {
+        "numerator": "56193423233",
+        "denominator": "50000000000"
+      },
+      "cache_write": {
+        "numerator": "28110767",
+        "denominator": "4000000"
+      },
+      "reasoning": {
+        "numerator": "583832519823",
+        "denominator": "25000000000"
+      }
+    },
+    {
+      "id": "llmrouter-k3-cny-v2",
+      "model": "k3",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "99999999",
+        "denominator": "5000000"
+      },
+      "output": {
+        "numerator": "99999999",
+        "denominator": "1000000"
+      },
+      "cache_read": {
+        "numerator": "99999999",
+        "denominator": "50000000"
+      },
+      "cache_write": {
+        "numerator": "99999999",
+        "denominator": "4000000"
+      },
+      "reasoning": {
+        "numerator": "99999999",
+        "denominator": "1000000"
+      }
+    },
+    {
+      "id": "llmrouter-glm-5-2-a-cny-v2",
+      "model": "GLM-5.2-A",
+      "asset": "CNY/6",
+      "status": "published",
+      "semantics": "exclusive_v1",
+      "input": {
+        "numerator": "7999997",
+        "denominator": "1000000"
+      },
+      "output": {
+        "numerator": "55999979",
+        "denominator": "2000000"
+      },
+      "cache_read": {
+        "numerator": "7999997",
+        "denominator": "4000000"
+      },
+      "cache_write": {
+        "numerator": "7999997",
+        "denominator": "800000"
+      },
+      "reasoning": {
+        "numerator": "55999979",
+        "denominator": "2000000"
+      }
+    }
+  ],
+  "models": [
+    "glm-5.3",
+    "glm-5.3-flash",
+    "glm-5.2",
+    "glm-5.1",
+    "glm-5",
+    "glm-5-turbo",
+    "glm-4.7",
+    "glm-4.6",
+    "glm-4.5",
+    "glm-4.5-air",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-vision-exp",
+    "DeepSeek-V4-Pro-A",
+    "DeepSeek-V4-Flash-A",
+    "Doubao-Seed-2.0-Pro-A",
+    "MiniMax-M3-A",
+    "Qwen3.7-Max-A",
+    "kimi-k2.7-code",
+    "Kimi-K2.6-A",
+    "k3",
+    "GLM-5.2-A"
+  ],
+  "profile_policy": {
+    "llmrouter": {
+      "models": [
+        "glm-5.3",
+        "glm-5.3-flash",
+        "glm-5.2",
+        "glm-5.1",
+        "glm-5",
+        "glm-5-turbo",
+        "glm-4.7",
+        "glm-4.6",
+        "glm-4.5",
+        "glm-4.5-air",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "DeepSeek-V4-Pro-A",
+        "DeepSeek-V4-Flash-A",
+        "Doubao-Seed-2.0-Pro-A",
+        "MiniMax-M3-A",
+        "Qwen3.7-Max-A",
+        "kimi-k2.7-code",
+        "Kimi-K2.6-A",
+        "k3",
+        "GLM-5.2-A"
+      ]
+    },
+    "superwagie": {
+      "models": [
+        "glm-5.3",
+        "glm-5.3-flash",
+        "glm-5.2",
+        "glm-5.1",
+        "glm-5",
+        "glm-5-turbo",
+        "glm-4.7",
+        "glm-4.6",
+        "glm-4.5",
+        "glm-4.5-air",
+        "deepseek-v4-pro",
+        "deepseek-v4-flash",
+        "deepseek-v4-flash-vision-exp",
+        "DeepSeek-V4-Pro-A",
+        "DeepSeek-V4-Flash-A",
+        "Doubao-Seed-2.0-Pro-A",
+        "MiniMax-M3-A",
+        "Qwen3.7-Max-A",
+        "kimi-k2.7-code",
+        "Kimi-K2.6-A",
+        "k3",
+        "GLM-5.2-A"
+      ]
+    }
+  }
+}

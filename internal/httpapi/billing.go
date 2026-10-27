@@ -208,6 +208,13 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		}
 		return respond(w, 200, v)
 	})
+	addOps("POST /ops/v1/rates/{rate}/retire", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		if e := b.RetireRate(r.Context(), u.ID, r.PathValue("rate")); e != nil {
+			return e
+		}
+		w.WriteHeader(204)
+		return nil
+	})
 	addOps("POST /ops/v1/rates", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body billing.Rate
 		if e := decode(w, r, &body); e != nil {
