@@ -5,6 +5,23 @@ The source contract is `0.1.0`, Go 1.23. The independent module is
 repository supplies no source license. A future nested-module release would use
 `packages/userkit-go/v0.x.y`; do not assume that tag exists.
 
+## Release source assets
+
+UniHub releases include `unihub-userkit-<version>-source.tar.gz`, a curated source
+archive with this Go module, the runnable `examples/product-users` starter,
+initializer, protected client enrollment tool, public manifest example and related
+documents. Check the asset against the release's `SHA256SUMS`, then run
+`go test -mod=readonly ./...` in both `packages/userkit-go` and
+`examples/product-users` after extraction. The relative module replacement works
+inside this archive; no sibling repository is needed for those builds.
+
+The initializer **requires a reviewed Git checkout** at the intended release tag
+or immutable commit. Its existing source-history and clean-module provenance
+checks are not satisfied by an extracted tar archive. Run generation from that
+checkout as below; do not remove its Git checks or invent a source revision for an
+archive. The generated product can then build independently. The source archive
+is not an npm publication, nested Go module release, or new license grant.
+
 ## Generate a product
 
 From a reviewed UniHub checkout:
