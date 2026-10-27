@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -306,6 +307,21 @@ func validEmail(v string) bool {
 
 // limit uses durable HMAC identifiers; raw addresses and usernames are not stored.
 func (s *Server) limit(ctx context.Context, r *http.Request, c products.Client, user, kind string) bool {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false
+	}
+	defer database.Rollback(tx)
+	retryAt, err := s.limitInTx(ctx, tx, r, c, user, kind)
+	if err != nil || tx.Commit(ctx) != nil {
+		return false
+	}
+	return retryAt.IsZero()
+}
+
+// limitInTx returns the denied fixed window's end, or zero when allowed. The
+// caller commits counters even when denied, and distinguishes storage errors.
+func (s *Server) limitInTx(ctx context.Context, tx pgx.Tx, r *http.Request, c products.Client, user, kind string) (time.Time, error) {
 	host := s.rateAddress(r)
 	type dimension struct {
 		name, value string
@@ -320,32 +336,24 @@ func (s *Server) limit(ctx context.Context, r *http.Request, c products.Client, 
 	} else {
 		dims = append(dims, dimension{"username", strings.ToLower(user), 15 * time.Minute, 5})
 	}
-	tx, e := s.pool.Begin(ctx)
-	if e != nil {
-		return false
-	}
-	defer database.Rollback(tx)
-	allowed := true
+	now := time.Now().UTC()
 	for _, d := range dims {
-		window := time.Now().UTC().Truncate(d.duration)
+		window := now.Truncate(d.duration)
 		var hits int
 		client := c.ClientID
 		if strings.HasPrefix(d.name, "global-") || strings.Contains(d.name, "global-ip") {
 			client = ""
 		}
 		key := s.mac("limit", kind, d.name, client, d.value)
-		if e = tx.QueryRow(ctx, `INSERT INTO identity_rate_limits(key_hash,window_start,hits) VALUES($1,$2,1) ON CONFLICT(key_hash,window_start) DO UPDATE SET hits=identity_rate_limits.hits+1 RETURNING hits`, key, window).Scan(&hits); e != nil {
-			return false
+		if err := tx.QueryRow(ctx, `INSERT INTO identity_rate_limits(key_hash,window_start,hits) VALUES($1,$2,1) ON CONFLICT(key_hash,window_start) DO UPDATE SET hits=identity_rate_limits.hits+1 RETURNING hits`, key, window).Scan(&hits); err != nil {
+			return time.Time{}, err
 		}
 		if hits > d.max {
-			allowed = false
-			break // Denied IPs cannot create fresh attacker-chosen username buckets.
+			// Denied IPs cannot create fresh attacker-chosen username buckets.
+			return window.Add(d.duration), nil
 		}
 	}
-	if tx.Commit(ctx) != nil {
-		return false
-	}
-	return allowed
+	return time.Time{}, nil
 }
 
 func (s *Server) rateAddress(r *http.Request) string {
@@ -394,12 +402,36 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	req.Email = strings.ToLower(req.Email)
 	metadata := s.mac("registration", c.ClientID, req.Username, req.Email, req.DisplayName)
 	keyHash := s.mac("idempotency", key)
-	row, exists, err := s.existingRegistration(r.Context(), c.ClientID, keyHash)
+	// Serialize decisions for this client/key across server instances. In
+	// particular a denied concurrent request must observe an already saved UNKNOWN
+	// intent rather than falsely telling the caller it may start a new operation.
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	defer database.Rollback(tx)
+	if _, err := tx.Exec(r.Context(), `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, s.mac("registration-lock", c.ClientID, keyHash)); err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	commit := func() bool {
+		if err := tx.Commit(r.Context()); err != nil {
+			fail(w, 503, "service_unavailable")
+			return false
+		}
+		return true
+	}
+	row, exists, err := existingRegistration(r.Context(), tx, c.ClientID, keyHash)
 	if err != nil {
 		fail(w, 503, "service_unavailable")
 		return
 	}
 	if exists {
+		// Reconciliation can use the pool only after this transaction releases it.
+		if !commit() {
+			return
+		}
 		if !equal(row.metadata, metadata) {
 			fail(w, 409, "idempotency_conflict")
 			return
@@ -407,39 +439,67 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		s.registrationResult(w, r, row)
 		return
 	}
-	if !s.limit(r.Context(), r, c, req.Username, "register") {
-		fail(w, 429, "rate_limited")
+	retryAt, err := s.limitInTx(r.Context(), tx, r, c, req.Username, "register")
+	if err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	if !retryAt.IsZero() {
+		if !commit() {
+			return
+		}
+		seconds := max(1, int((time.Until(retryAt)+time.Second-1)/time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(seconds))
+		jsonResponse(w, 429, map[string]any{"error": "rate_limited", "retry_after": seconds, "registration_not_started": true})
 		return
 	}
 	org, err := s.organization(r.Context())
 	if err != nil {
+		if !commit() {
+			return
+		}
 		fail(w, 503, "registration_policy_unavailable")
 		return
 	}
 	if !validPassword(req.Password, req.Username, req.Email, org.PasswordOptions) {
+		if !commit() {
+			return
+		}
 		fail(w, 400, "invalid_password")
 		return
 	}
 	if kind, err := s.applicationPolicy(r.Context(), c, true); err != nil {
+		if !commit() {
+			return
+		}
 		fail(w, 503, "registration_policy_unavailable")
 		return
 	} else if kind != "" {
+		if !commit() {
+			return
+		}
 		interaction(w, kind)
 		return
 	}
 	row = registrationRow{id: randomUUID(), client: c.ClientID, username: req.Username, subject: randomUUID(), keyHash: keyHash, metadata: metadata, status: "UNKNOWN"}
-	tag, err := s.pool.Exec(r.Context(), `INSERT INTO identity_registrations(id,client_id,username,subject_id,idempotency_hash,metadata_hash,status) VALUES($1,$2,$3,$4,$5,$6,'UNKNOWN') ON CONFLICT DO NOTHING`, row.id, row.client, row.username, row.subject, row.keyHash, row.metadata)
+	tag, err := tx.Exec(r.Context(), `INSERT INTO identity_registrations(id,client_id,username,subject_id,idempotency_hash,metadata_hash,status) VALUES($1,$2,$3,$4,$5,$6,'UNKNOWN') ON CONFLICT DO NOTHING`, row.id, row.client, row.username, row.subject, row.keyHash, row.metadata)
 	if err != nil {
 		fail(w, 503, "service_unavailable")
 		return
 	}
 	if tag.RowsAffected() != 1 {
-		prior, yes, e := s.existingRegistration(r.Context(), c.ClientID, keyHash)
+		prior, yes, e := existingRegistration(r.Context(), tx, c.ClientID, keyHash)
+		if !commit() {
+			return
+		}
 		if e == nil && yes && equal(prior.metadata, metadata) {
 			s.registrationResult(w, r, prior)
 			return
 		}
 		fail(w, 409, "registration_conflict")
+		return
+	}
+	if !commit() {
 		return
 	}
 	body := map[string]any{"owner": "unihub", "name": req.Username, "id": row.subject, "type": "normal-user", "password": req.Password, "passwordType": "plain", "displayName": req.DisplayName, "email": req.Email, "emailVerified": false, "isAdmin": false, "isForbidden": false, "isDeleted": false, "signupApplication": c.Application, "registerType": "UniHub API", "registerSource": "unihub/" + c.ProductID, "properties": map[string]string{"registration_id": row.id}}
@@ -460,9 +520,9 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonResponse(w, 202, map[string]any{"registration_id": row.id, "status": "UNKNOWN", "retry_after": 2})
 }
-func (s *Server) existingRegistration(ctx context.Context, client, key string) (registrationRow, bool, error) {
+func existingRegistration(ctx context.Context, tx pgx.Tx, client, key string) (registrationRow, bool, error) {
 	var row registrationRow
-	e := s.pool.QueryRow(ctx, `SELECT id,client_id,username,subject_id,idempotency_hash,metadata_hash,status FROM identity_registrations WHERE client_id=$1 AND idempotency_hash=$2`, client, key).Scan(&row.id, &row.client, &row.username, &row.subject, &row.keyHash, &row.metadata, &row.status)
+	e := tx.QueryRow(ctx, `SELECT id,client_id,username,subject_id,idempotency_hash,metadata_hash,status FROM identity_registrations WHERE client_id=$1 AND idempotency_hash=$2`, client, key).Scan(&row.id, &row.client, &row.username, &row.subject, &row.keyHash, &row.metadata, &row.status)
 	if e == pgx.ErrNoRows {
 		return row, false, nil
 	}

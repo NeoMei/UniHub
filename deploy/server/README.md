@@ -34,9 +34,43 @@ systemctl restart unihub
 
 The report schema is `schema_version=1`, `installation_id`, `image_id`, `backend_sha256`, `policy_sha256`, UTC `verified_at` no older than24h, boolean `checks` for registration/password_login/pkce_nonce_state/audit_records_redacted/webhook_payloads_redacted/proxy_logs_redacted, and nonempty `evidence_files=[{path,sha256}]` relative to the report directory. Every proof must exist and match. `sink_modes` is preserved in the acceptance state. The gate covers canonical requests created by UniHub's adapter, not all equivalent arbitrary encodings sent directly to Casdoor.
 
-Repeated prepare and unchanged policy staging preserve an accepted gate for the same image/backend/policy. Changed policy or image closes it. `disable-headless` is a separate command with the same root/release flags; restart `unihub` afterward. Neither preparation nor enable/disable commands restart the application automatically. The loopback-only Go listener enables `HEADLESS_TRUST_LOOPBACK_PROXY=true`; nginx replaces `X-Real-IP` with its observed `$remote_addr`, so external supplied IP headers cannot select another rate-limit bucket.
+Repeated prepare and unchanged policy staging preserve an accepted gate for the same image/backend/policy. Changed policy or image closes it. `disable-headless` is a separate command with the same root/release flags; restart `unihub` afterward. Neither preparation nor enable/disable commands restart the application automatically. The loopback-only Go listener enables `HEADLESS_TRUST_LOOPBACK_PROXY=true`; nginx replaces `X-Real-IP` with `$remote_addr`. By default this is the connecting peer; an explicitly trusted ingress can restore the original client address as described below. A shared outer proxy otherwise makes all of its clients use the same source-IP rate-limit bucket.
 
 Run `python3 deploy/server/test-headless-deployment.py` plus the existing deployment/identity scripts. For the isolated PostgreSQL policy regression, set `UNIHUB_TEST_DATABASE_URL` in the process environment. It uses a random temporary schema, validates real insert/idempotency/conflict behavior, then removes only that schema. No production server is accessed by these tests.
+
+## Optional trusted ingress and registration source IP
+
+`nginx.conf` includes `/etc/nginx/snippets/unihub-trusted-ingress-*.conf` **only inside the UniHub HTTPS server**. With no matching file, this bundle trusts no ingress and overwrites caller-supplied `X-Real-IP` with the connecting peer address. The distributed `.conf.example` does not match the include pattern and is never enabled by copying the release. Keep the backend listener on loopback and its existing loopback-proxy trust setting; do not expose it to bypass nginx.
+
+When an outer HTTP proxy forwards to origin nginx, the observed TCP peer is the proxy. Without an opt-in snippet, clients behind that peer share a registration source-IP bucket. Before enabling trust, verify the exact peer address seen at the origin and prove that the outer proxy **overwrites** `X-Real-IP` with the actual client address, including when callers supply forged `X-Real-IP` and `X-Forwarded-For`. A TCP passthrough or a proxy that preserves caller-supplied values does not satisfy this contract. Verify each hop using a disposable read-only diagnostic; do not consume real registration attempts or log cookies, credentials or callback queries. Do not enable trust until these checks pass.
+
+Use [unihub-trusted-ingress.conf.example](unihub-trusted-ingress.conf.example) to prepare one reviewed local snippet. Replace `<TRUSTED_INGRESS_IP>` with the **single exact IP address** of the connecting ingress. Do not use `0.0.0.0/0`, `::/0`, any subnet, hostname, wildcard or a client-provided value. Keep `real_ip_header X-Real-IP` and `real_ip_recursive off`; this contract uses one authoritative header from the directly connected trusted peer, not an arbitrary forwarding chain. If several fixed peers are required, review each exact address and place their `set_real_ip_from` lines in the same snippet, with the header/recursive directives once. Do not create overlapping snippets with duplicate directives.
+
+On the deployment host, first review the active vhost and all existing snippets matching that pattern. Preserve any existing managed configuration before editing it; do not overwrite an unknown file. Install the updated supplied vhost through the existing reviewed deployment procedure. For a first-time opt-in, save the edited example as `/tmp/unihub-trusted-ingress-reviewed.conf`, then run:
+
+```sh
+# Inspect nginx -V privately: the realip module must be available.
+nginx -V
+install -d -m 0755 /etc/nginx/snippets
+# Abort if this name already exists; review/backup it separately instead.
+test ! -e /etc/nginx/snippets/unihub-trusted-ingress-edge.conf || exit 1
+install -m 0644 /tmp/unihub-trusted-ingress-reviewed.conf /etc/nginx/snippets/unihub-trusted-ingress-edge.conf
+if nginx -t; then
+  systemctl reload nginx
+else
+  mv /etc/nginx/snippets/unihub-trusted-ingress-edge.conf /etc/nginx/snippets/unihub-trusted-ingress-edge.conf.disabled
+  exit 1
+fi
+```
+
+A syntax check does not prove the IP provenance. After reload, repeat the read-only edge/direct-origin probes: an actual client through the verified ingress must retain its address, forged caller headers must have no effect through that ingress, and any untrusted direct-origin connection must retain its own socket address. Confirm the expected source reaches the loopback backend without changing public routes or dependencies. These deployment checks establish the source-IP input; registration policy and its counters require separate application tests. If any verification fails, disable the new snippet and reload only after a successful config check:
+
+```sh
+mv /etc/nginx/snippets/unihub-trusted-ingress-edge.conf /etc/nginx/snippets/unihub-trusted-ingress-edge.conf.disabled
+nginx -t && systemctl reload nginx
+```
+
+For an update of an existing snippet, rollback restores its saved reviewed contents instead. Removing the opt-in restores peer-address bucketing; it does not undo registrations or reset application counters. Keep a restricted operational copy of enabled snippets with deployment recovery material: the bundle does not install, discover or back up host `/etc/nginx` snippets automatically. Reverify trust whenever the ingress path or address changes. A local regression is available with `python3 scripts/test-server-deployment.py`; it runs the actual template and sample in disposable nginx processes, testing absent snippets, exact-peer preservation, an untrusted IPv6 peer, alternate forwarding headers, and a header-overwriting edge. It does not modify a deployed server.
 
 ## Explicit product billing staging
 

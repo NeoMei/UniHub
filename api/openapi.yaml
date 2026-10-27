@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.7"
+  "version": "0.4.8"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -15,7 +15,7 @@
     "post":
       "operationId": "registerIdentity"
       "summary": "registerIdentity"
-      "description": "Requires explicitly enabled client registration. 202 UNKNOWN is unresolved, not registered. Repeat the SAME key and nonsecret metadata only to reconcile; never auto-create using a new key. Passwords go only to IdP and are never stored in UniHub."
+      "description": "Requires explicitly enabled client registration. 202 UNKNOWN is unresolved, not registered. Repeat the SAME key and nonsecret metadata only to reconcile; never auto-create using a new key. Registration 429 includes Retry-After and retry_after seconds until the current hourly limit resets. registration_not_started=true applies only to this client/key at the server decision; it never clears a previously UNKNOWN result. Existing saved operations reconcile before rate limiting. Passwords go only to IdP and are never stored in UniHub."
       "security": []
       "responses":
         "201":
@@ -37,7 +37,18 @@
         "409":
           "$ref": "#/components/responses/Error"
         "429":
-          "$ref": "#/components/responses/Error"
+          "description": "Registration attempt rejected before saving an operation for this client/key"
+          "headers":
+            "Retry-After":
+              "description": "Remaining fixed-window wait in seconds, rounded up"
+              "schema":
+                "type": "integer"
+                "minimum": 1
+                "maximum": 3600
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/RegistrationRateLimited"
         "503":
           "$ref": "#/components/responses/Error"
         "200":
@@ -2680,6 +2691,23 @@
         - "client_id"
         - "username"
         - "password"
+      "additionalProperties": false
+    "RegistrationRateLimited":
+      "type": "object"
+      "properties":
+        "error":
+          "const": "rate_limited"
+        "retry_after":
+          "type": "integer"
+          "minimum": 1
+          "maximum": 3600
+        "registration_not_started":
+          "const": true
+          "description": "No saved registration existed for this client/key at the serialized server decision. This does not resolve any prior UNKNOWN response."
+      "required":
+        - "error"
+        - "retry_after"
+        - "registration_not_started"
       "additionalProperties": false
     "RegistrationResult":
       "type": "object"
