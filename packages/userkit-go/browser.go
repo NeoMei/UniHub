@@ -1,12 +1,14 @@
 package userkit
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -67,6 +69,11 @@ func NewBrowser(ctx context.Context, c BrowserConfig) (*Browser, error) {
 		h.Timeout = 10 * time.Second
 	}
 	h.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("OIDC redirect rejected") }
+	transport := h.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	h.Transport = browserBoundedTransport{transport}
 	clientCtx := oidc.ClientContext(ctx, &h)
 	p, e := oidc.NewProvider(clientCtx, c.Issuer)
 	if e != nil {
@@ -213,4 +220,21 @@ func (b *Browser) Complete(ctx context.Context, binding, callbackURL string) (Br
 		return BrowserIdentity{}, ErrDenied
 	}
 	return BrowserIdentity{Subject: id.Subject, AccessToken: token.AccessToken, ReturnTo: tx.ReturnTo, ExpiresAt: expiry.Unix()}, nil
+}
+
+// Bound the discovery, JWKS and code exchange bodies before library decoding.
+type browserBoundedTransport struct{ base http.RoundTripper }
+
+func (t browserBoundedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	response, err := t.base.RoundTrip(r)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
+	response.Body.Close()
+	if err != nil || len(raw) > 1<<20 {
+		return nil, errors.New("OIDC response exceeds bound")
+	}
+	response.Body = io.NopCloser(bytes.NewReader(raw))
+	return response, nil
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,5 +112,17 @@ func TestBrowserOIDCTransaction(t *testing.T) {
 	b.mu.Unlock()
 	if _, err = b.Complete(context.Background(), "browser-secret", callback); err == nil {
 		t.Fatal("expired transaction accepted")
+	}
+}
+
+func TestBrowserRejectsOversizedDiscovery(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"issuer": server.URL, "authorization_endpoint": server.URL + "/authorize", "token_endpoint": server.URL + "/token", "jwks_uri": server.URL + "/jwks"})
+		w.Write([]byte(strings.Repeat(" ", (1<<20)+1)))
+	}))
+	defer server.Close()
+	if _, err := NewBrowser(context.Background(), BrowserConfig{Issuer: server.URL, ClientID: "product", RedirectURI: "http://127.0.0.1/callback"}); err == nil {
+		t.Fatal("oversized discovery accepted")
 	}
 }
