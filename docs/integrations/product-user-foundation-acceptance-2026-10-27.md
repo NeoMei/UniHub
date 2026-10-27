@@ -144,3 +144,21 @@ HTTP discovery fixture only, with no login claims or real IdP mutation. The
 original actual Casdoor business/access matrix above was not repeated for this
 lifecycle-only change. Abrupt crashes/SIGKILL still require conservative owner
 verification before manual lock recovery; the one-process store limit remains.
+
+### Final enrollment and discovery review corrections
+
+The documented access-only `product_client.py prepare` command now emits an empty
+commercial mapping. A regression consumes the actual public plan through central
+configuration and startup registration against isolated real PostgreSQL schemas:
+it creates no commercial product row, and an existing disabled same-slug row does
+not block identity registration. Python CLI cases retain explicit mappings, every
+commercial scope and the legacy omitted-scope default. The affected central Go
+packages pass uncached race tests.
+
+LLMRouter now retains only successful OIDC Browser initialization. Concurrent
+logins share one bounded discovery attempt, canceled waiters can return, and the
+next login can recover after a failed discovery. Route tests use a local signed
+HTTP issuer plus an isolated SQLite product database to verify recovery, one
+successful discovery across concurrent logins, callback continuity and one-use
+transactions. These regression checks do not repeat the actual Casdoor/browser
+matrix above and introduce no IdP, payment, supplier or deployment mutations.

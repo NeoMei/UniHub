@@ -55,9 +55,14 @@ python3 scripts/product_client.py readback --plan /tmp/notes-plan.json \
 
 `access:read` alone permits the kit's `/v1/capabilities` and
 `/v1/me/product-access` checks. Add `identity:read` only if your application needs
-`/v1/me`, and add account/billing scopes only for those features. The default CLI
-billing-products metadata does not enroll a commercial product: this sample has
-no billing registry or payment integration.
+`/v1/me`, and add account/billing scopes only for those features. When the selected
+scopes contain only access, identity, profile, account or member capabilities,
+`prepare` defaults `billing_products` to `[]`. This sample therefore creates no
+commercial product row and starts even if a same-slug commercial product is
+disabled. A commercial scope defaults the mapping to `[product_id]`; omitting
+`--scope` preserves the legacy `accounts:read,catalog:read` commercial default.
+Explicit `--billing-product` values are always preserved and opt into commercial
+registration even with access-only scopes. Review that mapping before apply.
 
 `browser_sso` defaults false for legacy clients. Explicit true enables the
 managed Casdoor application's interactive Password method, sign-in session and

@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 
 SCOPES=set('access:read identity:read profile:write accounts:read accounts:write members:read members:write catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:read model-credentials:write'.split())
+COMMERCIAL_SCOPES=set('catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:read model-credentials:write'.split())
 FIELDS={'product_id','client_id','application','organization','redirect_uris','origins','scopes','billing_products','password_login','registration','browser_sso','instance_id'}
 SLUG=re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 NAME=re.compile(r'^[A-Za-z][A-Za-z0-9_-]{1,63}$')
@@ -190,7 +191,9 @@ def main(argv=None):
  try:
   if args.command=='prepare':
    if Path(args.registry).absolute()==Path(args.output).absolute():raise PolicyError('Plan output must differ from registry path')
-   c={'product_id':args.product_id,'client_id':args.client_id,'application':args.application,'organization':'unihub','redirect_uris':args.redirect_uri,'origins':args.origin,'scopes':args.scope or ['accounts:read','catalog:read'],'billing_products':args.billing_product or [args.product_id],'password_login':args.password_login,'registration':args.registration,'browser_sso':args.browser_sso,'instance_id':args.instance_id}
+   scopes=args.scope or ['accounts:read','catalog:read']
+   billing_products=args.billing_product if args.billing_product is not None else ([args.product_id] if COMMERCIAL_SCOPES.intersection(scopes) else [])
+   c={'product_id':args.product_id,'client_id':args.client_id,'application':args.application,'organization':'unihub','redirect_uris':args.redirect_uri,'origins':args.origin,'scopes':scopes,'billing_products':billing_products,'password_login':args.password_login,'registration':args.registration,'browser_sso':args.browser_sso,'instance_id':args.instance_id}
    plan=prepare(Path(args.registry),c,args.certificate);write_atomic(Path(args.output),plan);print('Public product plan prepared; review before apply. No remote mutation occurred.')
   else:
    plan=validate_plan(json.loads(Path(args.plan).read_text()));client=os.environ.get('HEADLESS_MANAGEMENT_CLIENT_ID','');secret=os.environ.get('HEADLESS_MANAGEMENT_CLIENT_SECRET','')

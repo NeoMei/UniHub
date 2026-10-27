@@ -3,6 +3,8 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -14,6 +16,19 @@ class ProductClientTests(unittest.TestCase):
   spec=importlib.util.spec_from_file_location('product_client',MODULE);cls.m=importlib.util.module_from_spec(spec);spec.loader.exec_module(cls.m)
  def client(self,**kw):
   c={'product_id':'new-product','client_id':'new-audience','application':'app-new-product','organization':'unihub','redirect_uris':['https://app.test/callback'],'origins':['https://app.test'],'scopes':['accounts:read','catalog:read'],'billing_products':['new-product'],'password_login':False,'registration':False};c.update(kw);return c
+ def test_prepare_cli_derives_commercial_defaults_from_selected_scopes(self):
+  commercial='catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:read usage:all-products model-credentials:write'.split()
+  cases=[('defaults',[],['llmrouter']),('access',['--scope','access:read'],[]),('identity-and-accounts',sum((['--scope',s] for s in ['identity:read','profile:write','accounts:read','accounts:write','members:read','members:write']),[]),[]),('explicit',['--scope','access:read','--billing-product','notes','--billing-product','other'],['notes','other'])]
+  cases.extend((scope,['--scope',scope],['llmrouter']) for scope in commercial)
+  for name,flags,want in cases:
+   with self.subTest(name=name),tempfile.TemporaryDirectory() as d:
+    registry=Path(d)/'clients.json';output=Path(d)/'plan.json'
+    result=subprocess.run([sys.executable,str(MODULE),'prepare','--registry',str(registry),'--output',str(output),'--product-id','llmrouter','--client-id','router-client','--application','app-router','--redirect-uri','https://app.test/callback',*flags],capture_output=True,text=True)
+    self.assertEqual(result.returncode,0,result.stderr)
+    client=json.loads(output.read_text())['client']
+    self.assertEqual(client['billing_products'],want)
+    self.assertEqual(client['scopes'],['accounts:read','catalog:read'] if not flags else [flags[i+1] for i,v in enumerate(flags) if v=='--scope'])
+    self.assertFalse(registry.exists())
  def test_browser_sso_is_explicit_independent_and_exactly_read_back(self):
   c=self.client(scopes=['identity:read','access:read'],instance_id='local',browser_sso=True)
   app=self.m.application(c,'cert-built-in')
