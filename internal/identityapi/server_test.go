@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,14 +25,16 @@ import (
 )
 
 type testIssuer struct {
-	server                     *httptest.Server
-	key                        *rsa.PrivateKey
-	mu                         sync.Mutex
-	mode, nonce, challenge     string
-	creates, logins, exchanges int
-	user                       map[string]any
-	orgPolicy                  []string
-	captcha, requiredEmail     bool
+	server                                    *httptest.Server
+	key                                       *rsa.PrivateKey
+	mu                                        sync.Mutex
+	mode, nonce, challenge                    string
+	creates, logins, exchanges                int
+	user                                      map[string]any
+	orgPolicy                                 []string
+	captcha, requiredEmail                    bool
+	organizationEntered, organizationContinue chan struct{}
+	requests                                  int
 }
 
 func newTestIssuer(t *testing.T) *testIssuer {
@@ -44,6 +47,7 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	i.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		i.mu.Lock()
 		defer i.mu.Unlock()
+		i.requests++
 		w.Header().Set("Content-Type", "application/json")
 		ok := func(data any) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "msg": "", "data": data, "data2": nil, "data3": nil})
@@ -54,6 +58,11 @@ func newTestIssuer(t *testing.T) *testIssuer {
 		case "/.well-known/jwks":
 			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{map[string]any{"kty": "RSA", "kid": "test", "use": "sig", "alg": "RS256", "n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())}}})
 		case "/api/get-organization":
+			if i.organizationEntered != nil {
+				close(i.organizationEntered)
+				<-i.organizationContinue
+				i.organizationEntered = nil
+			}
 			u, p, yes := r.BasicAuth()
 			if !yes || u != "management" || p != "private-management-secret" || r.URL.Query().Get("id") != "admin/unihub" {
 				http.Error(w, "bad management auth", 401)
@@ -525,5 +534,142 @@ func TestMissingPolicyFieldsCannotBeAssumedSafe(t *testing.T) {
 	i.mode = "missing org policy"
 	if _, e := New(context.Background(), p, options(i)); e == nil {
 		t.Fatal("missing organization policy fields accepted")
+	}
+}
+
+// Seed adjacent windows to keep integration tests stable at the hour boundary.
+func exhaustRegistrationLimit(t *testing.T, s *Server, p *pgxpool.Pool, global bool, hits int) {
+	t.Helper()
+	dimension, client := "register-ip", "native"
+	if global {
+		dimension, client = "register-global-ip", ""
+	}
+	key := s.mac("limit", "register", dimension, client, "192.0.2.1")
+	window := time.Now().UTC().Truncate(time.Hour)
+	for _, at := range []time.Time{window, window.Add(time.Hour)} {
+		if _, err := p.Exec(context.Background(), `INSERT INTO identity_rate_limits(key_hash,window_start,hits) VALUES($1,$2,$3) ON CONFLICT(key_hash,window_start) DO UPDATE SET hits=$3`, key, at, hits); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRegistrationRateLimitReportsWindowWithoutStartingRegistration(t *testing.T) {
+	for _, global := range []bool{false, true} {
+		t.Run(strconv.FormatBool(global), func(t *testing.T) {
+			s, i, p := setup(t)
+			hits := 3
+			if global {
+				hits = 12
+			}
+			exhaustRegistrationLimit(t, s, p, global, hits)
+			providerRequests := i.requests
+			before := time.Now()
+			w := request(t, s, registrationPath, registration(), "limited-key")
+			after := time.Now()
+			if w.Code != 429 {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body)
+			}
+			seconds, err := strconv.Atoi(w.Header().Get("Retry-After"))
+			if err != nil || seconds < 1 || seconds > 3600 {
+				t.Fatalf("invalid Retry-After=%q", w.Header().Get("Retry-After"))
+			}
+			// Retry-After must point at the actual hourly boundary, including ceiling.
+			earliest := before.UTC().Truncate(time.Hour).Add(time.Hour)
+			latest := after.UTC().Truncate(time.Hour).Add(time.Hour)
+			deadline := after.Add(time.Duration(seconds) * time.Second)
+			if deadline.Before(earliest) || deadline.After(latest.Add(2*time.Second)) {
+				t.Fatalf("retry deadline=%s want hourly boundary %s..%s", deadline, earliest, latest)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body["error"] != "rate_limited" || body["retry_after"] != float64(seconds) || body["registration_not_started"] != true || body["registration_id"] != nil {
+				t.Fatalf("invalid denial body=%s", w.Body)
+			}
+			if i.requests != providerRequests {
+				t.Fatalf("rate-limited registration contacted provider: requests before=%d after=%d", providerRequests, i.requests)
+			}
+			var rows int
+			if err := p.QueryRow(context.Background(), `SELECT count(*) FROM identity_registrations`).Scan(&rows); err != nil || rows != 0 || i.creates != 0 {
+				t.Fatalf("denial wrote registrations: rows=%d creates=%d err=%v", rows, i.creates, err)
+			}
+			var raw string
+			if err := p.QueryRow(context.Background(), `SELECT coalesce(json_agg(r)::text,'[]') FROM identity_rate_limits r`).Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			for _, secret := range []string{"192.0.2.1", "limited-key", "alice", "CorrectHorse9Battery!"} {
+				if strings.Contains(raw, secret) {
+					t.Fatal("denial persisted request material")
+				}
+			}
+		})
+	}
+}
+
+func TestRegistrationUnknownReplaysDespiteExhaustedRateLimit(t *testing.T) {
+	s, i, p := setup(t)
+	// Use one connection: the transaction must release it before reconciliation.
+	cfg := p.Config()
+	cfg.MaxConns = 1
+	single, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(single.Close)
+	s.pool = single
+	i.mode = "create unknown"
+	first := request(t, s, registrationPath, registration(), "unknown-key")
+	if first.Code != 202 {
+		t.Fatalf("first=%d %s", first.Code, first.Body)
+	}
+	exhaustRegistrationLimit(t, s, p, false, 3)
+	w := request(t, s, registrationPath, registration(), "unknown-key")
+	if w.Code != 200 || i.creates != 1 || strings.Contains(w.Body.String(), "registration_not_started") || w.Header().Get("Retry-After") != "" {
+		t.Fatalf("replay=%d creates=%d body=%s", w.Code, i.creates, w.Body)
+	}
+}
+
+func TestRegistrationRateStoreFailureIsUnavailable(t *testing.T) {
+	s, i, p := setup(t)
+	if _, err := p.Exec(context.Background(), `ALTER TABLE identity_rate_limits RENAME TO unavailable_rate_limits`); err != nil {
+		t.Fatal(err)
+	}
+	w := request(t, s, registrationPath, registration(), "unavailable-key")
+	if w.Code != 503 || !strings.Contains(w.Body.String(), `"error":"service_unavailable"`) || strings.Contains(w.Body.String(), "registration_not_started") || w.Header().Get("Retry-After") != "" || i.creates != 0 {
+		t.Fatalf("status=%d creates=%d body=%s", w.Code, i.creates, w.Body)
+	}
+}
+
+func TestConcurrentSameKeyNeverClaimsNotStartedAfterAcceptedRequest(t *testing.T) {
+	s, i, p := setup(t)
+	exhaustRegistrationLimit(t, s, p, false, 2)
+	entered, proceed := make(chan struct{}), make(chan struct{})
+	i.mu.Lock()
+	i.organizationEntered, i.organizationContinue = entered, proceed
+	i.mu.Unlock()
+	first := make(chan *httptest.ResponseRecorder, 1)
+	second := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- request(t, s, registrationPath, registration(), "concurrent-limit-key") }()
+	<-entered
+	go func() { second <- request(t, s, registrationPath, registration(), "concurrent-limit-key") }()
+	var early *httptest.ResponseRecorder
+	select {
+	case early = <-second:
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(proceed)
+	firstResult := <-first
+	if early == nil {
+		early = <-second
+	}
+	if firstResult.Code != 201 {
+		t.Fatalf("first=%d body=%s", firstResult.Code, firstResult.Body)
+	}
+	if early.Code != 200 && early.Code != 202 {
+		t.Fatalf("same-key concurrent replay=%d body=%s", early.Code, early.Body)
+	}
+	if strings.Contains(early.Body.String(), "registration_not_started") || i.creates != 1 {
+		t.Fatalf("incorrect not-started assertion or duplicate create: creates=%d body=%s", i.creates, early.Body)
 	}
 }
