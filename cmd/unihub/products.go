@@ -19,6 +19,15 @@ func ensureConfiguredProducts(ctx context.Context, pool *pgxpool.Pool, clients m
 	defer tx.Rollback(ctx)
 	seen := map[string]bool{}
 	for _, c := range clients {
+		commercial := len(c.BillingProducts) > 0
+		for _, scope := range c.Scopes {
+			if scope == "catalog:read" || scope == "subscriptions:read" || scope == "credits:read" || scope == "wallets:read" || scope == "recharges:read" || scope == "recharges:write" || scope == "transfers:write" || scope == "operations:read" || scope == "orders:read" || scope == "orders:write" || scope == "settings:read" || scope == "settings:write" || scope == "refunds:write" || scope == "usage:read" || scope == "usage:all-products" || scope == "model-credentials:write" {
+				commercial = true
+			}
+		}
+		if !commercial {
+			continue
+		}
 		if seen[c.ProductID] {
 			continue
 		}
@@ -40,7 +49,7 @@ func ensureConfiguredProducts(ctx context.Context, pool *pgxpool.Pool, clients m
 func ensureConfiguredBillingProducts(ctx context.Context, pool *pgxpool.Pool, profiles []billing.BillingProfile) error {
 	configured := map[string]products.Client{}
 	for _, profile := range profiles {
-		configured[profile.ProductID] = products.Client{ProductID: profile.ProductID}
+		configured[profile.ProductID] = products.Client{ProductID: profile.ProductID, BillingProducts: []string{profile.ProductID}}
 	}
 	return ensureConfiguredProducts(ctx, pool, configured)
 }

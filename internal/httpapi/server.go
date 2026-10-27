@@ -18,6 +18,7 @@ import (
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
 	"unihub/internal/products"
+	"unihub/internal/productusers"
 	"unihub/internal/wallet"
 )
 
@@ -31,6 +32,7 @@ type Options struct {
 	OperatorVerifier auth.Verifier
 	ProductVerifiers map[string]auth.Verifier
 	ProductAccess    map[string]products.Client
+	ProductUsers     *productusers.Store
 	Identity         ProfileService
 }
 type ProfileService interface {
@@ -54,6 +56,7 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		respond(w, 200, map[string]string{"status": "ok", "service": "unihub"})
 	})
 	add := func(pattern string, f action) { m.HandleFunc(pattern, s.authenticated(f)) }
+	s.productUserRoutes(add)
 	s.invitationQueryRoutes(add)
 	if o.Identity != nil {
 		s.profileRoutes(add)
@@ -353,6 +356,13 @@ func (s *api) authenticated(next action) http.HandlerFunc {
 			writeError(w, e)
 			return
 		}
+		if s.options.ProductUsers != nil {
+			if e = s.options.ProductUsers.CheckActive(r.Context(), u.ID); e != nil {
+				writeError(w, e)
+				return
+			}
+		}
+		r = withAccessExpiry(r, c)
 		if browser && h == "" {
 			if gate, ok := s.options.Identity.(interface {
 				BrowserSessionAllowed(context.Context, string) bool

@@ -138,3 +138,9 @@ test('OpenAPI publishes all named model pool methods with exact restricted scope
   assert.ok(block);assert.ok(block.includes(`"operationId": "${method}"`));assert.ok(block.includes('"usage:all-products"'));assert.ok(block.includes('billing_admin'));
  }
 });
+
+test('product access and user administration preserve instance and assignment versions',async t=>{
+ const {client,calls}=await fixture(t,(_r,res)=>send(res,200,{}));client.setAccessToken('console-token');
+ await client.productAccess('notes','staging');await client.applications();await client.userManagement();await client.managedUsers('Alice',25);await client.userProducts();await client.userAccess('immutable-user');await client.setUserAccess('immutable-user','notes','staging',{roles:[],active:true,version:0});await client.setUserStatus('immutable-user',{active:false,version:7});
+ assert.equal(calls[0].path,'/v1/me/product-access?product_id=notes&instance=staging');assert.equal(calls[3].path,'/v1/user-management/users?q=Alice&limit=25');assert.equal(calls[6].path,'/v1/user-management/users/immutable-user/access/notes?instance=staging');assert.deepEqual(calls[6].body,{roles:[],active:true,version:0});assert.deepEqual(calls[7].body,{active:false,version:7});
+});

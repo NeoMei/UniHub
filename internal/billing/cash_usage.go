@@ -42,6 +42,13 @@ func (s *Service) AuthorizeUsageOn(ctx context.Context, q accounts.Querier, acto
 }
 func (s *Service) authorizeUsageOn(ctx context.Context, q accounts.Querier, actor, account, origin, mode string, now time.Time) (UsageAuthorization, error) {
 	var out UsageAuthorization
+	var active bool
+	if e := q.QueryRow(ctx, `SELECT active FROM users WHERE id=$1`, actor).Scan(&active); e != nil {
+		return out, e
+	}
+	if !active {
+		return out, accounts.ErrForbidden
+	}
 	if e := s.member(ctx, q, actor, account); e != nil {
 		return out, e
 	}

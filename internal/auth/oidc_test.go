@@ -103,11 +103,12 @@ func TestOIDCVerifiesCasdoorAccessToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	var contract Verifier = verifier
-	got, err := contract.Verify(context.Background(), signJWT(t, i.key, i.claims(), "RS256"))
+	verifiedClaims := i.claims()
+	got, err := contract.Verify(context.Background(), signJWT(t, i.key, verifiedClaims, "RS256"))
 	if err != nil {
 		t.Fatalf("valid access token rejected: %v", err)
 	}
-	want := Claims{Issuer: i.server.URL, Subject: "casdoor-user-123", Name: "Alice", Email: "alice@example.com"}
+	want := Claims{Issuer: i.server.URL, Subject: "casdoor-user-123", Name: "Alice", Email: "alice@example.com", ExpiresAt: verifiedClaims["exp"].(int64)}
 	if got != want {
 		t.Fatalf("identity = %#v, want %#v", got, want)
 	}

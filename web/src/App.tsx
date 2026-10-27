@@ -56,7 +56,10 @@ import {
   Table,
 } from "./ui";
 import { Catalog, Members, SettingsPage, Wallets } from "./forms";
+import {ProductApplications,ProductUserManagement} from "./ProductUsers";
 export type Page =
+ | "applications"
+ | "user-management"
   | "overview"
   | "memberships"
   | "credits"
@@ -119,6 +122,7 @@ export default function App() {
   const [selected, setSelected] = useState(initialAccount);
   const [page, setPage] = useState<Page>("overview");
   const [profileOpen, setProfileOpen] = useState(false);
+ const userManagement=useResource<{enabled:boolean;can_manage:boolean}>(session.data?.authenticated?"/v1/user-management":undefined,version);
   const [portalOpen, setPortalOpen] = useState(() => ["/guide", "/products"].includes(window.location.pathname));
   const [busy, setBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -215,6 +219,8 @@ export default function App() {
               <span>{label}</span>
             </button>
           ))}
+          <button className={page==="applications"?"active":""} onClick={()=>{setProfileOpen(false);setPage("applications")}}><Box size={19}/><span>我的应用</span></button>
+          {userManagement.data?.can_manage && <button className={page==="user-management"?"active":""} onClick={()=>{setProfileOpen(false);setPage("user-management")}}><Users size={19}/><span>用户管理</span></button>}
         </nav>
         <span className="sidebar-footer">归一 UniHub · 统一身份与账户中心</span>
       </aside>
@@ -283,7 +289,7 @@ export default function App() {
               onClose={() => setProfileOpen(false)}
               onChanged={setProfileView}
             />
-          ) : account ? (
+          ) : page==="applications" ? <ProductApplications/> : page==="user-management" && userManagement.data?.can_manage ? <ProductUserManagement csrf={session.data.csrf_token}/> : account ? (
             <AccountConsole
               key={account.id}
               account={account}
@@ -632,6 +638,7 @@ function AccountConsole({
   }
   const title = navigation.find((n) => n.id === page)!.label;
   const descriptions: Record<Page, string> = {
+ applications:"打开你的产品应用。", "user-management":"管理统一用户状态与产品角色。",
     overview: "查看当前账户的会员、额度与资金。",
     memberships: "管理产品会员，查看已付期限与方案权益。",
     credits: "模型额度仅用于模型服务，不是可退款现金。",

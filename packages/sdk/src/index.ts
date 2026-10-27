@@ -14,6 +14,11 @@ export interface RegistrationResult { registration_id: string; status: 'CREATED'
 export interface TokenSet { access_token: string; id_token: string; token_type: 'Bearer'; scope: string; expires_in: number }
 export interface User { id: string; name: string; email: string }
 export interface IdentityProfile { id: string; username: string; display_name: string; avatar_url: '' | '/v1/me/avatar'; email: string; version: string }
+export interface ProductAccess {issuer:string;subject:string;product_id:string;instance_id:string;user:User;roles:string[];permissions:string[];version:number;active:boolean;expires_at:number}
+export interface ProductManifest {product_id:string;instance_id:string;name:string;entry_url:string;version:number;default_roles:string[];roles:{id:string;name:string;permissions:string[];privileged?:boolean}[]}
+export interface ProductAssignment {product_id:string;instance_id:string;roles:string[];active:boolean;assignment_version:number;manifest_version:number;explicit:boolean}
+export interface ManagedUser extends User {active:boolean;version:number}
+export interface Application extends ProductAccess {name:string;entry_url:string}
 export interface Account { id: string; kind: string; name: string; role: string }
 export interface Member { user_id: string; name: string; email: string; role: string }
 export interface Invitation { id: string; account_id: string; recipient_id: string; role: string }
@@ -86,6 +91,14 @@ export class UniHubClient {
   this.setAccessToken(tokens.access_token);return tokens;
  }
  private path(account: string,suffix=''): string {return `/v1/accounts/${segment(account)}${suffix}`;}
+ productAccess(productId?:string,instance?:string):Promise<ProductAccess>{return this.request('GET',query('/v1/me/product-access',{product_id:productId,instance}));}
+ applications():Promise<Application[]>{return this.request('GET','/v1/me/applications');}
+ userManagement():Promise<{enabled:boolean;can_manage:boolean}>{return this.request('GET','/v1/user-management');}
+ managedUsers(q='',limit=50):Promise<ManagedUser[]>{return this.request('GET',query('/v1/user-management/users',{q,limit}));}
+ userProducts():Promise<ProductManifest[]>{return this.request('GET','/v1/user-management/products');}
+ userAccess(user:string):Promise<ProductAssignment[]>{return this.request('GET',`/v1/user-management/users/${segment(user)}/access`);}
+ setUserAccess(user:string,product:string,instance:string,body:{roles:string[];active:boolean;version:number}):Promise<ProductAssignment>{return this.request('PUT',query(`/v1/user-management/users/${segment(user)}/access/${segment(product)}`,{instance}),{body});}
+ setUserStatus(user:string,body:{active:boolean;version:number}):Promise<ManagedUser>{return this.request('PUT',`/v1/user-management/users/${segment(user)}/status`,{body});}
  me(): Promise<User>{return this.request('GET','/v1/me');}
  profile(): Promise<IdentityProfile>{return this.request('GET','/v1/me/profile');}
  updateDisplayName(displayName: string): Promise<IdentityProfile>{return this.request('PATCH','/v1/me/profile',{body:{display_name:displayName}});}

@@ -368,7 +368,7 @@ func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 	}
 	var claims auth.Claims
 	var csrf string
-	err = s.pool.QueryRow(r.Context(), `SELECT issuer,subject,name,email,csrf_token FROM browser_sessions WHERE id_hash=$1 AND expires_at>now()`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf)
+	err = s.pool.QueryRow(r.Context(), `SELECT issuer,subject,name,email,csrf_token,extract(epoch from expires_at)::bigint FROM browser_sessions WHERE id_hash=$1 AND expires_at>now()`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt)
 	return claims, csrf, err == nil
 }
 func (s *Server) csrf(r *http.Request, expected string) bool {

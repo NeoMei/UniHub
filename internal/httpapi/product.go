@@ -28,6 +28,7 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 	scope := map[string]string{
 		"GET /v1/me/profile": "accounts:read", "PATCH /v1/me/profile": "profile:write", "POST /v1/me/password": "profile:write", "GET /v1/me/avatar": "accounts:read", "PUT /v1/me/avatar": "profile:write",
 		"GET /v1/products/{product}/model-consistency": "catalog:read", "GET /v1/products/{product}/billing-profile": "catalog:read", "GET /v1/billing-presets": "catalog:read",
+		"GET /v1/me/product-access": "access:read", "GET /v1/me/applications": "access:read",
 		"GET /v1/me": "accounts:read", "GET /v1/capabilities": "accounts:read",
 		"GET /v1/accounts": "accounts:read", "POST /v1/accounts": "accounts:write",
 		"GET /v1/accounts/{account}/members": "members:read",
@@ -48,7 +49,7 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 		"POST /v1/accounts/{account}/model-credentials":     "model-credentials:write", "DELETE /v1/accounts/{account}/model-credentials/{credential}": "model-credentials:write",
 		"GET /v1/accounts/{account}/calls": "usage:read", "GET /v1/accounts/{account}/calls/{call}": "usage:read", "GET /v1/accounts/{account}/usage/summary": "usage:read",
 	}[pattern]
-	return scope != "" && (c.HasScope(scope) || (pattern == "GET /v1/me" && c.HasScope("identity:read")))
+	return scope != "" && (c.HasScope(scope) || (pattern == "GET /v1/capabilities" && c.HasScope("access:read")) || (pattern == "GET /v1/me" && c.HasScope("identity:read")))
 }
 func productPolicy(r *http.Request) (products.Client, bool) {
 	c, ok := r.Context().Value(productPolicyKey{}).(products.Client)
