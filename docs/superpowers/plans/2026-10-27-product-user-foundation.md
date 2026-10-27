@@ -56,3 +56,7 @@
 - [x] Implement a source-distributed initialization tool that generates a runnable Go product, product manifest and dependency snapshot/config example into a fresh output directory, refusing existing files; add tests for generated consumer build, explicit config and no credentials/absolute parent paths. Implement starter with explicit local standalone provider integration seam, reusable provisioner and extension data; include commands that work without repository-internal imports or machine-specific paths. New-product integration guide lists required callbacks/credentials and upgrade workflow.
 - [x] Run broad UniHub Go tests/race where relevant, LLMRouter focused backend regressions, both frontend required checks, SDK/kit tests, and actual TCP acceptance. Capture browser successful login/launch/role change/revocation with identity fixture boundary clearly labeled; use real local OIDC when available.
 - [x] Fix verified integration failures with regression tests; commit task-owned changes and report distinct automated, TCP, browser, OIDC and deployment evidence.
+
+## Completion
+
+All three tasks and the final repair review passed. Accepted implementation revisions, final full-suite results, decisions and remaining deployment limits are recorded in [final acceptance and review](../reviews/2026-10-27-product-user-foundation.md).
