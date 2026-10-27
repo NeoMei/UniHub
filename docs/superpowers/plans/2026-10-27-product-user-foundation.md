@@ -35,13 +35,13 @@
 
 ### Task 2: LLMRouter uses shared module and live product access
 
-**Files:** Create third_party/unihub-userkit (exact snapshot), scripts/sync-unihub-userkit.py, internal/platformaccount/userkit.go, model/unihub_session_binding.go, middleware/unihub_management.go and meaningful tests. Modify go.mod, router/unihub.go, middleware/{native_api_boundary.go,auth.go}, native management route registration, service/auth_session.go where current proof is required, GORM migration registration, frontend unihub/auth/sidebar files and tests, integration config/docs.
+**Files:** Extend UniHub packages/userkit-go with the reusable OIDC browser helper and tests (separate UniHub commit), then create third_party/unihub-userkit (exact snapshot), scripts/sync-unihub-userkit.py, internal/platformaccount/userkit.go, model/unihub_session_binding.go, middleware/unihub_management.go and meaningful tests. Modify go.mod, router/unihub.go, middleware/{native_api_boundary.go,auth.go}, native management route registration, service/auth_session.go where current proof is required, GORM migration registration, frontend unihub/auth/sidebar files and tests, integration config/docs.
 
 **Interfaces:** Consumes Task 1 Go kit and /v1/me/product-access. Produces encrypted per-session upstream proof binding, authenticated /api/unihub/access, explicit route permission enforcement and seamless OIDC->JIT->native product session UX. Uses Provider.Resolve plus product-owned GORM provisioner around existing ResolveUniHubProjection. No persisted local elevated role.
 
 - [ ] Add failing tests for UniHub ordinary/admin/read-only/currently-revoked user through actual channel routes; wrong audience/session binding, native/PAT credentials and finance/token/relay paths rejected; standalone native admin continues.
 - [ ] Run focused tests for RED. Reuse meaningful current router fixtures and require/assert conventions.
-- [ ] Vendor shared module via deterministic sync tool and checked provenance, adapt platformaccount proof to shared kit, bind upstream proof encrypted and expiry-capped to each actual dashboard session.
+- [ ] Add the shared framework-neutral browser OIDC code/PKCE helper with browser-bound state/nonce/verifier and safe returns; test callback mismatch, replay/expiry and token-validation errors. Vendor shared module via deterministic sync tool and checked provenance, adapt platformaccount proof to shared kit, bind upstream proof encrypted and expiry-capped to each actual dashboard session.
 - [ ] Add explicit route permission matrix and live access checks, combine effective request role with specific permissions and audit identity. Cover refresh, session revocation and central unavailable without fallback.
 - [ ] Update frontend SSO bootstrapping, safe return destination, role/access hydration and permitted navigation without changing private native policy or financially significant payer selection.
 - [ ] Run tests, typecheck/lint/build and exact-source vendor verification. Commit task files; report commands/results, commit range and limitations.
