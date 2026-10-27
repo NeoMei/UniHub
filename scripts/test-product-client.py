@@ -14,6 +14,20 @@ class ProductClientTests(unittest.TestCase):
   spec=importlib.util.spec_from_file_location('product_client',MODULE);cls.m=importlib.util.module_from_spec(spec);spec.loader.exec_module(cls.m)
  def client(self,**kw):
   c={'product_id':'new-product','client_id':'new-audience','application':'app-new-product','organization':'unihub','redirect_uris':['https://app.test/callback'],'origins':['https://app.test'],'scopes':['accounts:read','catalog:read'],'billing_products':['new-product'],'password_login':False,'registration':False};c.update(kw);return c
+ def test_browser_sso_is_explicit_independent_and_exactly_read_back(self):
+  c=self.client(scopes=['identity:read','access:read'],instance_id='local',browser_sso=True)
+  app=self.m.application(c,'cert-built-in')
+  self.assertFalse(c['password_login']);self.assertTrue(app['enablePassword']);self.assertTrue(app['enableSigninSession']);self.assertTrue(app['enableAutoSignin'])
+  self.assertEqual(app['signinMethods'][0]['rule'],'All')
+  self.m.compare_readback(app,app)
+  for key in ['enableSigninSession','enableAutoSignin','enablePassword']:
+   with self.assertRaises(self.m.PolicyError):self.m.compare_readback(dict(app,**{key:False}),app)
+  legacy=self.m.application(self.client(),'cert-built-in')
+  self.assertFalse(legacy['enablePassword']);self.assertFalse(legacy['enableSigninSession']);self.assertFalse(legacy['enableAutoSignin'])
+  headless=self.m.application(self.client(password_login=True),'cert-built-in')
+  self.assertTrue(headless['enablePassword']);self.assertFalse(headless['enableSigninSession'])
+  for change in [{'browser_sso':'true'},{'instance_id':'../escape'},{'instance_id':''}]:
+   with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
  def test_policy_rejects_secret_wildcards_unknown_scope_and_global_org(self):
   for change in [{'client_secret':'x'},{'origins':['https://app.test/path']},{'redirect_uris':['https://app.test/%2A']},{'scopes':['admin:all']},{'organization':'built-in'},{'application':'app-built-in'}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))

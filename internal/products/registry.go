@@ -24,6 +24,7 @@ type Client struct {
 	Origins         []string `json:"origins,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
 	BillingProducts []string `json:"billing_products,omitempty"`
+	BrowserSSO      bool     `json:"browser_sso,omitempty"`
 	PasswordLogin   bool     `json:"password_login,omitempty"`
 	Registration    bool     `json:"registration,omitempty"`
 }

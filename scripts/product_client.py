@@ -19,8 +19,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-SCOPES=set('identity:read profile:write accounts:read accounts:write members:read members:write catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:read model-credentials:write'.split())
-FIELDS={'product_id','client_id','application','organization','redirect_uris','origins','scopes','billing_products','password_login','registration'}
+SCOPES=set('access:read identity:read profile:write accounts:read accounts:write members:read members:write catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:read model-credentials:write'.split())
+FIELDS={'product_id','client_id','application','organization','redirect_uris','origins','scopes','billing_products','password_login','registration','browser_sso','instance_id'}
 SLUG=re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 NAME=re.compile(r'^[A-Za-z][A-Za-z0-9_-]{1,63}$')
 class PolicyError(Exception):pass
@@ -45,7 +45,8 @@ def validate_client(c,managed=True):
  if managed and c.get('organization')!='unihub':raise PolicyError('Only private unihub organization is permitted')
  if managed and (not isinstance(c.get('application'),str) or not NAME.fullmatch(c['application']) or c['application'] in {'app-built-in','app-unihub'}):raise PolicyError('An independent named product application is required')
  if (c.get('password_login') or c.get('registration')) and '-org-' in c['client_id']:raise PolicyError('Identity-enabled client audience conflicts with organization token routing')
- for field in ['password_login','registration']:
+ if 'instance_id' in c and (not isinstance(c['instance_id'],str) or not SLUG.fullmatch(c['instance_id'])):raise PolicyError('Invalid instance ID')
+ for field in ['password_login','registration','browser_sso']:
   if type(c.get(field,False)) is not bool:raise PolicyError('Identity capability flags must be booleans')
  for field in ['scopes','billing_products','origins','redirect_uris']:
   if not isinstance(c.get(field,[]),list) or any(not isinstance(x,str) for x in c.get(field,[])) or len(set(c.get(field,[])))!=len(c.get(field,[])):raise PolicyError('Policy fields must be unique string lists')
@@ -59,8 +60,8 @@ def validate_client(c,managed=True):
 def application(c,cert):
  validate_client(c)
  if not isinstance(cert,str) or not NAME.fullmatch(cert):raise PolicyError('An existing signing certificate name is required')
- password=c.get('password_login',False) or c.get('registration',False)
- return {'owner':'admin','name':c['application'],'displayName':c['product_id'],'description':'UniHub managed product: '+c['product_id'],'organization':'unihub','cert':cert,'category':'Default','type':'All','isShared':False,'clientId':c['client_id'],'enablePassword':password,'enableSignUp':c.get('registration',False),'disableSelfSignup':not c.get('registration',False),'disableSignin':False,'enableSigninSession':False,'enableAutoSignin':False,'defaultGroup':'','defaultTag':'','providers':[],'signinMethods':[{'name':'Password','displayName':'Password','rule':'All' if password else 'Hide password'}],'signinItems':[{'name':x,'visible':True,'rule':'None'} for x in ['Username','Password','Login button']],'signupItems':[{'name':'Username','visible':True,'required':True,'rule':'None'},{'name':'Password','visible':True,'required':True,'rule':'None'},{'name':'Display name','visible':True,'required':False,'rule':'All'},{'name':'Email','visible':True,'required':False,'rule':'No verification'}],'grantTypes':['authorization_code'],'redirectUris':c['redirect_uris'],'tokenFormat':'JWT-Standard','tokenSigningMethod':'RS256','expireInHours':1,'cookieExpireInHours':1,'failedSigninLimit':5,'failedSigninFrozenTime':15}
+ password=c.get('password_login',False) or c.get('registration',False) or c.get('browser_sso',False)
+ return {'owner':'admin','name':c['application'],'displayName':c['product_id'],'description':'UniHub managed product: '+c['product_id'],'organization':'unihub','cert':cert,'category':'Default','type':'All','isShared':False,'clientId':c['client_id'],'enablePassword':password,'enableSignUp':c.get('registration',False),'disableSelfSignup':not c.get('registration',False),'disableSignin':False,'enableSigninSession':c.get('browser_sso',False),'enableAutoSignin':c.get('browser_sso',False),'defaultGroup':'','defaultTag':'','providers':[],'signinMethods':[{'name':'Password','displayName':'Password','rule':'All' if password else 'Hide password'}],'signinItems':[{'name':x,'visible':True,'rule':'None'} for x in ['Username','Password','Login button']],'signupItems':[{'name':'Username','visible':True,'required':True,'rule':'None'},{'name':'Password','visible':True,'required':True,'rule':'None'},{'name':'Display name','visible':True,'required':False,'rule':'All'},{'name':'Email','visible':True,'required':False,'rule':'No verification'}],'grantTypes':['authorization_code'],'redirectUris':c['redirect_uris'],'tokenFormat':'JWT-Standard','tokenSigningMethod':'RS256','expireInHours':1,'cookieExpireInHours':1,'failedSigninLimit':5,'failedSigninFrozenTime':15}
 
 def digest_file(p):
  if p.is_symlink():raise PolicyError('Registry must not be a symlink')
@@ -182,14 +183,14 @@ def main(argv=None):
  parser=argparse.ArgumentParser(description=__doc__);sub=parser.add_subparsers(dest='command',required=True)
  prep=sub.add_parser('prepare',help='Offline: generate a reviewable public plan; no remote or registry changes')
  for name in ['registry','output','product-id','client-id','application']:prep.add_argument('--'+name,required=True)
- prep.add_argument('--redirect-uri',action='append',required=True);prep.add_argument('--origin',action='append',default=[]);prep.add_argument('--scope',action='append');prep.add_argument('--billing-product',action='append');prep.add_argument('--certificate',default='cert-built-in');prep.add_argument('--password-login',action='store_true');prep.add_argument('--registration',action='store_true')
+ prep.add_argument('--redirect-uri',action='append',required=True);prep.add_argument('--origin',action='append',default=[]);prep.add_argument('--scope',action='append');prep.add_argument('--billing-product',action='append');prep.add_argument('--certificate',default='cert-built-in');prep.add_argument('--password-login',action='store_true');prep.add_argument('--registration',action='store_true');prep.add_argument('--browser-sso',action='store_true');prep.add_argument('--instance-id',default='default')
  for command in ['apply','readback']:
   p=sub.add_parser(command,help='Apply exact named application and publish after readback' if command=='apply' else 'Read-only remote and registry verification');p.add_argument('--plan',required=True);p.add_argument('--issuer',required=True)
  args=parser.parse_args(argv)
  try:
   if args.command=='prepare':
    if Path(args.registry).absolute()==Path(args.output).absolute():raise PolicyError('Plan output must differ from registry path')
-   c={'product_id':args.product_id,'client_id':args.client_id,'application':args.application,'organization':'unihub','redirect_uris':args.redirect_uri,'origins':args.origin,'scopes':args.scope or ['accounts:read','catalog:read'],'billing_products':args.billing_product or [args.product_id],'password_login':args.password_login,'registration':args.registration}
+   c={'product_id':args.product_id,'client_id':args.client_id,'application':args.application,'organization':'unihub','redirect_uris':args.redirect_uri,'origins':args.origin,'scopes':args.scope or ['accounts:read','catalog:read'],'billing_products':args.billing_product or [args.product_id],'password_login':args.password_login,'registration':args.registration,'browser_sso':args.browser_sso,'instance_id':args.instance_id}
    plan=prepare(Path(args.registry),c,args.certificate);write_atomic(Path(args.output),plan);print('Public product plan prepared; review before apply. No remote mutation occurred.')
   else:
    plan=validate_plan(json.loads(Path(args.plan).read_text()));client=os.environ.get('HEADLESS_MANAGEMENT_CLIENT_ID','');secret=os.environ.get('HEADLESS_MANAGEMENT_CLIENT_SECRET','')
