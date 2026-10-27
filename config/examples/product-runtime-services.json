@@ -1,0 +1,37 @@
+{
+  "llmrouter": {
+    "token": "REPLACE_WITH_PRIVATE_RUNTIME_SERVICE_TOKEN",
+    "product_id": "llmrouter",
+    "instance_id": "default",
+    "allowed_ops": [
+      "identity:register",
+      "identity:authenticate",
+      "identity:lookup",
+      "identity:lifecycle",
+      "identity:manage",
+      "identity:browser",
+      "bindings:write",
+      "access:read",
+      "users:read",
+      "users:write",
+      "billing:read",
+      "billing:write",
+      "credits:adjust",
+      "credits:award",
+      "budgets:read",
+      "budgets:write",
+      "calls:refund",
+      "calls:reprice"
+    ]
+  },
+  "llmrouter-reviewed-import": {
+    "token": "REPLACE_WITH_DISTINCT_PRIVATE_IMPORT_TOKEN",
+    "product_id": "llmrouter",
+    "instance_id": "default",
+    "allowed_ops": [
+      "identity:import",
+      "identity:lookup",
+      "migrations:write"
+    ]
+  }
+}

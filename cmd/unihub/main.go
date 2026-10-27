@@ -20,6 +20,7 @@ import (
 	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
+	"unihub/internal/productauth"
 	"unihub/internal/products"
 	"unihub/internal/productusers"
 	"unihub/internal/wallet"
@@ -125,13 +126,21 @@ func run() error {
 	if identity.ProfileEnabled() {
 		profileService = identity
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, Identity: profileService})
+	var productAuth *productauth.Service
+	if len(c.ProductRuntime) > 0 {
+		productAuth = productauth.New(pool, a, productUsers, c.PublicURL)
+		productAuth.ConfigureBrowserClients(c.ProductAccess)
+	}
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir})
 		if err != nil {
 			return err
 		}
 		handler = browser.Handler(handler)
+	}
+	if productAuth != nil {
+		handler = productAuth.BrowserHandler(handler)
 	}
 	handler = products.CORS(identity.Handler(handler), c.ProductAccess)
 	handler = publicapi.Handler(handler)

@@ -1296,6 +1296,7 @@ function ProfileSettings({
     }
   }
 
+  const productCredentials = current?.credential_source === "product";
   const avatar = current?.avatar_url ? `${current.avatar_url}?version=${encodeURIComponent(current.version)}` : "";
   return (
     <section className="profile-settings">
@@ -1310,22 +1311,22 @@ function ProfileSettings({
           <Panel title="我的资料">
             <div className="profile-hero">
               {avatar ? <img className="profile-avatar" src={avatar} alt={current?.display_name || "我的账户"} /> : <span className="profile-avatar profile-avatar-fallback">{(current?.display_name || "U").slice(0, 1).toUpperCase()}</span>}
-              <label className="avatar-upload">更换头像<input type="file" accept="image/png,image/jpeg" onChange={uploadAvatar} disabled={savingProfile} /></label>
+              {!productCredentials && <label className="avatar-upload">更换头像<input type="file" accept="image/png,image/jpeg" onChange={uploadAvatar} disabled={savingProfile} /></label>}
             </div>
             <div className="stack-form">
-              <label>显示名称<input value={displayName} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label>
+              <label>显示名称<input value={displayName} disabled={productCredentials} maxLength={80} onChange={(event) => setDisplayName(event.target.value)} /></label>
               <dl>
                 <Detail label="登录邮箱">{current?.email || "—"}</Detail>
                 <Detail label="用户名">{current?.username || "—"}</Detail>
               </dl>
               {profileError && <Notice kind="error">{profileError}</Notice>}
               {profileMessage && <Notice>{profileMessage}</Notice>}
-              <button onClick={saveProfile} disabled={savingProfile || !displayName.trim()}>保存个人资料</button>
+              {!productCredentials && <button onClick={saveProfile} disabled={savingProfile || !displayName.trim()}>保存个人资料</button>}
             </div>
           </Panel>
           <Panel title="登录与安全">
-            <div className="security-summary"><ShieldCheck size={20} /><div><strong>UniHub 统一身份</strong><p>认证由 Casdoor 管理，资料变更会同步到所有产品。</p></div></div>
-            <form className="stack-form" onSubmit={changePassword}>
+            <div className="security-summary"><ShieldCheck size={20} /><div><strong>UniHub 统一身份</strong><p>{productCredentials ? "密码、二次验证及通行密钥由原产品管理，继续使用原有登录方式。" : "认证由 Casdoor 管理，资料变更会同步到所有产品。"}</p></div></div>
+            {productCredentials ? <div className="stack-form">{current?.credential_management?.map((manager) => manager.url ? <a key={`${manager.product_id}/${manager.instance_id}`} href={manager.url}>前往 {manager.product_id} 管理密码与二次验证</a> : <p key={`${manager.product_id}/${manager.instance_id}`}>请在 {manager.product_id} 管理登录安全。</p>)}</div> : <form className="stack-form" onSubmit={changePassword}>
               <h3>修改密码</h3>
               <label>当前密码<input type="password" autoComplete="current-password" value={passwords.current} onChange={(event) => setPasswords({ ...passwords, current: event.target.value })} /></label>
               <label>新密码<input type="password" autoComplete="new-password" value={passwords.next} onChange={(event) => setPasswords({ ...passwords, next: event.target.value })} /></label>
@@ -1333,7 +1334,7 @@ function ProfileSettings({
               {passwordError && <Notice kind="error">{passwordError}</Notice>}
               {passwordMessage && <Notice>{passwordMessage}</Notice>}
               <button type="submit" disabled={savingPassword || !passwords.current || !passwords.next || !passwords.confirm}>更新密码</button>
-            </form>
+            </form>}
           </Panel>
         </div>
       )}

@@ -1,4 +1,4 @@
-export type Profile = { id:string; username:string; display_name:string; avatar_url?:string; email:string; version:string };
+export type Profile = { id:string; username:string; display_name:string; avatar_url?:string; email:string; version:string; credential_source?:"product"; credential_management?:Array<{product_id:string;instance_id:string;url?:string}> };
 export type Session = {
   authenticated: boolean;
   user?: { id: string; name: string; email: string };

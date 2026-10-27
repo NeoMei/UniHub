@@ -23,22 +23,31 @@ import (
 )
 
 var (
-	ErrUnavailable     = errors.New("identity profile unavailable")
-	ErrInvalidInput    = errors.New("identity profile invalid input")
-	ErrInvalidPassword = errors.New("identity profile invalid password")
-	ErrRateLimited     = errors.New("identity profile rate limited")
+	ErrUnavailable      = errors.New("identity profile unavailable")
+	ErrInvalidInput     = errors.New("identity profile invalid input")
+	ErrInvalidPassword  = errors.New("identity profile invalid password")
+	ErrManagedByProduct = errors.New("identity credentials managed by original product")
+	ErrRateLimited      = errors.New("identity profile rate limited")
 )
 
-type Profile struct {
-	ID          string `json:"id"`
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
-	AvatarURL   string `json:"avatar_url"`
-	Email       string `json:"email"`
-	Version     string `json:"version"`
+type CredentialManager struct {
+	ProductID  string `json:"product_id"`
+	InstanceID string `json:"instance_id"`
+	URL        string `json:"url"`
 }
 
-func (s *Server) ProfileEnabled() bool { return s.client != nil && !s.opts.Production }
+type Profile struct {
+	CredentialSource     string              `json:"credential_source,omitempty"`
+	CredentialManagement []CredentialManager `json:"credential_management,omitempty"`
+	ID                   string              `json:"id"`
+	Username             string              `json:"username"`
+	DisplayName          string              `json:"display_name"`
+	AvatarURL            string              `json:"avatar_url"`
+	Email                string              `json:"email"`
+	Version              string              `json:"version"`
+}
+
+func (s *Server) ProfileEnabled() bool { return s.pool != nil }
 
 type providerUser struct {
 	ID              string `json:"id"`
@@ -57,7 +66,7 @@ type profileIdentity struct {
 
 func (s *Server) profileIdentity(ctx context.Context, userID string) (profileIdentity, error) {
 	var out profileIdentity
-	err := s.pool.QueryRow(ctx, `SELECT issuer,subject FROM identities WHERE user_id=$1`, userID).Scan(&out.Issuer, &out.Subject)
+	err := s.pool.QueryRow(ctx, `SELECT issuer,subject FROM identities WHERE user_id=$1 AND issuer=$2`, userID, s.opts.Issuer).Scan(&out.Issuer, &out.Subject)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, ErrUnavailable
 	}
@@ -71,6 +80,9 @@ func (s *Server) profileIdentity(ctx context.Context, userID string) (profileIde
 }
 
 func (s *Server) providerUser(ctx context.Context, id profileIdentity) (providerUser, error) {
+	if s.client == nil || s.opts.Production {
+		return providerUser{}, ErrUnavailable
+	}
 	var env envelope
 	path := "/api/get-user?userId=" + url.QueryEscape(id.Subject) + "&owner=" + url.QueryEscape("unihub")
 	if err := s.providerJSON(ctx, "GET", path, nil, true, &env); err != nil || env.Status != "ok" || len(env.Data) == 0 || string(env.Data) == "null" {
@@ -99,6 +111,9 @@ func (s *Server) localAvatar(ctx context.Context, userID string) (string, string
 func (s *Server) Profile(ctx context.Context, userID string) (Profile, error) {
 	id, err := s.profileIdentity(ctx, userID)
 	if err != nil {
+		if errors.Is(err, ErrUnavailable) {
+			return s.nativeProfile(ctx, userID)
+		}
 		return Profile{}, err
 	}
 	user, err := s.providerUser(ctx, id)
@@ -124,6 +139,12 @@ func (s *Server) UpdateDisplayName(ctx context.Context, userID, displayName stri
 	}
 	id, err := s.profileIdentity(ctx, userID)
 	if err != nil {
+		if errors.Is(err, ErrUnavailable) {
+			if _, e := s.nativeProfile(ctx, userID); e != nil {
+				return Profile{}, e
+			}
+			return Profile{}, ErrManagedByProduct
+		}
 		return Profile{}, err
 	}
 	user, err := s.providerUser(ctx, id)
@@ -149,6 +170,13 @@ func (s *Server) UpdateDisplayName(ctx context.Context, userID, displayName stri
 func (s *Server) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
 	if currentPassword == "" || newPassword == "" || len(currentPassword) > 512 || len(newPassword) > 512 {
 		return ErrInvalidInput
+	}
+	if _, e := s.profileIdentity(ctx, userID); errors.Is(e, ErrUnavailable) {
+		if _, err := s.nativeProfile(ctx, userID); err == nil {
+			return ErrManagedByProduct
+		} else {
+			return err
+		}
 	}
 	var attempts int
 	err := s.pool.QueryRow(ctx, `INSERT INTO identity_rate_limits(key_hash,window_start,hits) VALUES($1,date_bin(interval '15 minutes',now(),timestamptz '2000-01-01'),1) ON CONFLICT(key_hash,window_start) DO UPDATE SET hits=identity_rate_limits.hits+1 RETURNING hits`, s.mac("profile_password", userID)).Scan(&attempts)
@@ -225,6 +253,28 @@ func (s *Server) ChangePassword(ctx context.Context, userID, currentPassword, ne
 // token purpose have passed the API's verifier. The local cutoff also rejects
 // still-active provider tokens after an ambiguous password mutation.
 func (s *Server) SessionAllowed(ctx context.Context, token string) bool {
+	// Profile-only mode relies on the original verifier and still enforces
+	// locally recorded credential revocations without calling a nil provider.
+	if s.client == nil {
+		var anyRevoked bool
+		if e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM identity_revocations WHERE issuer=$1)`, s.opts.Issuer).Scan(&anyRevoked); e != nil {
+			return false
+		}
+		if !anyRevoked {
+			return true
+		}
+		issued, subject, ok := tokenClaims(token)
+		if !ok {
+			return false
+		}
+		var cutoff time.Time
+		var pending bool
+		e := s.pool.QueryRow(ctx, `SELECT max(revoked_after),bool_or(pending) FROM identity_revocations WHERE issuer=$1 AND subject=$2 GROUP BY issuer,subject`, s.opts.Issuer, subject).Scan(&cutoff, &pending)
+		if errors.Is(e, pgx.ErrNoRows) {
+			return true
+		}
+		return e == nil && !pending && issued.After(cutoff)
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimSuffix(s.opts.Issuer, "/")+"/api/get-account", nil)
 	if err != nil {
 		return false
@@ -371,4 +421,53 @@ func (s *Server) providerFormRaw(ctx context.Context, path string, body io.Reade
 		return ErrUnavailable
 	}
 	return nil
+}
+
+func (s *Server) nativeProfile(ctx context.Context, userID string) (Profile, error) {
+	var out Profile
+	out.ID = userID
+	out.CredentialSource = "product"
+	if e := s.pool.QueryRow(ctx, `SELECT name,email FROM users WHERE id=$1 AND active`, userID).Scan(&out.DisplayName, &out.Email); e != nil {
+		return Profile{}, ErrUnavailable
+	}
+	out.Username = out.DisplayName
+	rows, e := s.pool.Query(ctx, `SELECT b.product_id,b.instance_id FROM product_runtime_bindings b JOIN product_auth_subjects p ON p.binding_id=b.id WHERE b.user_id=$1 AND NOT p.deleted AND (p.imported_batch<>'' OR p.registration_key NOT LIKE 'oidc:%') ORDER BY b.product_id,b.instance_id`, userID)
+	if e != nil {
+		return Profile{}, e
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var product, instance string
+		if e = rows.Scan(&product, &instance); e != nil {
+			return Profile{}, e
+		}
+		manager := CredentialManager{ProductID: product, InstanceID: instance}
+		for _, c := range s.opts.Clients {
+			if c.ProductID != product || (c.InstanceID != "" && c.InstanceID != instance) {
+				continue
+			}
+			manager.URL = c.AccountSettingsURL
+			if manager.URL == "" && len(c.RedirectURIs) > 0 {
+				u, err := url.Parse(c.RedirectURIs[0])
+				if err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" {
+					manager.URL = u.Scheme + "://" + u.Host
+					if product == "llmrouter" {
+						manager.URL += "/profile"
+					}
+				}
+			}
+			break
+		}
+		out.CredentialManagement = append(out.CredentialManagement, manager)
+	}
+	if e = rows.Err(); e != nil {
+		return Profile{}, e
+	}
+	if len(out.CredentialManagement) == 0 {
+		return Profile{}, ErrUnavailable
+	}
+	raw, _ := json.Marshal([]any{out.DisplayName, out.Email, out.CredentialManagement})
+	h := sha256.Sum256(raw)
+	out.Version = hex.EncodeToString(h[:])
+	return out, nil
 }

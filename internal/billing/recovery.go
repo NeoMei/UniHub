@@ -15,11 +15,16 @@ import (
 )
 
 type effect struct {
-	Order        *Order        `json:"order,omitempty"`
-	Subscription *Subscription `json:"subscription,omitempty"`
-	Batches      []Batch       `json:"batches,omitempty"`
-	Call         *Call         `json:"call,omitempty"`
-	Finance      bool          `json:"finance"`
+	RuntimeAttempt       int                `json:"runtime_attempt,omitempty"`
+	RuntimeAcceptedCall  bool               `json:"runtime_accepted_call,omitempty"`
+	RuntimeCall          *RuntimeCall       `json:"runtime_call,omitempty"`
+	RuntimeAdjustment    *RuntimeAdjustment `json:"runtime_adjustment,omitempty"`
+	RuntimeRequestDigest string             `json:"runtime_request_digest,omitempty"`
+	Order                *Order             `json:"order,omitempty"`
+	Subscription         *Subscription      `json:"subscription,omitempty"`
+	Batches              []Batch            `json:"batches,omitempty"`
+	Call                 *Call              `json:"call,omitempty"`
+	Finance              bool               `json:"finance"`
 }
 type command struct {
 	ID, Account, Actor, Kind, Key, Hash, Status string
@@ -80,6 +85,16 @@ func (s *Service) apply(ctx context.Context, c *pgxpool.Conn, x command, ledgerI
 		return e
 	}
 	defer database.Rollback(tx)
+	if x.Effect.RuntimeCall != nil {
+		if e = saveRuntimeCall(ctx, tx, *x.Effect.RuntimeCall); e != nil {
+			return e
+		}
+	}
+	if x.Effect.RuntimeAdjustment != nil {
+		if e = saveRuntimeAdjustment(ctx, tx, *x.Effect.RuntimeAdjustment); e != nil {
+			return e
+		}
+	}
 	if x.Effect.Order != nil {
 		if e = saveOrder(ctx, tx, *x.Effect.Order); e != nil {
 			return e
@@ -114,6 +129,20 @@ func (s *Service) reject(ctx context.Context, c *pgxpool.Conn, x command, status
 		return e
 	}
 	defer database.Rollback(tx)
+	if x.Kind == "runtime_reserve" && x.Effect.RuntimeCall != nil {
+		call := *x.Effect.RuntimeCall
+		call.Status = "REJECTED"
+		if e = saveRuntimeCall(ctx, tx, call); e != nil {
+			return e
+		}
+	}
+	if x.Effect.RuntimeAdjustment != nil {
+		adjustment := *x.Effect.RuntimeAdjustment
+		adjustment.Status = status
+		if e = saveRuntimeAdjustment(ctx, tx, adjustment); e != nil {
+			return e
+		}
+	}
 	if x.Kind == "payment" && x.Effect.Order != nil {
 		o := *x.Effect.Order
 		o.PaymentStatus = "REJECTED"
@@ -168,6 +197,42 @@ func (s *Service) runLocked(ctx context.Context, c *pgxpool.Conn, cmdID string) 
 		return nil
 	}
 	if x.Status == "CREATED" {
+		if (x.Kind == "runtime_reserve" || x.Kind == "runtime_topup") && x.Effect.RuntimeCall != nil {
+			call := x.Effect.RuntimeCall
+			if call.ParentCallID != "" {
+				if _, e = s.runtimeAcceptedParent(ctx, c, call.RuntimeScope, call.RuntimeReserveRequest); e != nil {
+					return s.reject(ctx, c, x, "CANCELED", "original_obligation_mismatch")
+				}
+			} else if !x.Effect.RuntimeAcceptedCall {
+				if _, e = s.runtimeAuthority(ctx, c, call.RuntimeScope, call.LocalUserID, call.AccountID); e != nil {
+					return s.reject(ctx, c, x, "CANCELED", "product_authorization_revoked")
+				}
+			}
+		}
+		if x.Kind == "runtime_gift" && x.Effect.RuntimeAdjustment != nil {
+			a := x.Effect.RuntimeAdjustment
+			if s.productUsers == nil {
+				return s.reject(ctx, c, x, "CANCELED", "product_authorization_revoked")
+			}
+			tx, beginError := c.Begin(ctx)
+			if beginError != nil {
+				return beginError
+			}
+			if e = s.productUsers.RequireRuntimeCreditOn(ctx, tx, x.Actor, a.ProductID, a.InstanceID, a.AccountID); e != nil {
+				database.Rollback(tx)
+				return s.reject(ctx, c, x, "CANCELED", "product_authorization_revoked")
+			}
+			// This is the authorization linearization point. Once SUBMITTING,
+			// recovery must honor the accepted immutable financial obligation.
+			if _, e = tx.Exec(ctx, `UPDATE billing_commands SET status='SUBMITTING' WHERE id=$1`, x.ID); e != nil {
+				database.Rollback(tx)
+				return e
+			}
+			if e = tx.Commit(ctx); e != nil {
+				return e
+			}
+			x.Status = "SUBMITTING"
+		}
 		if x.Effect.Finance {
 			if e = s.finance(ctx, c, x.Actor, x.Account); e != nil {
 				return s.reject(ctx, c, x, "CANCELED", "authorization_revoked")

@@ -15,18 +15,19 @@ import (
 )
 
 type Client struct {
-	InstanceID      string   `json:"instance_id,omitempty"`
-	ProductID       string   `json:"product_id"`
-	ClientID        string   `json:"client_id"`
-	Application     string   `json:"application,omitempty"`
-	Organization    string   `json:"organization,omitempty"`
-	RedirectURIs    []string `json:"redirect_uris,omitempty"`
-	Origins         []string `json:"origins,omitempty"`
-	Scopes          []string `json:"scopes,omitempty"`
-	BillingProducts []string `json:"billing_products,omitempty"`
-	BrowserSSO      bool     `json:"browser_sso,omitempty"`
-	PasswordLogin   bool     `json:"password_login,omitempty"`
-	Registration    bool     `json:"registration,omitempty"`
+	AccountSettingsURL string   `json:"account_settings_url,omitempty"`
+	InstanceID         string   `json:"instance_id,omitempty"`
+	ProductID          string   `json:"product_id"`
+	ClientID           string   `json:"client_id"`
+	Application        string   `json:"application,omitempty"`
+	Organization       string   `json:"organization,omitempty"`
+	RedirectURIs       []string `json:"redirect_uris,omitempty"`
+	Origins            []string `json:"origins,omitempty"`
+	Scopes             []string `json:"scopes,omitempty"`
+	BillingProducts    []string `json:"billing_products,omitempty"`
+	BrowserSSO         bool     `json:"browser_sso,omitempty"`
+	PasswordLogin      bool     `json:"password_login,omitempty"`
+	Registration       bool     `json:"registration,omitempty"`
 }
 
 var productID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
@@ -92,6 +93,21 @@ func Parse(raw []byte) (map[string]Client, error) {
 		for _, v := range c.Origins {
 			if !validURL(v, true) {
 				return nil, errors.New("invalid product origin")
+			}
+		}
+		if c.AccountSettingsURL != "" {
+			if !validURL(c.AccountSettingsURL, false) {
+				return nil, errors.New("invalid account settings URL")
+			}
+			u, _ := url.Parse(c.AccountSettingsURL)
+			trusted := false
+			for _, origin := range c.Origins {
+				if origin == u.Scheme+"://"+u.Host {
+					trusted = true
+				}
+			}
+			if !trusted {
+				return nil, errors.New("account settings URL must use an exact product origin")
 			}
 		}
 		for _, v := range c.RedirectURIs {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"slices"
 	"strings"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
@@ -17,16 +18,18 @@ type User struct {
 	Email string `json:"email"`
 }
 type Access struct {
-	Issuer      string   `json:"issuer"`
-	Subject     string   `json:"subject"`
-	ProductID   string   `json:"product_id"`
-	InstanceID  string   `json:"instance_id"`
-	User        User     `json:"user"`
-	Roles       []string `json:"roles"`
-	Permissions []string `json:"permissions"`
-	Version     int64    `json:"version"`
-	Active      bool     `json:"active"`
-	ExpiresAt   int64    `json:"expires_at"`
+	ProductRole         int                        `json:"product_role"`
+	PermissionOverrides map[string]map[string]bool `json:"permission_overrides,omitempty"`
+	Issuer              string                     `json:"issuer"`
+	Subject             string                     `json:"subject"`
+	ProductID           string                     `json:"product_id"`
+	InstanceID          string                     `json:"instance_id"`
+	User                User                       `json:"user"`
+	Roles               []string                   `json:"roles"`
+	Permissions         []string                   `json:"permissions"`
+	Version             int64                      `json:"version"`
+	Active              bool                       `json:"active"`
+	ExpiresAt           int64                      `json:"expires_at"`
 }
 type Assignment struct {
 	ProductID       string   `json:"product_id"`
@@ -82,36 +85,34 @@ func (s *Store) RequirePermissionOn(ctx context.Context, q accounts.Querier, act
 		return nil
 	}
 	var active bool
-	var roles *json.RawMessage
+	var rawRoles, rawOverrides *json.RawMessage
 	var assignmentActive *bool
-	if e := q.QueryRow(ctx, `SELECT u.active,a.roles,a.active FROM users u LEFT JOIN product_user_access a ON a.user_id=u.id AND a.product_id=$2 AND a.instance_id=$3 WHERE u.id=$1`, actor, product, instance).Scan(&active, &roles, &assignmentActive); e != nil {
+	var role *int
+	if e := q.QueryRow(ctx, `SELECT u.active,a.roles,a.active,a.product_role,a.permission_overrides FROM users u LEFT JOIN product_user_access a ON a.user_id=u.id AND a.product_id=$2 AND a.instance_id=$3 WHERE u.id=$1`, actor, product, instance).Scan(&active, &rawRoles, &assignmentActive, &role, &rawOverrides); e != nil {
 		return e
 	}
 	if !active || (assignmentActive != nil && !*assignmentActive) {
 		return accounts.ErrForbidden
 	}
 	assigned := m.DefaultRoles
-	if roles != nil && json.Unmarshal(*roles, &assigned) != nil {
+	if rawRoles != nil && json.Unmarshal(*rawRoles, &assigned) != nil {
 		return accounts.ErrForbidden
 	}
+	overrides := map[string]map[string]bool{}
+	if rawOverrides != nil && json.Unmarshal(*rawOverrides, &overrides) != nil {
+		return accounts.ErrForbidden
+	}
+	productRole := 1
+	if role != nil {
+		productRole = *role
+	}
+	permissions, e := EffectivePermissions(m, assigned, overrides, productRole)
+	if e != nil {
+		return e
+	}
 	allowed := false
-	for _, id := range assigned {
-		found := false
-		for _, role := range m.Roles {
-			if role.ID != id {
-				continue
-			}
-			found = true
-			for _, p := range role.Permissions {
-				if p == permission {
-					allowed = true
-				}
-			}
-			break
-		}
-		if !found {
-			return accounts.ErrForbidden
-		}
+	for _, p := range permissions {
+		allowed = allowed || p == permission
 	}
 	if !allowed {
 		return accounts.ErrForbidden
@@ -129,16 +130,21 @@ func (s *Store) CheckActive(ctx context.Context, user string) error {
 	return nil
 }
 func (s *Store) Resolve(ctx context.Context, u accounts.User, product, instance string) (Access, error) {
+	return s.ResolveOn(ctx, s.pool, u, product, instance)
+}
+func (s *Store) ResolveOn(ctx context.Context, q accounts.Querier, u accounts.User, product, instance string) (Access, error) {
 	m, ok := s.registry.Get(product, instance)
 	if !ok {
 		return Access{}, accounts.ErrNotFound
 	}
 	var active bool
 	var statusVersion int64
+	var productRole *int
+	var rawOverrides *json.RawMessage
 	var raw *json.RawMessage
 	var enabled *bool
 	var ver *int64
-	e := s.pool.QueryRow(ctx, `SELECT u.active,u.status_version,a.roles,a.active,a.version FROM users u LEFT JOIN product_user_access a ON a.user_id=u.id AND a.product_id=$2 AND a.instance_id=$3 WHERE u.id=$1`, u.ID, m.ProductID, m.InstanceID).Scan(&active, &statusVersion, &raw, &enabled, &ver)
+	e := q.QueryRow(ctx, `SELECT u.active,u.status_version,a.roles,a.active,a.version,a.product_role,a.permission_overrides FROM users u LEFT JOIN product_user_access a ON a.user_id=u.id AND a.product_id=$2 AND a.instance_id=$3 WHERE u.id=$1`, u.ID, m.ProductID, m.InstanceID).Scan(&active, &statusVersion, &raw, &enabled, &ver, &productRole, &rawOverrides)
 	if e != nil {
 		return Access{}, e
 	}
@@ -160,21 +166,21 @@ func (s *Store) Resolve(ctx context.Context, u accounts.User, product, instance 
 		}
 	}
 	assigned = normalize(assigned)
-	permissions := []string{}
-	for _, id := range assigned {
-		found := false
-		for _, role := range m.Roles {
-			if role.ID == id {
-				permissions = append(permissions, role.Permissions...)
-				found = true
-				break
-			}
-		}
-		if !found {
-			return Access{}, accounts.ErrForbidden
-		}
+	role := 1
+	if productRole != nil {
+		role = *productRole
 	}
-	return Access{Issuer: s.issuer, Subject: u.ID, ProductID: m.ProductID, InstanceID: m.InstanceID, User: User{u.ID, u.Name, u.Email}, Roles: assigned, Permissions: normalize(permissions), Version: m.Version + version + statusVersion - 1, Active: true}, nil
+	overrides := map[string]map[string]bool{}
+	if rawOverrides != nil && json.Unmarshal(*rawOverrides, &overrides) != nil {
+		return Access{}, accounts.ErrForbidden
+	}
+	nativeRole := role
+	role = EffectiveProductRole(m, assigned, role)
+	permissions, e := EffectivePermissions(m, assigned, overrides, nativeRole)
+	if e != nil {
+		return Access{}, e
+	}
+	return Access{ProductRole: role, PermissionOverrides: overrides, Issuer: s.issuer, Subject: u.ID, ProductID: m.ProductID, InstanceID: m.InstanceID, User: User{u.ID, u.Name, u.Email}, Roles: assigned, Permissions: normalize(permissions), Version: m.Version + version + statusVersion - 1, Active: true}, nil
 }
 func (s *Store) Applications(ctx context.Context, u accounts.User, product, instance string) ([]Application, error) {
 	out := []Application{}
@@ -297,7 +303,7 @@ func (s *Store) SetAccess(ctx context.Context, actor, target, product, instance 
 		if current != expected {
 			return accounts.ErrConflict
 		}
-		_, e = tx.Exec(ctx, `INSERT INTO product_user_access(user_id,product_id,instance_id,roles,active,version) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id,product_id,instance_id) DO UPDATE SET roles=excluded.roles,active=excluded.active,version=excluded.version,updated_at=now()`, target, m.ProductID, m.InstanceID, raw, active, v.Version)
+		_, e = tx.Exec(ctx, `INSERT INTO product_user_access(user_id,product_id,instance_id,roles,active,version,product_role) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(user_id,product_id,instance_id) DO UPDATE SET roles=excluded.roles,active=excluded.active,version=excluded.version,product_role=excluded.product_role,permission_overrides='{}',updated_at=now()`, target, m.ProductID, m.InstanceID, raw, active, v.Version, baselineProductRole(m, roles))
 		if e != nil {
 			return e
 		}
@@ -334,4 +340,81 @@ func (s *Store) SetStatus(ctx context.Context, actor, target string, active bool
 		return e
 	})
 	return u, e
+}
+
+// EffectivePermissions applies the final native baseline and central allow/deny.
+// The manifest fixes the vocabulary; unknown permissions never expand it.
+func EffectivePermissions(m Manifest, assigned []string, overrides map[string]map[string]bool, productRole int) ([]string, error) {
+	known := map[string]bool{}
+	granted := map[string]bool{}
+	for _, role := range m.Roles {
+		for _, p := range role.Permissions {
+			known[p] = true
+		}
+	}
+	for _, id := range assigned {
+		found := false
+		for _, role := range m.Roles {
+			if role.ID == id {
+				found = true
+				for _, p := range role.Permissions {
+					granted[p] = true
+				}
+			}
+		}
+		if !found {
+			return nil, accounts.ErrForbidden
+		}
+	}
+	if productRole == 10 {
+		for _, role := range m.Roles {
+			if role.ProductRole == 10 && role.NativeBaseline {
+				for _, p := range role.Permissions {
+					granted[p] = true
+				}
+			}
+		}
+	}
+	if productRole == 100 {
+		for p := range known {
+			granted[p] = true
+		}
+	} else if productRole != 1 && productRole != 10 {
+		return nil, accounts.ErrForbidden
+	}
+	for resource, actions := range overrides {
+		for action, allow := range actions {
+			p := resource + ":" + action
+			if !known[p] {
+				return nil, accounts.ErrForbidden
+			}
+			granted[p] = allow
+		}
+	}
+	out := []string{}
+	for p, allow := range granted {
+		if allow {
+			out = append(out, p)
+		}
+	}
+	return normalize(out), nil
+}
+
+func EffectiveProductRole(m Manifest, assigned []string, stored int) int {
+	for _, role := range m.Roles {
+		if slices.Contains(assigned, role.ID) && role.ProductRole > stored {
+			stored = role.ProductRole
+		}
+	}
+	return stored
+}
+
+func baselineProductRole(m Manifest, assigned []string) int {
+	role := 1
+	for _, candidate := range m.Roles {
+		if candidate.NativeBaseline && slices.Contains(assigned, candidate.ID) && candidate.ProductRole > role {
+			role = candidate.ProductRole
+		}
+	}
+	return role
 }

@@ -14,10 +14,12 @@ import (
 )
 
 type Role struct {
-	Privileged  bool     `json:"privileged,omitempty"`
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Permissions []string `json:"permissions"`
+	NativeBaseline bool     `json:"native_baseline,omitempty"`
+	ProductRole    int      `json:"product_role,omitempty"`
+	Privileged     bool     `json:"privileged,omitempty"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Permissions    []string `json:"permissions"`
 }
 type Manifest struct {
 	ProductID    string   `json:"product_id"`
@@ -58,7 +60,7 @@ func Parse(raw []byte) (Registry, error) {
 		}
 		seen := map[string]Role{}
 		for i, role := range m.Roles {
-			if !identifier.MatchString(role.ID) || strings.TrimSpace(role.Name) == "" || len(role.Permissions) > 128 {
+			if (role.NativeBaseline && role.ProductRole != 10 && role.ProductRole != 100) || (role.ProductRole != 0 && role.ProductRole != 1 && role.ProductRole != 10 && role.ProductRole != 100) || !identifier.MatchString(role.ID) || strings.TrimSpace(role.Name) == "" || len(role.Permissions) > 128 {
 				return nil, errors.New("invalid product role")
 			}
 			if _, exists := seen[role.ID]; exists {
@@ -79,7 +81,7 @@ func Parse(raw []byte) (Registry, error) {
 			if !ok {
 				return nil, errors.New("unknown default role")
 			}
-			if role.Privileged {
+			if role.Privileged || role.ProductRole > 1 {
 				return nil, errors.New("privileged roles cannot be defaults")
 			}
 		}
