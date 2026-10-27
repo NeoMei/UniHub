@@ -10,9 +10,12 @@ import (
 	"strings"
 	"unihub/internal/billing"
 	"unihub/internal/products"
+	"unihub/internal/productusers"
 )
 
 type config struct {
+	ProductUserManifests                                          productusers.Registry
+	UserAdminIDs                                                  []string
 	Listen, DB, LedgerURL, LedgerName, Issuer, Audience, Merchant string
 	PublicURL, ClientSecret, StaticDir, ModelServiceToken         string
 	OperatorAudience                                              string
@@ -115,6 +118,40 @@ func readConfig(get func(string) string) (config, error) {
 			usedAudiences[id] = true
 		}
 	}
+	c.ProductUserManifests = productusers.Registry{}
+	if file := get("PRODUCT_USER_MANIFESTS_FILE"); file != "" {
+		raw, err := readBoundedConfig(file)
+		if err != nil {
+			return c, fmt.Errorf("product user manifests are unavailable")
+		}
+		c.ProductUserManifests, err = productusers.Parse(raw)
+		if err != nil {
+			return c, fmt.Errorf("invalid product user manifests")
+		}
+		if c.PublicURL == "" {
+			return c, fmt.Errorf("product user manifests require canonical PUBLIC_URL")
+		}
+	}
+	for _, client := range c.ProductAccess {
+		if client.HasScope("access:read") {
+			if _, ok := c.ProductUserManifests.Get(client.ProductID, client.InstanceID); !ok {
+				return c, fmt.Errorf("access:read requires a known product instance manifest")
+			}
+		}
+	}
+	adminID := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	for _, id := range strings.Split(get("USER_ADMIN_IDS"), ",") {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			if !adminID.MatchString(id) {
+				return c, fmt.Errorf("USER_ADMIN_IDS requires immutable central user UUIDs")
+			}
+			c.UserAdminIDs = append(c.UserAdminIDs, id)
+		}
+	}
+	if len(c.UserAdminIDs) > 0 && len(c.ProductUserManifests) == 0 {
+		return c, fmt.Errorf("USER_ADMIN_IDS requires product user manifests")
+	}
 	c.IdentityKey = []byte(get("HEADLESS_IDENTITY_KEY"))
 	c.IdentityManagementClientID = get("HEADLESS_MANAGEMENT_CLIENT_ID")
 	c.IdentityManagementSecret = get("HEADLESS_MANAGEMENT_CLIENT_SECRET")
@@ -196,4 +233,21 @@ func readConfig(get func(string) string) (config, error) {
 		return c, fmt.Errorf("invalid LEDGER_NAME")
 	}
 	return c, nil
+}
+
+func readBoundedConfig(file string) ([]byte, error) {
+	f, e := os.Open(file)
+	if e != nil {
+		return nil, e
+	}
+	defer f.Close()
+	info, e := f.Stat()
+	if e != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return nil, fmt.Errorf("configuration must be a bounded regular file")
+	}
+	raw, e := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	if e != nil || len(raw) > 1<<20 {
+		return nil, fmt.Errorf("configuration is unavailable")
+	}
+	return raw, nil
 }

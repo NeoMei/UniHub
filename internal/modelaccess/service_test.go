@@ -155,3 +155,35 @@ func TestProductRevokeCannotCrossOrigin(t *testing.T) {
 		t.Fatal("own-product revoke failed")
 	}
 }
+
+func TestGlobalDisableBlocksOldModelCapabilityButKeepsReceiptReconciliation(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if e := database.Migrate(ctx, p); e != nil {
+		t.Fatal(e)
+	}
+	a := accounts.New(p)
+	u, e := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://test", Subject: "disabled-model-user"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	as, _ := a.ListAccounts(ctx, u.ID)
+	s := New(p, a, &catalog{time.Now().Add(time.Hour)})
+	req := Request{OriginProductID: "superwagie", Models: []string{"test-model"}, TaskID: "before-disable"}
+	grant, e := s.Issue(ctx, u.ID, as[0].ID, req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = p.Exec(ctx, `UPDATE users SET active=false WHERE id=$1`, u.ID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Verify(ctx, grant.Token, "test-model"); e == nil {
+		t.Fatal("disabled actor retained model capability")
+	}
+	if _, e = s.Issue(ctx, u.ID, as[0].ID, req); e == nil {
+		t.Fatal("disabled actor received new capability")
+	}
+	if _, e = s.VerifyReceipt(ctx, grant.Token, "test-model"); e != nil {
+		t.Fatalf("historical receipt stranded: %v", e)
+	}
+}

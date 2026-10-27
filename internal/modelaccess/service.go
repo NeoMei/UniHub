@@ -108,6 +108,9 @@ func (s *Service) authorize(ctx context.Context, actor, account, product, mode s
 }
 
 func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (Grant, error) {
+	if e := s.activeOn(ctx, s.pool, actor); e != nil {
+		return Grant{}, e
+	}
 	if r.OriginProductID == "" || len(r.Models) == 0 || len(r.Models) > 32 || strings.TrimSpace(r.TaskID) == "" || len(r.TaskID) > 128 {
 		return Grant{}, billing.ErrInvalid
 	}
@@ -152,6 +155,9 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 		return Grant{}, e
 	}
 	if _, e = s.accounts.RoleOn(ctx, tx, actor, account); e != nil {
+		return Grant{}, e
+	}
+	if e = s.activeOn(ctx, tx, actor); e != nil {
 		return Grant{}, e
 	}
 	// Recheck current policy inside the membership mutation lock before saving.
@@ -227,6 +233,17 @@ func (s *Service) verify(ctx context.Context, token, model string, enforceRate b
 	}
 	if model != "" && !slices.Contains(c.Models, model) {
 		return Claims{}, ErrCredential
+	}
+	// Receipt proof authenticates the saved immutable scope only; it grants no
+	// new dispatch or hold and must survive later user/policy disablement.
+	if !enforceRate {
+		c.Audience = "llmrouter"
+		return c, nil
+	}
+	if enforceRate {
+		if e = s.activeOn(ctx, s.pool, c.ActorID); e != nil {
+			return Claims{}, ErrCredential
+		}
 	}
 	auth, e := s.authorize(ctx, c.ActorID, c.AccountID, c.OriginProductID, c.FundingMode)
 	if e != nil || auth.Asset != c.Asset {
@@ -385,4 +402,15 @@ func (s *Service) Consistency(ctx context.Context, product, asset string) (Consi
 	slices.Sort(out.ExtraModels)
 	slices.Sort(out.DuplicateModels)
 	return out, nil
+}
+
+func (s *Service) activeOn(ctx context.Context, q accounts.Querier, actor string) error {
+	var active bool
+	if e := q.QueryRow(ctx, `SELECT active FROM users WHERE id=$1`, actor).Scan(&active); e != nil {
+		return e
+	}
+	if !active {
+		return accounts.ErrForbidden
+	}
+	return nil
 }

@@ -1,6 +1,8 @@
 package products
 
 import (
+	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -118,5 +120,24 @@ func TestAllProductsUsageScopeIsLlmrouterOnly(t *testing.T) {
 		if (err == nil) != (product == "llmrouter") {
 			t.Errorf("product %s: %v", product, err)
 		}
+	}
+}
+
+func TestBrowserSSOExplicitOptional(t *testing.T) {
+	clients, err := Parse([]byte(`[{"product_id":"notes","client_id":"notes","instance_id":"local","scopes":["access:read"],"browser_sso":true}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(clients["notes"])
+	if !bytes.Contains(raw, []byte(`"browser_sso":true`)) {
+		t.Fatalf("browser SSO capability missing: %s", raw)
+	}
+	legacy, err := Parse([]byte(`[{"product_id":"notes","client_id":"legacy"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(legacy["legacy"])
+	if bytes.Contains(raw, []byte(`"browser_sso":true`)) {
+		t.Fatal("legacy SSO enabled")
 	}
 }

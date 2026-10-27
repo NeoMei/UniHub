@@ -15,6 +15,7 @@ import (
 )
 
 type Client struct {
+	InstanceID      string   `json:"instance_id,omitempty"`
 	ProductID       string   `json:"product_id"`
 	ClientID        string   `json:"client_id"`
 	Application     string   `json:"application,omitempty"`
@@ -23,13 +24,14 @@ type Client struct {
 	Origins         []string `json:"origins,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
 	BillingProducts []string `json:"billing_products,omitempty"`
+	BrowserSSO      bool     `json:"browser_sso,omitempty"`
 	PasswordLogin   bool     `json:"password_login,omitempty"`
 	Registration    bool     `json:"registration,omitempty"`
 }
 
 var productID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 var supportedScopes = map[string]bool{
-	"identity:read": true, "accounts:read": true, "accounts:write": true,
+	"access:read": true, "identity:read": true, "accounts:read": true, "accounts:write": true,
 	"profile:write": true,
 	"members:read":  true, "members:write": true, "catalog:read": true,
 	"subscriptions:read": true, "credits:read": true, "wallets:read": true,
@@ -70,6 +72,12 @@ func Parse(raw []byte) (map[string]Client, error) {
 		}
 		if _, ok := out[c.ClientID]; ok {
 			return nil, errors.New("duplicate product client audience")
+		}
+		if c.InstanceID == "" {
+			c.InstanceID = "default"
+		}
+		if !productID.MatchString(c.InstanceID) {
+			return nil, errors.New("invalid instance ID")
 		}
 		for _, s := range c.Scopes {
 			if !supportedScopes[s] || (s == "usage:all-products" && c.ProductID != "llmrouter") {

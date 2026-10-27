@@ -164,7 +164,7 @@ def build(args):
         command(['npm', '--prefix', 'web', 'run', 'build'], env=env)
         runtime = {}
         tracked(runtime, ['deploy/server', 'deploy/identity', 'docs', 'branding', 'README.md', 'CONTEXT.md', 'VERSION', 'CHANGELOG.md',
-                          'scripts/headless_e2e.py', 'scripts/product_client.py', 'scripts/product_billing.py', 'scripts/prepare-branding.py', 'scripts/package-release.py', 'examples/billing', 'integrations/llmrouter'])
+                          'config/examples/product-user-manifests.json', 'scripts/headless_e2e.py', 'scripts/product_client.py', 'scripts/product_billing.py', 'scripts/prepare-branding.py', 'scripts/package-release.py', 'examples/billing', 'integrations/llmrouter'])
         add(runtime, 'bin/unihub', stage/'unihub')
         add(runtime, 'bin/unihub-identity-acceptance', stage/'unihub-identity-acceptance')
         add_tree(runtime, ROOT/'web/dist', 'web/dist')
@@ -192,6 +192,7 @@ def build(args):
             'target':'linux/amd64', 'go_version':command(['go','version']), 'node_version':command(['node','--version']), 'package_versions':package_versions,
             'payment_mode':'sandbox_or_unconfigured', 'casdoor_frontend_included':bool(args.casdoor_web), 'identity_backend_asset_included':bool(context_manifest),
             'sdk_distribution':'private workspace TypeScript source; not an npm publication',
+            'userkit_distribution':'curated Go module and starter source; no nested-module publication; initializer requires a reviewed Git checkout',
             'files':{name:sha256(source) for name,source in sorted(runtime.items())}}
         source_manifest = stage/'release-manifest.json'; source_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True)+'\n')
         add(runtime, 'release-manifest.json', source_manifest)
@@ -199,6 +200,12 @@ def build(args):
         archive(generated/f'unihub-{version}-linux-amd64.tar.gz', runtime, f'unihub-{version}-linux-amd64', epoch)
         sdk = {}; tracked(sdk, ['packages/sdk/src', 'packages/sdk/package.json', 'docs/headless-product-api.md', 'docs/composable-billing.md', 'docs/composable-billing-validation-2026-10-25.md', 'docs/native-metering.md', 'examples/billing', 'VERSION', 'CHANGELOG.md'])
         archive(generated/f'unihub-sdk-{version}-source.tar.gz', sdk, f'unihub-sdk-{version}', epoch)
+        userkit = {}; tracked(userkit, ['packages/userkit-go', 'examples/product-users',
+            'scripts/product_user_init.py', 'scripts/product_client.py', 'scripts/test-product-user-init.py', 'scripts/test-product-client.py',
+            'config/examples/product-user-manifests.json', 'docs/product-user-api.md', 'docs/headless-product-api.md',
+            'docs/integrations/product-user-foundation.md', 'docs/integrations/product-user-foundation-acceptance-2026-10-27.md',
+            'VERSION', 'CHANGELOG.md'])
+        archive(generated/f'unihub-userkit-{version}-source.tar.gz', userkit, f'unihub-userkit-{version}', epoch)
         if context_manifest:
             context = {name:regular(Path(args.identity_artifacts)/name) for name in sorted(IDENTITY_FILES)}
             add(context, 'source-lock.json', ROOT/'deploy/identity/source-lock.json')

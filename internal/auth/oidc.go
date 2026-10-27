@@ -16,10 +16,11 @@ import (
 
 // Claims contains the verified identity used by the account service.
 type Claims struct {
-	Issuer  string
-	Subject string
-	Name    string
-	Email   string
+	Issuer    string
+	Subject   string
+	Name      string
+	Email     string
+	ExpiresAt int64
 }
 
 // Verifier verifies a raw bearer access token before exposing an identity.
@@ -121,7 +122,7 @@ func (v *OIDC) Verify(ctx context.Context, rawToken string) (Claims, error) {
 	if !hasOpenID {
 		return Claims{}, errors.New("access token requires openid scope")
 	}
-	return Claims{Issuer: token.Issuer, Subject: token.Subject, Name: claims.Name, Email: claims.Email}, nil
+	return Claims{Issuer: token.Issuer, Subject: token.Subject, Name: claims.Name, Email: claims.Email, ExpiresAt: token.Expiry.Unix()}, nil
 }
 
 func validateEndpoint(raw string) error {

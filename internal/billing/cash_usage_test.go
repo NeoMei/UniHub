@@ -282,3 +282,27 @@ func TestPrepaidMemberRemovalStopsNewHoldsAndAllowsExistingRelease(t *testing.T)
 	}
 	cashBalance(t, f, wallet.Address(f.account, "llmrouter"), 100)
 }
+
+func TestDisabledActorCannotCreateOrIncreaseHoldButDispatchedCallSettles(t *testing.T) {
+	f := prepaidFixture(t)
+	ctx := context.Background()
+	fundCash(t, f, "llmrouter", 100)
+	cid := cashCredential(t, f)
+	call, e := cashReserve(t, f, "before-disable", cid, "40")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = f.s.pool.Exec(ctx, `UPDATE users SET active=false WHERE id=$1`, f.actor); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = cashReserve(t, f, "after-disable", cid, "10"); !errors.Is(e, accounts.ErrForbidden) {
+		t.Fatalf("new hold accepted after disable: %v", e)
+	}
+	if _, e = f.s.TopUp(ctx, "router", call.CallID, "10", "after-disable-topup"); !errors.Is(e, accounts.ErrForbidden) {
+		t.Fatalf("hold increased after disable: %v", e)
+	}
+	result, e := f.s.Settle(ctx, "router", SettlementRequest{CallID: call.CallID, Usage: &Usage{Input: "20", Output: "0", CacheRead: "0", CacheWrite: "0", Reasoning: "0"}})
+	if e != nil || result.Status != "SETTLED" || result.Charged != "20" {
+		t.Fatalf("dispatched call stranded: %#v %v", result, e)
+	}
+}

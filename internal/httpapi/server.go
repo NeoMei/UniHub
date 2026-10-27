@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
 	"unihub/internal/products"
+	"unihub/internal/productusers"
 	"unihub/internal/wallet"
 )
 
@@ -31,6 +33,7 @@ type Options struct {
 	OperatorVerifier auth.Verifier
 	ProductVerifiers map[string]auth.Verifier
 	ProductAccess    map[string]products.Client
+	ProductUsers     *productusers.Store
 	Identity         ProfileService
 }
 type ProfileService interface {
@@ -54,6 +57,7 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		respond(w, 200, map[string]string{"status": "ok", "service": "unihub"})
 	})
 	add := func(pattern string, f action) { m.HandleFunc(pattern, s.authenticated(f)) }
+	s.productUserRoutes(add)
 	s.invitationQueryRoutes(add)
 	if o.Identity != nil {
 		s.profileRoutes(add)
@@ -353,6 +357,25 @@ func (s *api) authenticated(next action) http.HandlerFunc {
 			writeError(w, e)
 			return
 		}
+		if s.options.ProductUsers != nil {
+			if e = s.options.ProductUsers.CheckActive(r.Context(), u.ID); e != nil {
+				writeError(w, e)
+				return
+			}
+		}
+		// Manifest-managed access:read clients opted into product membership.
+		// Recheck it on every business route so direct bearer calls cannot
+		// bypass a product block through the account/finance API. Legacy clients
+		// without this contract retain their established scope policy.
+		if s.options.ProductUsers != nil {
+			if policy, ok := productPolicy(r); ok && slices.Contains(policy.Scopes, "access:read") && s.options.ProductUsers.Managed(policy.ProductID, productusers.Instance(policy.InstanceID)) {
+				if _, e = s.options.ProductUsers.Resolve(r.Context(), u, policy.ProductID, productusers.Instance(policy.InstanceID)); e != nil {
+					writeError(w, e)
+					return
+				}
+			}
+		}
+		r = withAccessExpiry(r, c)
 		if browser && h == "" {
 			if gate, ok := s.options.Identity.(interface {
 				BrowserSessionAllowed(context.Context, string) bool

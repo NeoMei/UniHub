@@ -62,21 +62,6 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 		})
 	}
 
-	add("GET /v1/capabilities", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		scopes := []string{}
-		clientID := ""
-		kind := "console"
-		if c, ok := productPolicy(r); ok {
-			scopes = c.Scopes
-			clientID = c.ClientID
-			kind = "product"
-		} else if originProduct(r) != "" {
-			kind = "legacy_product"
-		}
-		return respond(w, 200, map[string]any{"kind": kind, "product_id": originProduct(r), "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": false,
-			"unified_wallet_recharge": originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox,
-			"refresh_token": false, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
-	})
 	add("GET /v1/accounts/{account}/calls", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		f, page, e := callQuery(r, true)
 		if e != nil {
