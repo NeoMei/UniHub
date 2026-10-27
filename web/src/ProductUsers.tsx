@@ -82,7 +82,6 @@ export function ProductUserManagement({ csrf }: { csrf?: string }) {
   const products = useResource<ProductManifest[]>("/v1/user-management/products");
   const access = useResource<ProductAssignment[]>(
     selected ? `/v1/user-management/users/${encodeURIComponent(selected.id)}/access` : undefined,
-    revision,
   );
 
   async function changeStatus() {
@@ -159,13 +158,12 @@ export function ProductUserManagement({ csrf }: { csrf?: string }) {
                       );
                       return assignment && (
                         <ProductRoleForm
-                          key={`${selected.id}/${manifest.product_id}/${manifest.instance_id}/${assignment.assignment_version}/${manifest.version}/${revision}`}
+                          key={`${selected.id}/${manifest.product_id}/${manifest.instance_id}/${manifest.version}`}
                           user={selected.id}
                           manifest={manifest}
                           assignment={assignment}
                           csrf={csrf}
                           onSaved={() => {
-                            setRevision((value) => value + 1);
                             setMessage("产品权限已保存。");
                           }}
                         />
@@ -182,25 +180,31 @@ export function ProductUserManagement({ csrf }: { csrf?: string }) {
   );
 }
 
-function ProductRoleForm({ user, manifest, assignment, csrf, onSaved }: {
+function ProductRoleForm({ user, manifest, assignment: initialAssignment, csrf, onSaved }: {
   user: string;
   manifest: ProductManifest;
   assignment: ProductAssignment;
   csrf?: string;
   onSaved: () => void;
 }) {
-  const [roles, setRoles] = useState(assignment.roles);
-  const [active, setActive] = useState(assignment.active);
+  // Each product owns its saved assignment revision and unsaved draft. Saving
+  // one product must not refetch/unmount its sibling forms.
+  const [assignment, setAssignment] = useState(initialAssignment);
+  const [roles, setRoles] = useState(initialAssignment.roles);
+  const [active, setActive] = useState(initialAssignment.active);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function save() {
     setBusy(true);
     setError("");
     try {
-      await request(
+      const saved = await request<ProductAssignment>(
         `/v1/user-management/users/${encodeURIComponent(user)}/access/${encodeURIComponent(manifest.product_id)}?instance=${encodeURIComponent(manifest.instance_id)}`,
         { method: "PUT", csrf, body: { roles, active, version: assignment.assignment_version } },
       );
+      setAssignment(saved);
+      setRoles(saved.roles);
+      setActive(saved.active);
       onSaved();
     } catch (cause) {
       setError((cause as Error).message);

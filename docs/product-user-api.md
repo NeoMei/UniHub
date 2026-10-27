@@ -23,7 +23,7 @@ Expiry comes from verified bearer claims (or the verified browser session expiry
 never a request field. Resolve checks global user status and product membership
 online on every request. Explicit empty roles remain empty across default changes;
 inactive membership denies access. Role/permission arrays are sorted and deduplicated.
-`version` is a current effective revision (manifest version + assignment revision),
+`version` is a current effective revision (manifest version + assignment revision + global status revision − 1),
 not an assignment precondition; no version-based allow cache is permitted.
 
 GET `/v1/me/applications` returns available access responses plus `name`,`entry_url`.

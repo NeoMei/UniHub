@@ -85,10 +85,11 @@ func (s *Store) Resolve(ctx context.Context, u accounts.User, product, instance 
 		return Access{}, accounts.ErrNotFound
 	}
 	var active bool
+	var statusVersion int64
 	var raw *json.RawMessage
 	var enabled *bool
 	var ver *int64
-	e := s.pool.QueryRow(ctx, `SELECT u.active,a.roles,a.active,a.version FROM users u LEFT JOIN product_user_access a ON a.user_id=u.id AND a.product_id=$2 AND a.instance_id=$3 WHERE u.id=$1`, u.ID, m.ProductID, m.InstanceID).Scan(&active, &raw, &enabled, &ver)
+	e := s.pool.QueryRow(ctx, `SELECT u.active,u.status_version,a.roles,a.active,a.version FROM users u LEFT JOIN product_user_access a ON a.user_id=u.id AND a.product_id=$2 AND a.instance_id=$3 WHERE u.id=$1`, u.ID, m.ProductID, m.InstanceID).Scan(&active, &statusVersion, &raw, &enabled, &ver)
 	if e != nil {
 		return Access{}, e
 	}
@@ -124,7 +125,7 @@ func (s *Store) Resolve(ctx context.Context, u accounts.User, product, instance 
 			return Access{}, accounts.ErrForbidden
 		}
 	}
-	return Access{Issuer: s.issuer, Subject: u.ID, ProductID: m.ProductID, InstanceID: m.InstanceID, User: User{u.ID, u.Name, u.Email}, Roles: assigned, Permissions: normalize(permissions), Version: m.Version + version, Active: true}, nil
+	return Access{Issuer: s.issuer, Subject: u.ID, ProductID: m.ProductID, InstanceID: m.InstanceID, User: User{u.ID, u.Name, u.Email}, Roles: assigned, Permissions: normalize(permissions), Version: m.Version + version + statusVersion - 1, Active: true}, nil
 }
 func (s *Store) Applications(ctx context.Context, u accounts.User, product, instance string) ([]Application, error) {
 	out := []Application{}

@@ -154,3 +154,59 @@ func TestConcurrentDisableOfTwoConfiguredAdminsLeavesOneAvailable(t *testing.T) 
 		t.Fatalf("success=%d denied=%d available=%d", success, denied, available)
 	}
 }
+
+func TestStatusTransitionsAdvanceEffectiveAccessWithoutChangingAssignmentVersion(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if err := database.Migrate(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	accountStore := accounts.New(p)
+	admin, err := accountStore.EnsureIdentity(ctx, accounts.Identity{Issuer: "test", Subject: "revision-admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := accountStore.EnsureIdentity(ctx, accounts.Identity{Issuer: "test", Subject: "revision-member"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := Parse([]byte(manifests))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(p, registry, "https://hub.test", []string{admin.ID})
+	if _, err = store.SetAccess(ctx, admin.ID, member.ID, "notes", "default", []string{"member"}, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Resolve(ctx, member, "notes", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := store.SetStatus(ctx, admin.ID, member.ID, false, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Resolve(ctx, member, "notes", "default"); !errors.Is(err, accounts.ErrForbidden) {
+		t.Fatalf("disabled resolve: %v", err)
+	}
+	if _, err = store.SetStatus(ctx, admin.ID, member.ID, true, disabled.Version); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.Resolve(ctx, member, "notes", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != before.Version+2 {
+		t.Fatalf("effective revision after disable/reenable = %d, before %d; want +2", after.Version, before.Version)
+	}
+	assignments, err := store.Assignments(ctx, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assignments[0].Version != 1 || assignments[0].ManifestVersion != 1 {
+		t.Fatalf("status changed independent assignment/manifest revision: %#v", assignments[0])
+	}
+	if _, err = store.SetAccess(ctx, admin.ID, member.ID, "notes", "default", []string{}, true, 1); err != nil {
+		t.Fatalf("unchanged assignment precondition rejected: %v", err)
+	}
+}
