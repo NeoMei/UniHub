@@ -59,3 +59,31 @@ remain separate.
 Supplier calls were real and charged upstream as authorized. UniHub recharge and
 membership funding were **sandbox**; real merchant collection/activation was not
 tested. OCR, embedding, rerank, speech, image and video are outside this chat grant.
+
+## Implementation decisions and tradeoffs
+
+Ruling: This migration retains a private native operator/compatibility surface rather than deleting native tables — because channel administration and controlled legacy recovery still require it — cost if wrong: native code remains larger, but deletion would make rollback and operations unsafe.
+
+Ruling: The first public operation remains text Chat Completions/streaming/function tools — because existing UniHub billing contracts cover that surface — cost if wrong: non-chat skills need a later operation-specific contract.
+
+Ruling: A private listener bound to exact loopback address supplies the native operator boundary; Origin/Referer/X-Forwarded-Host and product browser management secrets supply no authority — because headers are forgeable — cost if wrong: operators require SSH tunneling for native administration.
+
+Ruling: Task 2 must include public legacy relay denial and UI navigation/auth redirects, not only the already-separated platform handler — because route-only billing changes leave native users and duplicated finances visible — cost if wrong: larger frontend regression surface; covered with focused UI tests/build.
+
+Ruling: Task 3 includes a rate-unit audit and versioned rate publication using exact native pricing semantics rather than copying ModelRatio — because ratios and CNY micro-units differ — cost if wrong: changed prospective prices; existing call snapshots must remain immutable.
+
+Ruling: Reuse current dedicated feature branch for LLMRouter; no unrelated files are staged, no shared-branch publication until acceptance. UniHub task implementation moves to a codex feature branch before edits — because current in-place task commits already exist and should not be reset — cost if wrong: less checkout isolation, mitigated with file ownership and serialized implementers.
+
+Ruling: Add bounded per-request chat metering for the two native flat-price models — existing generic chat supports token units only but the approved 22-model service requires accurate request tariffs — cost if wrong: a small metering/adapter contract extension must be maintained; tests cover request count and mixed-unit rejection.
+
+Ruling: Add product-specific model policy to UniHub issuance and read-only consistency projection — global published rates alone cannot enforce each product's model allowlist — cost if wrong: deployments must supply policy for configured llmrouter/SuperWagie, otherwise grants fail closed.
+
+Ruling: Use existing versioned BillingProfile.Usage.Models for product allowlists instead of a new environment policy — reuses audited operator/deployment profile updates — cost if wrong: prospective profile changes also affect model authorization, with nil reserved for legacy behavior.
+
+Ruling: Temporarily continue with executing-plans in controller after native model capacity failures on sol/astra/luna and routed-provider encrypted-task rejection — otherwise no implementer can proceed — cost if wrong: reduced context isolation, mitigated by retained RED tests and a later independent review retry before publish.
+
+Ruling: Preserve SuperWagie membership/credit components while adding prepaid model funding as default against its llmrouter wallet — CNY tariffs only — cost if wrong: an explicit future CREDIT tariff policy is needed, never an invented exchange.
+
+Ruling: Waive the single isolated pre-fix MiniMax sandbox hold using backed-up operator intent — guessing original usage is wrong — cost if wrong: platform bears one tiny test call; production users untouched.
+
+GitHub publication: UniHub PR #7, LLMRouter PR #5, SuperWagie-Open PR #4. PRs remain open. LLMRouter pr-quality passed. SuperWagie regular CI queued; its separate review automation failed because repository GitHub App ID is absent, before code review ran.
