@@ -143,6 +143,101 @@ class DeploymentTests(unittest.TestCase):
             self.bundle.run(['python3', '-c', 'import sys; print("PRIVATE"); sys.exit(1)'])
         self.assertNotIn('PRIVATE', str(failure.exception))
 
+    def start_isolated_nginx(self, upstream_port, trusted_peer=None, edge=False, go_closed=False):
+        def port():
+            with socket.socket() as probe:
+                probe.bind(('127.0.0.1', 0))
+                return probe.getsockname()[1]
+        http_port, tls_port, closed_port, edge_port = port(), port(), port(), port()
+        folder = Path(tempfile.mkdtemp(dir=self.temp.name)).resolve()
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-keyout', str(folder / 'key.pem'),
+            '-out', str(folder / 'cert.pem'), '-days', '1', '-nodes', '-subj', '/CN=unihub.quukk.com'],
+            capture_output=True, check=True)
+        if trusted_peer is not None:
+            example = (REPO / 'deploy/server/unihub-trusted-ingress.conf.example').read_text()
+            (folder / 'unihub-trusted-ingress-test.conf').write_text(example.replace('<TRUSTED_INGRESS_IP>', trusted_peer))
+        source = (REPO / 'deploy/server/nginx.conf').read_text()
+        substitutions = {'listen 80;': f'listen 127.0.0.1:{http_port};',
+            'listen 8484 ssl;': f'listen 127.0.0.1:{tls_port} ssl;\n    listen [::1]:{tls_port} ssl;' if edge else f'listen 127.0.0.1:{tls_port} ssl;',
+            '127.0.0.1:8088': f'127.0.0.1:{closed_port if go_closed else upstream_port}',
+            '127.0.0.1:58000': f'127.0.0.1:{upstream_port}',
+            '/etc/nginx/snippets/unihub-trusted-ingress-*.conf': str(folder / 'unihub-trusted-ingress-*.conf'),
+            '/etc/nginx/ssl/_.quukk.com_chain.pem': str(folder / 'cert.pem'),
+            '/etc/nginx/ssl/_.quukk.com_key.key': str(folder / 'key.pem'),
+            '/var/log/nginx/unihub-access.log': str(folder / 'access.log')}
+        for original, replacement in substitutions.items():
+            source = source.replace(original, replacement)
+        if edge:
+            source += f'''
+server {{
+    listen [::1]:{edge_port};
+    server_name localhost;
+    access_log off;
+    location / {{
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_pass https://127.0.0.1:{tls_port};
+    }}
+}}
+'''
+        config = folder / 'nginx.conf'
+        config.write_text('error_log ' + str(folder / 'error.log') + ';\npid ' + str(folder / 'nginx.pid') + ';\nevents {}\nhttp {\n' + source + '\n}\n')
+        command = ['nginx', '-p', str(folder) + '/', '-c', str(config)]
+        subprocess.run(command + ['-t'], capture_output=True, check=True)
+        process = subprocess.Popen(command + ['-g', 'daemon off;'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: process.wait(timeout=3))
+        self.addCleanup(process.terminate)
+        for attempt in range(40):
+            try:
+                with socket.create_connection(('127.0.0.1', tls_port), timeout=1):
+                    break
+            except OSError:
+                time.sleep(.025)
+        else:
+            self.fail('isolated nginx did not become ready')
+        return folder, http_port, tls_port, edge_port
+
+    @unittest.skipUnless(shutil.which('nginx') and shutil.which('openssl'), 'nginx/openssl unavailable')
+    def test_trusted_ingress_preserves_source_ip_only_for_verified_exact_peer(self):
+        # Removing the opt-in include loses the original IP; trusting every peer
+        # or accepting X-Forwarded-For lets a direct caller choose the bucket key.
+        class ObservedSource(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(self.headers.get('X-Real-IP', '').encode())
+            def log_message(self, *args):
+                pass
+        upstream = HTTPServer(('127.0.0.1', 0), ObservedSource)
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+        self.addCleanup(upstream.server_close)
+        self.addCleanup(upstream.shutdown)
+        context = ssl._create_unverified_context()
+        def observed(port, headers, host='127.0.0.1', tls=True):
+            connection = (http.client.HTTPSConnection(host, port, context=context, timeout=2)
+                          if tls else http.client.HTTPConnection(host, port, timeout=2))
+            try:
+                connection.request('GET', '/v1/identity/register', headers=headers)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                return response.read().decode()
+            finally:
+                connection.close()
+        forged = {'X-Real-IP': '198.51.100.90', 'X-Forwarded-For': '198.51.100.91'}
+        _, _, default_tls, _ = self.start_isolated_nginx(upstream.server_port)
+        self.assertEqual(observed(default_tls, forged), '127.0.0.1')
+        self.assertEqual(observed(default_tls, {'X-Real-IP': '198.51.100.92'}), '127.0.0.1')
+        _, _, trusted_tls, edge_port = self.start_isolated_nginx(upstream.server_port, '127.0.0.1', edge=True)
+        self.assertEqual(observed(trusted_tls, {'X-Real-IP': '198.51.100.20',
+            'X-Forwarded-For': '198.51.100.99'}), '198.51.100.20')
+        self.assertEqual(observed(trusted_tls, {'X-Real-IP': '198.51.100.21'}), '198.51.100.21')
+        self.assertEqual(observed(trusted_tls, {'X-Forwarded-For': '198.51.100.99'}), '127.0.0.1')
+        self.assertEqual(observed(trusted_tls, forged, host='::1'), '::1')
+        self.assertEqual(observed(trusted_tls, {'X-Real-IP': '198.51.100.92'}, host='::1'), '::1')
+        # The client connects over IPv6; the edge connects over trusted IPv4.
+        # Its overwrite must preserve the client address despite caller headers.
+        self.assertEqual(observed(edge_port, forged, host='::1', tls=False), '::1')
+
     @unittest.skipUnless(shutil.which('nginx') and shutil.which('openssl'), 'nginx/openssl unavailable')
     def test_https_only_proxy_secures_cookie_and_omits_callback_secrets_from_logs(self):
         class Identity(BaseHTTPRequestHandler):
@@ -158,39 +253,9 @@ class DeploymentTests(unittest.TestCase):
         worker.start()
         self.addCleanup(upstream.server_close)
         self.addCleanup(upstream.shutdown)
-        def port():
-            with socket.socket() as probe:
-                probe.bind(('127.0.0.1', 0))
-                return probe.getsockname()[1]
-        http_port, tls_port, closed_port = port(), port(), port()
-        folder = Path(self.temp.name).resolve()
-        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-keyout', str(folder / 'key.pem'),
-            '-out', str(folder / 'cert.pem'), '-days', '1', '-nodes', '-subj', '/CN=unihub.quukk.com'],
-            capture_output=True, check=True)
-        source = (REPO / 'deploy/server/nginx.conf').read_text()
-        substitutions = {'listen 80;': f'listen {http_port};', 'listen 8484 ssl;': f'listen {tls_port} ssl;',
-            '127.0.0.1:8088': f'127.0.0.1:{closed_port}', '127.0.0.1:58000': f'127.0.0.1:{upstream.server_port}',
-            '/etc/nginx/ssl/_.quukk.com_chain.pem': str(folder / 'cert.pem'),
-            '/etc/nginx/ssl/_.quukk.com_key.key': str(folder / 'key.pem'),
-            '/var/log/nginx/unihub-access.log': str(folder / 'access.log')}
-        for original, replacement in substitutions.items():
-            source = source.replace(original, replacement)
-        config = folder / 'nginx.conf'
-        config.write_text('error_log ' + str(folder / 'error.log') + ';\npid ' + str(folder / 'nginx.pid') + ';\nevents {}\nhttp {\n' + source + '\n}\n')
-        command = ['nginx', '-p', str(folder) + '/', '-c', str(config)]
-        subprocess.run(command + ['-t'], capture_output=True, check=True)
-        process = subprocess.Popen(command + ['-g', 'daemon off;'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.addCleanup(lambda: process.wait(timeout=3))
-        self.addCleanup(process.terminate)
+        folder, http_port, tls_port, _ = self.start_isolated_nginx(upstream.server_port, go_closed=True)
         context = ssl._create_unverified_context()
-        for attempt in range(40):
-            try:
-                response = urllib.request.urlopen(f'https://127.0.0.1:{tls_port}/login/unihub', context=context, timeout=1)
-                break
-            except OSError:
-                time.sleep(.025)
-        else:
-            self.fail('isolated nginx did not become ready')
+        response = urllib.request.urlopen(f'https://127.0.0.1:{tls_port}/login/unihub', context=context, timeout=1)
         self.addCleanup(response.close)
         connection = http.client.HTTPConnection('127.0.0.1', http_port, timeout=2)
         self.addCleanup(connection.close)
