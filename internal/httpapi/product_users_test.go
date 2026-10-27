@@ -74,3 +74,44 @@ func (productAccessVerifier) Verify(ctx context.Context, token string) (auth.Cla
 	c.ExpiresAt = time.Now().Add(time.Hour).Unix()
 	return c, e
 }
+
+func TestProductBlockStopsManagedProductBusinessBearer(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if err := database.Migrate(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	a := accounts.New(p)
+	admin, err := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://test", Subject: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := productusers.Parse([]byte(`[{"product_id":"notes","name":"Notes","entry_url":"https://notes.test","version":1,"default_roles":["member"],"roles":[{"id":"member","name":"Member","permissions":["product:use"]}]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	users := productusers.New(p, registry, "https://hub.test", []string{admin.ID})
+	policy := products.Client{ProductID: "notes", ClientID: "notes-client", Scopes: []string{"access:read", "accounts:read"}}
+	h := New(verifier{}, a, wallet.New(p, a, noLedger{}), Options{ProductUsers: users, ProductVerifiers: map[string]auth.Verifier{"notes-client": productAccessVerifier{}}, ProductAccess: map[string]products.Client{"notes-client": policy}})
+	w := call(h, "GET", "/v1/me/product-access", "product-alice", "", "")
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	var access productusers.Access
+	if err = json.Unmarshal(w.Body.Bytes(), &access); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = users.SetAccess(ctx, admin.ID, access.Subject, "notes", "default", []string{"member"}, false, 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/v1/me", "/v1/accounts", "/v1/me/product-access"} {
+		w = call(h, "GET", path, "product-alice", "", "")
+		if w.Code != 403 {
+			t.Fatalf("blocked product bearer %s returned %d: %s", path, w.Code, w.Body)
+		}
+	}
+	// Product disable does not disable the same person's independent console.
+	if w = call(h, "GET", "/v1/accounts", "alice", "", ""); w.Code != 200 {
+		t.Fatal("console denied", w.Code, w.Body)
+	}
+}

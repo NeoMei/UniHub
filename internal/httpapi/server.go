@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -360,6 +361,18 @@ func (s *api) authenticated(next action) http.HandlerFunc {
 			if e = s.options.ProductUsers.CheckActive(r.Context(), u.ID); e != nil {
 				writeError(w, e)
 				return
+			}
+		}
+		// Manifest-managed access:read clients opted into product membership.
+		// Recheck it on every business route so direct bearer calls cannot
+		// bypass a product block through the account/finance API. Legacy clients
+		// without this contract retain their established scope policy.
+		if s.options.ProductUsers != nil {
+			if policy, ok := productPolicy(r); ok && slices.Contains(policy.Scopes, "access:read") && s.options.ProductUsers.Managed(policy.ProductID, productusers.Instance(policy.InstanceID)) {
+				if _, e = s.options.ProductUsers.Resolve(r.Context(), u, policy.ProductID, productusers.Instance(policy.InstanceID)); e != nil {
+					writeError(w, e)
+					return
+				}
 			}
 		}
 		r = withAccessExpiry(r, c)

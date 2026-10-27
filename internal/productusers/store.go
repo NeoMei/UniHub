@@ -69,6 +69,10 @@ func (s *Store) CanManage(user string) bool {
 	return false
 }
 func (s *Store) Products() []Manifest { return s.registry.List() }
+func (s *Store) Managed(product, instance string) bool {
+	_, ok := s.registry.Get(product, instance)
+	return ok
+}
 func (s *Store) CheckActive(ctx context.Context, user string) error {
 	var active bool
 	if e := s.pool.QueryRow(ctx, `SELECT active FROM users WHERE id=$1`, user).Scan(&active); e != nil {
