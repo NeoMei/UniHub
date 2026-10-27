@@ -1,8 +1,8 @@
 # UniHub product user kit (source contract v0.1.0)
 
-Independent stdlib-only Go module (Go 1.23+):
+Independent Go module (Go 1.23+):
 `github.com/NeoMei/UniHub/packages/userkit-go`. It imports no UniHub internals and
-contains no billing, password, browser storage or OIDC password implementation.
+contains no billing, password storage or OIDC password implementation. Browser signature/discovery validation uses coreos/go-oidc and x/oauth2 (Go 1.23).
 This task distributes source only; no module release/tag has been published.
 A future repository tag must use `packages/userkit-go/v0.x.y`. Pin an immutable
 commit or verified source snapshot until then. The repository has no declared
@@ -80,3 +80,40 @@ production products must replace it with a durable database transaction.
 `go test -race ./...` tests this nested module separately from the repository root.
 Upgrade the kit and central wire contract together; rerun client-boundary and
 provisioning tests when replacing a deterministic vendored snapshot.
+
+## Browser authorization code / PKCE
+
+```go
+type BrowserConfig struct {
+    Issuer, ClientID, ClientSecret, RedirectURI, AccessTokenType string
+    Scopes []string
+    HTTPClient *http.Client
+}
+func NewBrowser(context.Context, BrowserConfig) (*Browser, error)
+func (*Browser) Begin(browserBinding, returnTo string) (authorizationURL string, err error)
+func (*Browser) Complete(ctx context.Context, browserBinding, absoluteCallbackURL string) (BrowserIdentity, error)
+type BrowserIdentity struct {
+    Subject, AccessToken, ReturnTo string
+    ExpiresAt int64
+}
+func SafeReturn(string) bool
+```
+
+Create one Browser on the server with the exact registered callback; keep it for
+all requests. Set an unpredictable HttpOnly Secure SameSite=Lax cookie on login
+and pass it as browserBinding in Begin/Complete. Never use an identity supplied
+by the browser. Complete requires the exact callback origin/path and one state
+and code. State/nonce/S256 verifier are browser-bound, expire in five minutes,
+and are consumed once, including failed callbacks. The in-process transaction
+store is capped at 4096; use sticky login/callback routing across replicas.
+Restart invalidates pending logins safely. HTTP is loopback-only, redirects and
+code-exchange automatic retries are rejected, operations have bounded timeout.
+Both ID and access tokens are signature/issuer/one-client/expiry validated,
+nonce binds the ID token, and subjects must agree. For Casdoor configure
+AccessTokenType="access-token" to reject other signed token purposes. This
+helper requires signed access tokens; opaque-token issuers need a separately
+verified provider. BrowserIdentity.Subject is the IdP subject, distinct from
+Access.Subject's immutable central UUID. Resolve the returned AccessToken with
+the shared Provider before provisioning, then cap the local session to the
+minimum of both verified expiries. No returned bearer may enter frontend JSON,
+URLs or logs; store it authenticated-encrypted on the server per product SID.
