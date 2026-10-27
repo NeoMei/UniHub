@@ -7,6 +7,7 @@ class StarterTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    target=Path(d)/'notes'
    subprocess.run(['python3',str(ROOT/'scripts/product_user_init.py'),'--output',str(target),'--product-id','notes','--module','example.test/notes'],check=True)
+   self.assertTrue((target/'lifecycle_test.go').is_file())
    mod=(target/'go.mod').read_text();self.assertNotIn(str(ROOT),mod);self.assertIn('./third_party/unihub-userkit',mod)
    config=json.loads((target/'config.example.json').read_text());self.assertEqual(config['client_secret'],'');self.assertEqual(config['mode'],'unihub')
    for file in target.rglob('*'):

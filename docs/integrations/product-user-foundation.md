@@ -94,7 +94,9 @@ policies can restrict central access; they cannot override central deny.
 The sample provisioner atomically commits stable identity, product profile and
 notebook defaults in one fsynced/renamed private JSON snapshot. One process owns a
 database, enforced by an exclusive lock file. Repeated and concurrent access
-initializes once. After a crash verify the owner is dead before removing its exact
+initializes once. SIGINT/SIGTERM stop HTTP gracefully and release the lock; failed
+OIDC/provider/listener startup also releases it so a corrected configuration can
+retry. After an abrupt crash or SIGKILL verify the owner is dead before removing its exact
 `.lock` file. Production adapters should use a SQL transaction and unique
 `(issuer,subject)` identity constraint. They should use durable authenticated
 encrypted proof/session storage; this sample holds sessions/proofs in memory and

@@ -132,3 +132,15 @@ store and replica coordination remain deployment work. Standalone mode supplies
 an explicit product-owned standard OIDC seam; its real external provider and
 online revocation behavior were not exercised. Browser self-signup, production
 HTTPS/cookie acceptance, supplier calls, payments and deployment were not tested.
+
+### Lifecycle review correction
+
+The starter now returns initialization/listen failures through deferred store
+cleanup and handles SIGINT/SIGTERM with bounded HTTP shutdown before releasing its
+database lock. Executable regressions build the actual starter, stop it with each
+signal and restart against the same database without lock repair; a failed local
+OIDC discovery followed by corrected startup also succeeds. These tests use an
+HTTP discovery fixture only, with no login claims or real IdP mutation. The
+original actual Casdoor business/access matrix above was not repeated for this
+lifecycle-only change. Abrupt crashes/SIGKILL still require conservative owner
+verification before manual lock recovery; the one-process store limit remains.

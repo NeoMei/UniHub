@@ -14,7 +14,7 @@ def create(output,product,module):
  if subprocess.check_output(['git','status','--porcelain','--','packages/userkit-go'],cwd=ROOT,text=True).strip():raise ValueError('Shared module has uncommitted changes; commit before snapshotting')
  staging=Path(tempfile.mkdtemp(prefix='.product-init-',dir=target.parent))
  try:
-  for name in ['main.go','main_test.go','go.sum']:
+  for name in ['main.go','main_test.go','lifecycle_test.go','go.sum']:
    shutil.copyfile(ROOT/'examples/product-users'/name,staging/name)
   mod=(ROOT/'examples/product-users/go.mod').read_text().replace('module example.test/product-users','module '+module).replace('../../packages/userkit-go','./third_party/unihub-userkit')
   (staging/'go.mod').write_text(mod)
@@ -49,7 +49,8 @@ UniHub mode uses shared Browser + Client + Service. Every request rechecks centr
 access; product resource policy can only restrict it. The provisioner atomically
 commits stable issuer+subject identity, extension and notebook defaults in one
 private JSON snapshot. One process per database: a lock file refuses concurrent
-process ownership. After a crash, verify the owning process is dead before
+process ownership. SIGINT/SIGTERM gracefully shut down HTTP and release the lock;
+startup failures release it too. After a crash or SIGKILL, verify the owner is dead before
 removing the exact database `.lock` file. For production replace the store seam
 with your SQL transaction and unique identity constraint; use durable encrypted
 session/proof storage and a shared OIDC transaction store/sticky routing.

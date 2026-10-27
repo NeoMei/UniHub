@@ -14,9 +14,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	userkit "github.com/NeoMei/UniHub/packages/userkit-go"
@@ -389,19 +391,19 @@ func (a *app) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	http.NotFound(w, r)
 }
-func main() {
+func run(ctx context.Context) (result error) {
 	c, e := loadConfig()
 	if e != nil {
-		log.Fatal(e)
+		return e
 	}
 	s, e := openStore(c.Database)
 	if e != nil {
-		log.Fatal(e)
+		return e
 	}
-	defer s.Close()
-	b, e := userkit.NewBrowser(context.Background(), userkit.BrowserConfig{Issuer: c.OIDCIssuer, ClientID: c.ClientID, ClientSecret: c.ClientSecret, RedirectURI: c.PublicURL + "/auth/callback", AccessTokenType: c.AccessTokenType})
+	defer func() { result = errors.Join(result, s.Close()) }()
+	b, e := userkit.NewBrowser(ctx, userkit.BrowserConfig{Issuer: c.OIDCIssuer, ClientID: c.ClientID, ClientSecret: c.ClientSecret, RedirectURI: c.PublicURL + "/auth/callback", AccessTokenType: c.AccessTokenType})
 	if e != nil {
-		log.Fatal("OIDC initialization failed")
+		return errors.New("OIDC initialization failed")
 	}
 	var provider userkit.Provider
 	var local *standaloneProvider
@@ -412,16 +414,46 @@ func main() {
 		provider = local
 	}
 	if e != nil {
-		log.Fatal("Provider configuration failed")
+		return errors.New("Provider configuration failed")
 	}
 	svc, e := userkit.NewService(provider, s, s)
 	if e != nil {
-		log.Fatal(e)
+		return e
 	}
 	a := &app{c: c, browser: b, service: svc, store: s, local: local, sessions: map[string]session{}}
 	server := &http.Server{Addr: c.Listen, Handler: http.HandlerFunc(a.handle), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	log.Print("Product user example ready")
-	log.Fatal(server.ListenAndServe())
+	serveError := make(chan error, 1)
+	go func() { serveError <- server.ListenAndServe() }()
+	select {
+	case e = <-serveError:
+		if errors.Is(e, http.ErrServerClosed) {
+			return nil
+		}
+		return errors.New("Product HTTP listener failed")
+	case <-ctx.Done():
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if e = server.Shutdown(shutdown); e != nil {
+			// Force remaining connections closed before releasing the database lock.
+			_ = server.Close()
+			<-serveError
+			return errors.New("Product HTTP shutdown failed")
+		}
+		if e = <-serveError; e != nil && !errors.Is(e, http.ErrServerClosed) {
+			return errors.New("Product HTTP listener failed")
+		}
+		return nil
+	}
+}
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if e := run(ctx); e != nil {
+		// run has already released its database before the process exit.
+		log.Print(e)
+		os.Exit(1)
+	}
 }
 
 const page = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Product Notes</title><style>body{font:17px system-ui;max-width:850px;margin:4rem auto;padding:0 2rem;background:#f7f6f1;color:#182b2d}h1{font-size:3rem}button,a{padding:.7rem;background:#235b5a;color:white;border:0;border-radius:5px;cursor:pointer}pre{white-space:pre-wrap;background:white;padding:1.5rem;border-radius:12px}input{padding:.7rem;width:55%}</style><h1>Product Notes</h1><p>One identity. Your own notebook.</p><p><a href="/login">Sign in</a> <button id="reload">Refresh access</button> <button id="logout">Sign out</button></p><pre id="identity">Loading…</pre><form id="article"><input id="text" required placeholder="Write a note"><button>Save note</button></form><p id="status" role="status"></p><script>let csrf='';async function load(){const r=await fetch('/api/me');if(!r.ok){document.querySelector('#identity').textContent='Sign in to open your notebook';return}const d=await r.json();csrf=d.csrf_token;document.querySelector('#identity').textContent=JSON.stringify({subject:d.access.subject,roles:d.access.roles,permissions:d.access.permissions,profile:d.profile},null,2)}document.querySelector('#reload').onclick=load;document.querySelector('#logout').onclick=async()=>{await fetch('/logout',{method:'POST',headers:{'X-Product-CSRF':csrf}});location.reload()};document.querySelector('#article').onsubmit=async e=>{e.preventDefault();const r=await fetch('/api/articles',{method:'POST',headers:{'Content-Type':'application/json','X-Product-CSRF':csrf},body:JSON.stringify({text:document.querySelector('#text').value})});document.querySelector('#status').textContent=r.ok?'Note saved':'Access denied';if(r.ok)load()};load()</script></html>`
