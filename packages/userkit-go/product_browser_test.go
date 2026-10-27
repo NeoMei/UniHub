@@ -49,3 +49,25 @@ func TestProductBrowserGrantScopesAndSeparateApprovalActor(t *testing.T) {
 		srv.Close()
 	}
 }
+
+func TestPrivateRuntimeAcceptsOnlyConfiguredPublicBrowserFinish(t *testing.T) {
+	for _, finishOrigin := range []string{"https://hub.test", "https://foreign.test"} {
+		t.Run(finishOrigin, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/internal/v1/product-runtime/identity/browser/approve" {
+					t.Errorf("unexpected private route %s", r.URL.Path)
+				}
+				_ = json.NewEncoder(w).Encode(ProductBrowserApprovalReceipt{FinishURL: finishOrigin + "/auth/product/finish?handoff=opaque&state=state"})
+			}))
+			defer srv.Close()
+			client, e := NewRuntimeClient(ServiceConfig{BaseURL: srv.URL, BrowserOrigin: "https://hub.test", ProductID: "llmrouter", ServiceToken: strings.Repeat("s", 32)})
+			if e != nil {
+				t.Fatal(e)
+			}
+			_, e = client.ApproveProductBrowserHandoff(context.Background(), "upa_source", ProductBrowserApproval{ClientID: "router", HandoffID: "opaque", State: strings.Repeat("a", 43)})
+			if (e == nil) != (finishOrigin == "https://hub.test") {
+				t.Fatalf("unexpected public finish result for %s: %v", finishOrigin, e)
+			}
+		})
+	}
+}
