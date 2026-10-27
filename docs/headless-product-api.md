@@ -68,12 +68,24 @@ SDK不持久化 token、不写 Cookie/localStorage、不自动刷新。BFF 可�
 | `transfers:write` / `operations:read` | 统一钱包向获准产品划拨 / 查原账务操作 |
 | `orders:read` / `orders:write` | 订单列表 / 购买、升级报价和接受 |
 | `settings:read` / `settings:write` / `refunds:write` | 统一钱包 funding/renewal 授权读取/变更 / 原订单退款 |
-| `usage:read` | 来源产品调用列表、明细和汇总 |
-| `model-credentials:write` | 本来源产品短期模型凭证签发/撤销 |
+| `usage:read` | 来源产品调用列表、明细、汇总和本实例预算读取 |
+| `model-credentials:write` | 本来源产品短期模型凭证签发/撤销；本产品实例长期 API Key 创建、列表和撤销 |
 
 财务查询与命令仍须账户 owner 或 billing_admin。admin 管理普通成员不等于财务权限；新 owner 必须本人接受邀请；最后 owner 不可移除。邀请列表只含仍有效的待接受项，最多最近 100 条，没有通用分页。GET `/v1/invitations` 只看本人收件，GET `/v1/accounts/{account}/invitations` 仅团队 owner/admin 查看；DELETE `/v1/accounts/{account}/invitations/{invitation}` 用于撤销待处理邀请，admin 只能撤销普通成员邀请。
 
 产品列表只返回获准资源，详情和命令先检查产品归属。请求体不能自称 actor、其他 account、费用或最终 usage。模型凭证 origin 缺省由服务端填写；显式其他 origin 被拒绝，撤销同样约束产品。可信预占/结算只对独立 llmrouter 服务身份开放，不属于产品 SDK。
+
+## 长期 API Key 与消费预算
+
+`GET/POST /v1/accounts/{account}/api-keys` 和 `DELETE /v1/accounts/{account}/api-keys/{key}` 面向产品自己的密钥界面。创建请求包括 `name`、`models`，可选 `funding_mode`、`expires_at`、`max_total`、`max_per_call`。产品和实例取已验证的 client registry；请求不得覆盖其他产品或实例。控制台请求须明确产品。密钥绑定当前 UniHub 用户、付款账户、产品、实例、模型和资金资产，服务端只保存 SHA-256 摘要；完整 `uh_key_` bearer 只在创建响应出现一次，列表不含密钥或摘要。普通成员只看和撤销本人密钥，账户 owner/billing_admin 可管理本实例账户密钥。创建请求不自动重试；响应丢失时刷新列表并撤销不明的新密钥，再显式创建。
+
+不填到期时间表示长期有效，不受任务凭证十分钟期限限制。每次使用仍重新检查当前用户启用状态、账户成员关系、产品启用/计费政策、模型费率，以及已配置产品 manifest 的 `product:use` 权限。产品停用、角色撤权、用户停用、到期或密钥撤销都会阻止新增预占和追加预占。已发出的调用保留原费率和预占凭据，可继续完成一次结算或释放；到期或撤销的 bearer 也不能读取历史 receipt 或任务结果；可信服务使用已存调用完成对账，历史页面使用当前产品会话授权。
+
+`GET/PUT /v1/accounts/{account}/usage-budget?product_id=llmrouter&instance_id=default&funding_mode=prepaid_cash` 返回/修改账户、产品、实例和资产下的累计消费预算。读取和修改均需要账户 owner/billing_admin；产品读取还需要 registry `usage:read`，修改还需要 `settings:write`，部署必须显式配置对应 scope。`version` 使用比较交换，初始为 0；旧版本修改返回 409。未配置或空字符串上限表示不限，`"0"` 明确禁止新预占。金额是 `CNY/6` 或 `CREDIT/6` 精确整数字符串；该版本没有周期重置或跨资产转换。
+
+响应 `held` 是尚未完成、缺失 usage 或结果未明调用的预占，`used` 是已结算实扣，`remaining` 是预算减去两者；不限预算时为 null。预算不是钱包余额，不产生资金。单个密钥和共享预算同时在中心账户锁下检查，重放不重复占用；结算释放未使用预占，失败释放全部预占。降低上限不会抹去已有调用。原 LLMRouter 余额、历史密钥和账单不自动合并。
+
+可信模型服务仍调用 `/internal/v1/model-credentials/verify` 与 `/internal/v1/calls/reserve`，长期密钥必须提交配置一致的 `instance_id`。verify 允许空 `model` 供模型列表使用，但仍检查完整密钥授权；创建调用时必须传具体 rate 与服务端生成的非空 `task_id`。短期任务凭证继续要求原任务完全一致。模型服务凭证和最终结算权限不向浏览器公开。
 
 ## 资金、订单和共享额度
 

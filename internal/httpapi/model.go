@@ -8,6 +8,7 @@ import (
 )
 
 func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
+	s.apiKeyRoutes(add)
 	a := s.options.ModelAccess
 	add("GET /v1/products/{product}/model-consistency", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		product := r.PathValue("product")
@@ -55,16 +56,20 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 	})
 	m.HandleFunc("POST /internal/v1/model-credentials/verify", s.serviceAuthenticated(func(w http.ResponseWriter, r *http.Request) error {
 		var body struct {
-			Token   string `json:"token"`
-			Model   string `json:"model"`
-			Purpose string `json:"purpose"`
+			Token      string `json:"token"`
+			Model      string `json:"model"`
+			Purpose    string `json:"purpose"`
+			InstanceID string `json:"instance_id"`
 		}
 		if e := decode(w, r, &body); e != nil {
 			return e
 		}
-		v, e := a.Verify(r.Context(), body.Token, body.Model)
+		var v modelaccess.Claims
+		var e error
 		if body.Purpose == "receipt" {
-			v, e = a.VerifyReceipt(r.Context(), body.Token, body.Model)
+			v, e = a.VerifyReceiptForInstance(r.Context(), body.Token, body.Model, body.InstanceID)
+		} else {
+			v, e = a.VerifyForInstance(r.Context(), body.Token, body.Model, body.InstanceID)
 		}
 		if e != nil {
 			return e
@@ -79,6 +84,7 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 			RateID        string `json:"rate_id"`
 			Amount        string `json:"amount"`
 			TaskID        string `json:"task_id"`
+			InstanceID    string `json:"instance_id"`
 		}
 		if e := decode(w, r, &body); e != nil {
 			return e
@@ -97,14 +103,20 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		if model == "" {
 			return billing.ErrInvalid
 		}
-		grant, e := a.Verify(r.Context(), body.Credential, model)
+		grant, e := a.VerifyForInstance(r.Context(), body.Credential, model, body.InstanceID)
 		if e != nil {
 			return e
 		}
-		if grant.TaskID != body.TaskID {
+		if (grant.CredentialKind != "api_key" && grant.TaskID != body.TaskID) || (grant.CredentialKind == "api_key" && (body.TaskID == "" || len(body.TaskID) > 128)) {
 			return accounts.ErrForbidden
 		}
-		v, e := b.Reserve(r.Context(), "llmrouter", billing.ReserveRequest{CredentialID: grant.ID, CallID: body.CallID, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, RequestDigest: body.RequestDigest, RateID: body.RateID, Amount: body.Amount})
+		request := billing.ReserveRequest{CredentialID: grant.ID, CallID: body.CallID, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, RequestDigest: body.RequestDigest, RateID: body.RateID, Amount: body.Amount}
+		var v billing.Call
+		if grant.CredentialKind == "api_key" {
+			v, e = b.ReserveWithScope(r.Context(), "llmrouter", request, grant.InstanceID, body.TaskID)
+		} else {
+			v, e = b.Reserve(r.Context(), "llmrouter", request)
+		}
 		if e != nil {
 			return e
 		}

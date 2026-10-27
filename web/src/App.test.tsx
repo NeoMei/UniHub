@@ -23,6 +23,38 @@ afterEach(() => {
   window.history.replaceState(null,"","/");
   window.sessionStorage.clear();
 });
+it("explains missing central administration authority on a product user-management link", async () => {
+  window.history.replaceState(null, "", "/?view=user-management");
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/auth/session" ? { authenticated: true, user: { id: "member", name: "Member" }, sandbox: true, csrf_token: "csrf" }
+    : path === "/v1/user-management" ? { enabled: true, can_manage: false }
+    : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }] : []
+  ), { status: 200 })));
+  render(<App />);
+  expect(await screen.findByText("当前账户没有 UniHub 用户管理权限。")).toBeDefined();
+  expect(screen.getByText(/个人或团队账户的所有者身份不等于平台管理员/)).toBeDefined();
+  expect(screen.queryByText("搜索用户")).toBeNull();
+});
+it("retains the allowlisted user-management destination through a signed-out console login", async () => {
+  window.history.replaceState(null, "", "/?view=user-management");
+  let authenticated = false;
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/auth/session" ? { authenticated, user: { id: "member", name: "Member" }, sandbox: true, csrf_token: "csrf" }
+    : path === "/v1/user-management" ? { enabled: true, can_manage: false }
+    : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }] : []
+  ), { status: 200 })));
+  const beforeLogin = render(<App />);
+  await screen.findAllByRole("link", { name: /登录归一/ });
+  beforeLogin.unmount();
+  window.history.replaceState(null, "", "/");
+  authenticated = true;
+  const afterLogin = render(<App />);
+  expect(await screen.findByText("当前账户没有 UniHub 用户管理权限。")).toBeDefined();
+  afterLogin.unmount();
+  // The destination hint is consumed once authentication is established.
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "账户概览" })).toBeDefined();
+});
 it("keeps a product-linked team selected across login and never falls back to personal for an unavailable account", async () => {
   window.history.replaceState(null,"","/?account=team&product=superwagie");
   let authenticated=false;

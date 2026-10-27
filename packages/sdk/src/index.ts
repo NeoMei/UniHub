@@ -9,6 +9,14 @@ export interface BillingProfile { product_id: string; version: number; subscript
 export type BillingPresets = Record<BillingPreset, BillingProfile>;
 export interface Product { id: string; name: string; billing_profile?: BillingProfile }
 export interface ModelCredential { id: string; audience: 'llmrouter'; actor_id: string; account_id: string; origin_product_id: string; models: string[]; task_id: string; expires_at: string; token: string; funding_mode: FundingMode; asset: BillingAsset; billing_profile_version: number }
+export interface APIKeyRequest { name: string; models: string[]; origin_product_id?: string; instance_id?: string; funding_mode?: FundingMode; expires_at?: string; max_total?: IntegerString; max_per_call?: IntegerString }
+export interface APIKey { id: string; credential_kind: 'api_key'; name: string; actor_id: string; account_id: string; origin_product_id: string; instance_id: string; models: string[]; funding_mode: FundingMode; asset: BillingAsset; billing_profile_version: number; expires_at: string|null; created_at: string; revoked_at: string|null; max_total: IntegerString|''; max_per_call: IntegerString|''; held: IntegerString; used: IntegerString; remaining: IntegerString|null }
+/** The bearer is returned only by creation and cannot be recovered by listing. */
+export interface APIKeyGrant extends APIKey { token: string }
+export interface APIKeyScope { product_id?: string; instance_id?: string }
+export interface UsageBudgetScope extends APIKeyScope { funding_mode?: FundingMode }
+export interface UsageBudgetRequest { version: number; max_total: IntegerString|''; max_per_call: IntegerString|'' }
+export interface UsageBudget extends UsageBudgetRequest { account_id: string; origin_product_id: string; instance_id: string; asset: BillingAsset; funding_mode: FundingMode; held: IntegerString; used: IntegerString; remaining: IntegerString|null }
 export interface Registration { username: string; password: string; email?: string; display_name?: string }
 export interface RegistrationResult { registration_id: string; status: 'CREATED' | 'UNKNOWN'; login_required?: boolean; retry_after?: number }
 export interface TokenSet { access_token: string; id_token: string; token_type: 'Bearer'; scope: string; expires_in: number }
@@ -141,6 +149,11 @@ revokeInvitation(account: string,id: string): Promise<void>{return this.request(
  usage(account: string,filter: CallFilter={}): Promise<UsageSummary>{return this.request('GET',query(this.path(account,'/usage/summary'),filter));}
  issueModelCredential(account: string,models: string[],taskId: string,fundingMode?: FundingMode): Promise<ModelCredential>{return this.request('POST',this.path(account,'/model-credentials'),{body:{models,task_id:taskId,funding_mode:fundingMode}});}
  revokeModelCredential(account: string,id: string): Promise<void>{return this.request('DELETE',this.path(account,`/model-credentials/${segment(id)}`));}
+ createAPIKey(account: string,body: APIKeyRequest): Promise<APIKeyGrant>{return this.request('POST',this.path(account,'/api-keys'),{body});}
+ apiKeys(account: string,scope: APIKeyScope={}): Promise<APIKey[]>{return this.request('GET',query(this.path(account,'/api-keys'),scope));}
+ revokeAPIKey(account: string,id: string,scope: APIKeyScope={}): Promise<void>{return this.request('DELETE',query(this.path(account,`/api-keys/${segment(id)}`),scope));}
+ usageBudget(account: string,scope: UsageBudgetScope={}): Promise<UsageBudget>{return this.request('GET',query(this.path(account,'/usage-budget'),scope));}
+ setUsageBudget(account: string,body: UsageBudgetRequest,scope: UsageBudgetScope={}): Promise<UsageBudget>{return this.request('PUT',query(this.path(account,'/usage-budget'),scope),{body});}
  /** Explicit sandbox only. Never a real payment or automatically called. */
  sandboxSettleRecharge(account: string,id: string): Promise<Operation>{return this.request('POST',this.path(account,`/recharges/${segment(id)}/sandbox-settle`));}
 }

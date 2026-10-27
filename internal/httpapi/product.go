@@ -47,6 +47,8 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 		"GET /v1/accounts/{account}/settings": "settings:read", "PUT /v1/accounts/{account}/settings": "settings:write",
 		"POST /v1/accounts/{account}/orders/{order}/refund": "refunds:write",
 		"POST /v1/accounts/{account}/model-credentials":     "model-credentials:write", "DELETE /v1/accounts/{account}/model-credentials/{credential}": "model-credentials:write",
+		"GET /v1/accounts/{account}/api-keys": "model-credentials:write", "POST /v1/accounts/{account}/api-keys": "model-credentials:write", "DELETE /v1/accounts/{account}/api-keys/{key}": "model-credentials:write",
+		"GET /v1/accounts/{account}/usage-budget": "usage:read", "PUT /v1/accounts/{account}/usage-budget": "settings:write",
 		"GET /v1/accounts/{account}/calls": "usage:read", "GET /v1/accounts/{account}/calls/{call}": "usage:read", "GET /v1/accounts/{account}/usage/summary": "usage:read",
 	}[pattern]
 	return scope != "" && (c.HasScope(scope) || (pattern == "GET /v1/capabilities" && c.HasScope("access:read")) || (pattern == "GET /v1/me" && c.HasScope("identity:read")))

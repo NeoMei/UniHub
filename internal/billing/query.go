@@ -228,7 +228,7 @@ func readUsageCursor(raw string) (usageCursor, error) {
 
 const callReportStatus = `COALESCE(uncertain.status,c.snapshot->>'status','UNKNOWN')`
 const callStatusJoin = ` LEFT JOIN LATERAL (SELECT 'UNKNOWN'::text AS status FROM billing_commands bc WHERE bc.account_id=c.account_id AND bc.status='UNKNOWN' AND bc.kind IN ('reserve','topup','settle','release') AND bc.effect#>>'{call,call_id}'=c.id LIMIT 1) uncertain ON true `
-const callViewColumns = `c.id,c.snapshot,c.created_at,c.time_source,COALESCE(mc.task_id,''),` + callReportStatus
+const callViewColumns = `c.id,c.snapshot,c.created_at,c.time_source,COALESCE(NULLIF(c.snapshot->>'task_id',''),mc.task_id,''),` + callReportStatus
 const callViewJoin = ` LEFT JOIN model_credentials mc ON mc.id=c.snapshot->>'credential_id' AND mc.account_id=c.account_id AND mc.actor_id=c.snapshot->>'actor_id' AND mc.origin_product_id=c.snapshot->>'origin_product_id' `
 
 func scanCallView(row pgx.Row, scope QueryScope, finance bool) (CallView, error) {

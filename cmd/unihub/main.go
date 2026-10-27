@@ -66,8 +66,10 @@ func run() error {
 		return e
 	}
 	a := accounts.New(pool)
+	productUsers := productusers.New(pool, c.ProductUserManifests, c.PublicURL, c.UserAdminIDs)
 	w := wallet.New(pool, a, l)
 	b := billing.New(pool, a, l)
+	b.ConfigureProductUsers(productUsers)
 	b.ConfigureOperators(c.OperatorIDs)
 	b.ConfigureTrustedServices([]string{"llmrouter"})
 	b.ConfigureSandbox(c.Sandbox && !c.Production)
@@ -94,6 +96,7 @@ func run() error {
 		return e
 	}
 	modelAccess := modelaccess.New(pool, a, b)
+	modelAccess.ConfigureProductUsers(productUsers)
 	productVerifiers := map[string]auth.Verifier{}
 	for product, audience := range c.ProductClients {
 		productVerifiers[product], e = auth.NewOIDC(startup, c.Issuer, audience)
@@ -122,7 +125,7 @@ func run() error {
 	if identity.ProfileEnabled() {
 		profileService = identity
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productusers.New(pool, c.ProductUserManifests, c.PublicURL, c.UserAdminIDs), Identity: profileService})
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, Identity: profileService})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir})
 		if err != nil {
