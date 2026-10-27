@@ -21,7 +21,8 @@
       "budgets:read",
       "budgets:write",
       "calls:refund",
-      "calls:reprice"
+      "calls:reprice",
+      "credits:payment"
     ]
   },
   "llmrouter-reviewed-import": {
