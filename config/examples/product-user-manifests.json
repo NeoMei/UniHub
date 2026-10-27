@@ -4,7 +4,7 @@
     "instance_id": "default",
     "name": "LLMRouter",
     "entry_url": "https://router.example.test",
-    "version": 2,
+    "version": 3,
     "default_roles": [
       "member"
     ],
@@ -23,7 +23,8 @@
         "permissions": [
           "product:use",
           "channel:read"
-        ]
+        ],
+        "product_role": 10
       },
       {
         "id": "channel_operator",
@@ -34,7 +35,8 @@
           "channel:read",
           "channel:operate",
           "channel:write"
-        ]
+        ],
+        "product_role": 10
       },
       {
         "id": "product_viewer",
@@ -47,7 +49,8 @@
           "log:read",
           "routing:read",
           "settings:read"
-        ]
+        ],
+        "product_role": 10
       },
       {
         "id": "product_admin",
@@ -58,15 +61,76 @@
           "channel:read",
           "channel:operate",
           "channel:write",
-          "channel:sensitive_write",
           "catalog:read",
           "catalog:write",
           "log:read",
           "routing:read",
           "routing:write",
+          "user:read",
+          "user:write",
+          "credit:adjust",
+          "subscription:read",
+          "subscription:write",
+          "redemption:read",
+          "redemption:write",
+          "deployment:read",
+          "deployment:write",
+          "billing:read",
+          "billing:write",
+          "gateway:read",
+          "gateway:write",
+          "status:read",
+          "status:write"
+        ],
+        "product_role": 10,
+        "native_baseline": true
+      },
+      {
+        "id": "product_root",
+        "name": "Product root administrator",
+        "privileged": true,
+        "product_role": 100,
+        "permissions": [
+          "product:use",
+          "channel:read",
+          "channel:operate",
+          "channel:write",
+          "catalog:read",
+          "catalog:write",
+          "log:read",
+          "routing:read",
+          "routing:write",
+          "user:read",
+          "user:write",
+          "credit:adjust",
+          "channel:sensitive_write",
+          "channel:secret_view",
           "settings:read",
-          "settings:write"
-        ]
+          "settings:write",
+          "subscription:read",
+          "subscription:write",
+          "redemption:read",
+          "redemption:write",
+          "deployment:read",
+          "deployment:write",
+          "billing:read",
+          "billing:write",
+          "gateway:read",
+          "gateway:write",
+          "status:read",
+          "status:write",
+          "oauth_provider:read",
+          "oauth_provider:write",
+          "performance:read",
+          "performance:write",
+          "ratio_sync:read",
+          "ratio_sync:write",
+          "system_task:read",
+          "system_task:write",
+          "system_info:read",
+          "system_info:write"
+        ],
+        "native_baseline": true
       }
     ]
   },

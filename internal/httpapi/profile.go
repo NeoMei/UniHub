@@ -18,6 +18,8 @@ type avatarService interface {
 
 func profileError(w http.ResponseWriter, err error) error {
 	switch {
+	case errors.Is(err, identityapi.ErrManagedByProduct):
+		fail(w, 409, "credentials_managed_by_product")
 	case errors.Is(err, identityapi.ErrInvalidInput):
 		fail(w, 400, "invalid_request")
 	case errors.Is(err, identityapi.ErrInvalidPassword):

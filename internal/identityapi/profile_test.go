@@ -220,3 +220,23 @@ func TestChangePasswordUnknownProviderResultRevokesSessions(t *testing.T) {
 		})
 	}
 }
+
+func TestProfileSelectsConfiguredProviderAmongCanonicalAliases(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if e := database.Migrate(ctx, p); e != nil {
+		t.Fatal(e)
+	}
+	u, e := accounts.New(p).EnsureIdentity(ctx, accounts.Identity{Issuer: "https://hub.test/product-auth/llmrouter/default", Subject: "17"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = p.Exec(ctx, `INSERT INTO identities(issuer,subject,user_id) VALUES('https://provider.test','provider-subject',$1)`, u.ID); e != nil {
+		t.Fatal(e)
+	}
+	s := &Server{pool: p, opts: Options{Issuer: "https://provider.test"}}
+	id, e := s.profileIdentity(ctx, u.ID)
+	if e != nil || id.Subject != "provider-subject" {
+		t.Fatal("profile selected a product alias instead of configured provider", id, e)
+	}
+}

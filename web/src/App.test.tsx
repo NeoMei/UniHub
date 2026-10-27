@@ -292,3 +292,15 @@ it("selects a newly created team after the create confirmation completes", async
   fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
   await waitFor(() => expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("team-new"));
 });
+
+it("shows trusted product credential management for a native-only central account", async () => {
+ vi.stubGlobal("fetch",vi.fn(async(path:string)=>{
+  const data=path==="/auth/session"?{authenticated:true,sandbox:false,user:{id:"native",name:"Native"},csrf_token:"csrf"}:path==="/v1/accounts"?[{id:"personal",name:"个人账户",kind:"personal",role:"owner"}]:path==="/v1/me/profile"?{id:"native",username:"native",display_name:"Native",email:"native@example.test",version:"1",credential_source:"product",credential_management:[{product_id:"llmrouter",instance_id:"default",url:"https://router.example.test/profile"}]}:[];
+  return new Response(JSON.stringify(data),{status:200});
+ }));
+ render(<App/>);await screen.findByRole("heading",{name:"账户概览"});fireEvent.click(screen.getByRole("button",{name:/账户设置/}));
+ expect(await screen.findByText("native@example.test")).toBeDefined();
+ expect(screen.queryByLabelText("当前密码")).toBeNull();
+ expect(screen.queryByRole("button",{name:"保存个人资料"})).toBeNull();
+ expect(screen.getByRole("link",{name:"前往 llmrouter 管理密码与二次验证"}).getAttribute("href")).toBe("https://router.example.test/profile");
+});

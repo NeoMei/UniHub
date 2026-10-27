@@ -9,12 +9,14 @@ import (
 	"regexp"
 	"strings"
 	"unihub/internal/billing"
+	"unihub/internal/httpapi"
 	"unihub/internal/products"
 	"unihub/internal/productusers"
 )
 
 type config struct {
 	ProductUserManifests                                          productusers.Registry
+	ProductRuntime                                                map[string]httpapi.RuntimeService
 	UserAdminIDs                                                  []string
 	Listen, DB, LedgerURL, LedgerName, Issuer, Audience, Merchant string
 	PublicURL, ClientSecret, StaticDir, ModelServiceToken         string
@@ -138,6 +140,14 @@ func readConfig(get func(string) string) (config, error) {
 				return c, fmt.Errorf("access:read requires a known product instance manifest")
 			}
 		}
+	}
+	var runtimeErr error
+	c.ProductRuntime, runtimeErr = parseRuntimeServices(get("PRODUCT_RUNTIME_SERVICES_JSON"), c.ProductUserManifests, c.ModelServiceToken)
+	if runtimeErr != nil {
+		return c, runtimeErr
+	}
+	if len(c.ProductRuntime) > 0 && c.PublicURL == "" {
+		return c, fmt.Errorf("product runtime requires canonical PUBLIC_URL")
 	}
 	adminID := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	for _, id := range strings.Split(get("USER_ADMIN_IDS"), ",") {

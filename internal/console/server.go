@@ -368,7 +368,7 @@ func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 	}
 	var claims auth.Claims
 	var csrf string
-	err = s.pool.QueryRow(r.Context(), `SELECT issuer,subject,name,email,csrf_token,extract(epoch from expires_at)::bigint FROM browser_sessions WHERE id_hash=$1 AND expires_at>now()`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt)
+	err = s.pool.QueryRow(r.Context(), `SELECT issuer,subject,name,email,csrf_token,extract(epoch from expires_at)::bigint FROM browser_sessions WHERE id_hash=$1 AND expires_at>now() AND NOT EXISTS(SELECT 1 FROM product_browser_session_origins o LEFT JOIN product_auth_subjects p ON p.binding_id=o.binding_id LEFT JOIN product_runtime_bindings b ON b.id=p.binding_id LEFT JOIN users u ON u.id=b.user_id LEFT JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id WHERE o.session_id_hash=browser_sessions.id_hash AND (p.binding_id IS NULL OR p.deleted OR p.auth_version<>o.auth_version OR NOT u.active OR NOT a.active))`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt)
 	return claims, csrf, err == nil
 }
 func (s *Server) csrf(r *http.Request, expected string) bool {
