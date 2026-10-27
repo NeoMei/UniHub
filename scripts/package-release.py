@@ -164,7 +164,7 @@ def build(args):
         command(['npm', '--prefix', 'web', 'run', 'build'], env=env)
         runtime = {}
         tracked(runtime, ['deploy/server', 'deploy/identity', 'docs', 'branding', 'README.md', 'CONTEXT.md', 'VERSION', 'CHANGELOG.md',
-                          'config/examples/product-user-manifests.json', 'scripts/headless_e2e.py', 'scripts/product_client.py', 'scripts/product_billing.py', 'scripts/prepare-branding.py', 'scripts/package-release.py', 'examples/billing', 'integrations/llmrouter'])
+                          'config/examples/product-user-manifests.json', 'config/examples/product-runtime-services.json', 'scripts/headless_e2e.py', 'scripts/product_client.py', 'scripts/product_billing.py', 'scripts/prepare-branding.py', 'scripts/package-release.py', 'examples/billing', 'integrations/llmrouter'])
         add(runtime, 'bin/unihub', stage/'unihub')
         add(runtime, 'bin/unihub-identity-acceptance', stage/'unihub-identity-acceptance')
         add_tree(runtime, ROOT/'web/dist', 'web/dist')
@@ -202,7 +202,7 @@ def build(args):
         archive(generated/f'unihub-sdk-{version}-source.tar.gz', sdk, f'unihub-sdk-{version}', epoch)
         userkit = {}; tracked(userkit, ['packages/userkit-go', 'examples/product-users',
             'scripts/product_user_init.py', 'scripts/product_client.py', 'scripts/test-product-user-init.py', 'scripts/test-product-client.py',
-            'config/examples/product-user-manifests.json', 'docs/product-user-api.md', 'docs/headless-product-api.md',
+            'config/examples/product-user-manifests.json', 'config/examples/product-runtime-services.json', 'docs/userkit', 'docs/product-user-api.md', 'docs/headless-product-api.md',
             'docs/integrations/product-user-foundation.md', 'docs/integrations/product-user-foundation-acceptance-2026-10-27.md',
             'VERSION', 'CHANGELOG.md'])
         archive(generated/f'unihub-userkit-{version}-source.tar.gz', userkit, f'unihub-userkit-{version}', epoch)

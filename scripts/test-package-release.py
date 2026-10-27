@@ -66,6 +66,10 @@ class ReleaseAssetsTests(unittest.TestCase):
                     'examples/product-users/lifecycle_test.go', 'examples/product-users/go.mod',
                     'examples/product-users/go.sum', 'scripts/product_user_init.py',
                     'scripts/product_client.py', 'config/examples/product-user-manifests.json',
+                    'config/examples/product-runtime-services.json',
+                    'packages/userkit-go/product_auth.go', 'packages/userkit-go/product_browser.go',
+                    'packages/userkit-go/runtime.go', 'docs/userkit/runtime-adapter.md',
+                    'docs/userkit/account-integration-modes.md',
                     'docs/product-user-api.md', 'docs/integrations/product-user-foundation.md',
                     'VERSION', 'CHANGELOG.md',
                 ]:
@@ -83,6 +87,8 @@ class ReleaseAssetsTests(unittest.TestCase):
                 names = {member.name for member in archive}
                 prefix = f'unihub-{version}-linux-amd64/'
                 self.assertIn(prefix + 'config/examples/product-user-manifests.json', names)
+                self.assertIn(prefix + 'config/examples/product-runtime-services.json', names)
+                self.assertIn(prefix + 'docs/userkit/runtime-adapter.md', names)
                 self.assertIn(prefix + 'scripts/product_client.py', names)
                 self.assertFalse(any('/.local/' in name for name in names))
             sums = (output / 'SHA256SUMS').read_text()
