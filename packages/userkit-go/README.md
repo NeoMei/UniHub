@@ -56,6 +56,8 @@ never returns a principal on failure. Keep the central identity projection at th
 native common role with product-specific baseline resources (e.g. zero quota).
 Never persist central admin roles as native elevated roles. Local resource policy
 can narrow a central permission; it cannot grant a permission central denied.
+`HasPermission` evaluates policy with an empty resource and background context;
+use `RequirePermission(ctx, permission, resource)` for resource-specific checks.
 Retain the returned principal only for the current request and refresh online
 before protected operations. Expiry is checked again by permission helpers.
 

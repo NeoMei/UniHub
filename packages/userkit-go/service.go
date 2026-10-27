@@ -51,10 +51,10 @@ type Principal struct {
 }
 
 func (p Principal) HasPermission(permission string) bool {
-	return p.LocalUser.ID != "" && p.Access.Active && p.Access.ExpiresAt > time.Now().Unix() && slices.Contains(p.Access.Permissions, permission)
+	return p.RequirePermission(context.Background(), permission, "") == nil
 }
 func (p Principal) RequirePermission(ctx context.Context, permission, resource string) error {
-	if !p.HasPermission(permission) {
+	if p.LocalUser.ID == "" || !p.Access.Active || p.Access.ExpiresAt <= time.Now().Unix() || !slices.Contains(p.Access.Permissions, permission) {
 		return ErrDenied
 	}
 	if p.policy != nil {

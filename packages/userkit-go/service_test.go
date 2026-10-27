@@ -90,3 +90,26 @@ func TestFailureAndCentralDenyNeverYieldUsableIdentity(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+type denyPolicy struct{}
+
+func (denyPolicy) Allow(context.Context, Principal, string, string) error { return ErrDenied }
+func TestProductResourcePolicyCanNarrowButCannotBroadenCentralPermissions(t *testing.T) {
+	p := &transactionalProvisioner{users: map[string]LocalUser{}}
+	s, _ := NewService(verifiedProvider{access: validAccess()}, p, denyPolicy{})
+	principal, e := s.Authenticate(context.Background(), "bearer")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if principal.HasPermission("product:use") || principal.RequirePermission(context.Background(), "product:use", "document-1") == nil {
+		t.Fatal("product resource deny ignored")
+	}
+	s, _ = NewService(verifiedProvider{access: validAccess()}, p, allowPolicy{})
+	principal, e = s.Authenticate(context.Background(), "bearer")
+	if e != nil {
+		t.Fatal(e)
+	}
+	if principal.HasPermission("channel:write") || principal.RequirePermission(context.Background(), "channel:write", "channel-1") == nil {
+		t.Fatal("product policy broadened central permission")
+	}
+}
