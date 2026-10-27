@@ -73,6 +73,51 @@ func (s *Store) Managed(product, instance string) bool {
 	_, ok := s.registry.Get(product, instance)
 	return ok
 }
+
+// RequirePermissionOn reads the current assignment on the caller's connection.
+// Billing already holds the payer lock and must not acquire another pool slot.
+func (s *Store) RequirePermissionOn(ctx context.Context, q accounts.Querier, actor, product, instance, permission string) error {
+	m, managed := s.registry.Get(product, instance)
+	if !managed {
+		return nil
+	}
+	var active bool
+	var roles *json.RawMessage
+	var assignmentActive *bool
+	if e := q.QueryRow(ctx, `SELECT u.active,a.roles,a.active FROM users u LEFT JOIN product_user_access a ON a.user_id=u.id AND a.product_id=$2 AND a.instance_id=$3 WHERE u.id=$1`, actor, product, instance).Scan(&active, &roles, &assignmentActive); e != nil {
+		return e
+	}
+	if !active || (assignmentActive != nil && !*assignmentActive) {
+		return accounts.ErrForbidden
+	}
+	assigned := m.DefaultRoles
+	if roles != nil && json.Unmarshal(*roles, &assigned) != nil {
+		return accounts.ErrForbidden
+	}
+	allowed := false
+	for _, id := range assigned {
+		found := false
+		for _, role := range m.Roles {
+			if role.ID != id {
+				continue
+			}
+			found = true
+			for _, p := range role.Permissions {
+				if p == permission {
+					allowed = true
+				}
+			}
+			break
+		}
+		if !found {
+			return accounts.ErrForbidden
+		}
+	}
+	if !allowed {
+		return accounts.ErrForbidden
+	}
+	return nil
+}
 func (s *Store) CheckActive(ctx context.Context, user string) error {
 	var active bool
 	if e := s.pool.QueryRow(ctx, `SELECT active FROM users WHERE id=$1`, user).Scan(&active); e != nil {

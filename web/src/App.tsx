@@ -110,6 +110,16 @@ function initialAccount() {
   }
   return window.sessionStorage.getItem("unihub.account") || "";
 }
+// This public destination hint contains no identity or credentials. Authentication
+// and the live user-management permission check still guard the resulting page.
+function initialPage(): Page {
+  const view = new URLSearchParams(window.location.search).get("view");
+  if (view === "user-management") {
+    window.sessionStorage.setItem("unihub.return-view", view);
+  }
+  return window.sessionStorage.getItem("unihub.return-view") === "user-management"
+    ? "user-management" : "overview";
+}
 export default function App() {
   const [version, setVersion] = useState(0);
   const session = useResource<Session>("/auth/session", version);
@@ -120,7 +130,10 @@ export default function App() {
     version,
   );
   const [selected, setSelected] = useState(initialAccount);
-  const [page, setPage] = useState<Page>("overview");
+  const [page, setPage] = useState<Page>(initialPage);
+  useEffect(() => {
+    if (session.data?.authenticated) window.sessionStorage.removeItem("unihub.return-view");
+  }, [session.data?.authenticated]);
   const [profileOpen, setProfileOpen] = useState(false);
  const userManagement=useResource<{enabled:boolean;can_manage:boolean}>(session.data?.authenticated?"/v1/user-management":undefined,version);
   const [portalOpen, setPortalOpen] = useState(() => ["/guide", "/products"].includes(window.location.pathname));
@@ -289,7 +302,11 @@ export default function App() {
               onClose={() => setProfileOpen(false)}
               onChanged={setProfileView}
             />
-          ) : page==="applications" ? <ProductApplications/> : page==="user-management" && userManagement.data?.can_manage ? <ProductUserManagement csrf={session.data.csrf_token}/> : account ? (
+          ) : page==="applications" ? <ProductApplications/> : page==="user-management" ? (
+            userManagement.loading ? <Notice>正在核对管理权限…</Notice>
+            : userManagement.data?.can_manage ? <ProductUserManagement csrf={session.data.csrf_token}/>
+            : <Panel title="用户管理"><Notice kind="error">当前账户没有 UniHub 用户管理权限。</Notice><p>个人或团队账户的所有者身份不等于平台管理员。请由已配置的 UniHub 用户管理员在用户管理中分配产品角色；LLMRouter 管理员角色不授予 UniHub 全局管理权限。</p><p>新用户通过归一注册并登录后，会自动获得产品的默认成员权限，无需在 LLMRouter 重复注册。</p><button onClick={() => setPage("applications")}>查看我的应用</button></Panel>
+          ) : account ? (
             <AccountConsole
               key={account.id}
               account={account}

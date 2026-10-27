@@ -51,6 +51,14 @@ type api struct {
 type action func(http.ResponseWriter, *http.Request, accounts.User) error
 
 func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.Handler {
+	if o.ProductUsers != nil {
+		if o.Billing != nil {
+			o.Billing.ConfigureProductUsers(o.ProductUsers)
+		}
+		if o.ModelAccess != nil {
+			o.ModelAccess.ConfigureProductUsers(o.ProductUsers)
+		}
+	}
 	s := &api{v, a, w, o}
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {

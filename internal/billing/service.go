@@ -14,6 +14,7 @@ import (
 	"unihub/internal/accounts"
 	"unihub/internal/database"
 	"unihub/internal/ledger"
+	"unihub/internal/productusers"
 )
 
 type Service struct {
@@ -24,11 +25,13 @@ type Service struct {
 	mu                 sync.RWMutex
 	operators, trusted map[string]bool
 	sandbox            bool
+	productUsers       *productusers.Store
 }
 
 func New(p *pgxpool.Pool, a *accounts.Store, l ledger.Ledger) *Service {
 	return &Service{pool: p, accounts: a, ledger: l, now: time.Now, operators: map[string]bool{}, trusted: map[string]bool{}}
 }
+func (s *Service) ConfigureProductUsers(users *productusers.Store) { s.productUsers = users }
 func (s *Service) ConfigureOperators(ids []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -96,6 +96,25 @@ test('model credential preserves three-argument call and sends explicit funding 
  assert.deepEqual(calls[1].body,{models:['model'],task_id:'cash',funding_mode:'prepaid_cash'});
 });
 
+test('managed API keys and budgets preserve exact caps without key recovery or automatic retry',async t=>{
+ const {client,calls}=await fixture(t,(r,res)=>{
+  assert.equal(r.headers.authorization,'Bearer product-session');
+  if(r.path.endsWith('/api-keys')&&r.body)send(res,201,{id:'key',token:'create-only',max_total:r.body.max_total});
+  else if(r.path.includes('/usage-budget')&&r.body)send(res,409,{error:'conflict'});
+  else if(r.path.endsWith('/api-keys/key')){res.writeHead(204);res.end();}
+  else send(res,200,[]);
+ });
+ client.setAccessToken('product-session');
+ const key=await client.createAPIKey('account',{name:'CI',models:['model'],max_total:'9007199254740993',max_per_call:'0'});
+ assert.equal(key.token,'create-only');assert.equal(key.max_total,'9007199254740993');
+ await client.apiKeys('account');await client.revokeAPIKey('account','key');
+ await client.usageBudget('account',{instance_id:'default',funding_mode:'prepaid_cash'});
+ await assert.rejects(client.setUsageBudget('account',{version:3,max_total:'9007199254740993',max_per_call:'0'},{funding_mode:'prepaid_cash'}),e=>e instanceof UniHubError&&e.status===409);
+ assert.equal(calls.length,5);assert.equal(calls[0].body.max_total,'9007199254740993');
+ assert.equal(calls[3].path,'/v1/accounts/account/usage-budget?instance_id=default&funding_mode=prepaid_cash');
+ assert.deepEqual(calls[4].body,{version:3,max_total:'9007199254740993',max_per_call:'0'});
+});
+
 test('usage and call queries preserve asset selection and separate large per-asset charges',async t=>{
  const common={scope:{account_id:'account',origin_product_id:'my-product',visibility:'account'},filter:{},financial_details:true,as_of:'2026-10-25T00:00:00Z',accuracy:'exact_for_query_snapshot',consistency:'live'};
  const usage={input:'9007199254740993',output:'0',cache_read:'0',cache_write:'0',reasoning:'0'};

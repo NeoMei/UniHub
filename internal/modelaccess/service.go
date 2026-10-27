@@ -1,5 +1,5 @@
-// Package modelaccess issues short-lived opaque capabilities for the llmrouter
-// audience. A model capability is never a login, wallet or settlement credential.
+// Package modelaccess issues task and durable opaque capabilities for the
+// llmrouter audience. A capability is never a login or settlement credential.
 package modelaccess
 
 import (
@@ -17,6 +17,7 @@ import (
 	"unihub/internal/accounts"
 	"unihub/internal/billing"
 	"unihub/internal/database"
+	"unihub/internal/productusers"
 )
 
 var ErrCredential = errors.New("model credential invalid or no longer authorized")
@@ -37,9 +38,10 @@ type BillingUsageEligibilityOn interface {
 	AuthorizeUsageOn(context.Context, accounts.Querier, string, string, string, string) (billing.UsageAuthorization, error)
 }
 type Service struct {
-	pool        *pgxpool.Pool
-	accounts    *accounts.Store
-	eligibility Eligibility
+	pool         *pgxpool.Pool
+	accounts     *accounts.Store
+	eligibility  Eligibility
+	productUsers *productusers.Store
 }
 type Request struct {
 	FundingMode     string   `json:"funding_mode,omitempty"`
@@ -48,6 +50,8 @@ type Request struct {
 	TaskID          string   `json:"task_id"`
 }
 type Claims struct {
+	CredentialKind        string    `json:"credential_kind,omitempty"`
+	InstanceID            string    `json:"instance_id,omitempty"`
 	FundingMode           string    `json:"funding_mode"`
 	Asset                 string    `json:"asset"`
 	BillingProfileVersion int64     `json:"billing_profile_version"`
@@ -65,7 +69,10 @@ type Grant struct {
 	Token string `json:"token"`
 }
 
-func New(pool *pgxpool.Pool, a *accounts.Store, e Eligibility) *Service { return &Service{pool, a, e} }
+func New(pool *pgxpool.Pool, a *accounts.Store, e Eligibility) *Service {
+	return &Service{pool: pool, accounts: a, eligibility: e}
+}
+func (s *Service) ConfigureProductUsers(users *productusers.Store) { s.productUsers = users }
 func opaque(prefix string) (string, error) {
 	b := make([]byte, 32)
 	if _, e := rand.Read(b); e != nil {
@@ -108,10 +115,14 @@ func (s *Service) authorize(ctx context.Context, actor, account, product, mode s
 }
 
 func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (Grant, error) {
+	return s.issue(ctx, actor, account, r, nil)
+}
+
+func (s *Service) issue(ctx context.Context, actor, account string, r Request, key *APIKeyRequest) (Grant, error) {
 	if e := s.activeOn(ctx, s.pool, actor); e != nil {
 		return Grant{}, e
 	}
-	if r.OriginProductID == "" || len(r.Models) == 0 || len(r.Models) > 32 || strings.TrimSpace(r.TaskID) == "" || len(r.TaskID) > 128 {
+	if r.OriginProductID == "" || len(r.Models) == 0 || len(r.Models) > 32 || (key == nil && strings.TrimSpace(r.TaskID) == "") || len(r.TaskID) > 128 {
 		return Grant{}, billing.ErrInvalid
 	}
 	policyModels, e := s.productModels(ctx, s.pool, r.OriginProductID)
@@ -133,6 +144,9 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 		return Grant{}, e
 	}
 	token, e := opaque("uh_model_")
+	if key != nil {
+		token, e = opaque("uh_key_")
+	}
 	if e != nil {
 		return Grant{}, e
 	}
@@ -141,10 +155,19 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 		return Grant{}, e
 	}
 	expiry := time.Now().UTC().Add(10 * time.Minute)
-	if !auth.ExpiresAt.IsZero() && auth.ExpiresAt.Before(expiry) {
+	if key != nil {
+		expiry = permanentExpiry
+		if key.ExpiresAt != nil {
+			expiry = key.ExpiresAt.UTC()
+		}
+	}
+	if key == nil && !auth.ExpiresAt.IsZero() && auth.ExpiresAt.Before(expiry) {
 		expiry = auth.ExpiresAt
 	}
 	grant := Grant{Claims: Claims{ID: id, Audience: "llmrouter", ActorID: actor, AccountID: account, OriginProductID: r.OriginProductID, Models: models, TaskID: r.TaskID, ExpiresAt: expiry, FundingMode: auth.FundingMode, Asset: auth.Asset, BillingProfileVersion: auth.ProfileVersion}, Token: token}
+	if key != nil {
+		grant.CredentialKind, grant.InstanceID = "api_key", key.InstanceID
+	}
 	data, _ := json.Marshal(models)
 	tx, e := s.pool.Begin(ctx)
 	if e != nil {
@@ -190,11 +213,19 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 		return Grant{}, e
 	}
 	grant.BillingProfileVersion = current.ProfileVersion
-	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(grant.ExpiresAt) {
+	if key == nil && !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(grant.ExpiresAt) {
 		grant.ExpiresAt = current.ExpiresAt
 	}
 	if _, e = tx.Exec(ctx, `INSERT INTO model_credentials(id,token_hash,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, id, digest(token), actor, account, r.OriginProductID, data, r.TaskID, grant.ExpiresAt, grant.FundingMode, grant.Asset, grant.BillingProfileVersion); e != nil {
 		return Grant{}, e
+	}
+	if key != nil {
+		if e = s.apiKeyProductActive(ctx, tx, actor, r.OriginProductID, key.InstanceID); e != nil {
+			return Grant{}, e
+		}
+		if _, e = tx.Exec(ctx, `UPDATE model_credentials SET credential_kind='api_key',name=$2,instance_id=$3,max_total=$4,max_per_call=$5 WHERE id=$1`, id, key.Name, key.InstanceID, key.MaxTotal, key.MaxPerCall); e != nil {
+			return Grant{}, e
+		}
 	}
 	if _, e = tx.Exec(ctx, `INSERT INTO audit_events(account_id,actor_id,operation_id,action) VALUES($1,$2,$3,'model_credential.issued')`, account, actor, id); e != nil {
 		return Grant{}, e
@@ -205,28 +236,43 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 // Verify is called only by the separately authenticated gateway. It returns no
 // capability secret. New reservations also recheck membership in billing's lock.
 func (s *Service) Verify(ctx context.Context, token, model string) (Claims, error) {
-	return s.verify(ctx, token, model, true)
+	return s.verify(ctx, token, model, "", true)
+}
+
+func (s *Service) VerifyForInstance(ctx context.Context, token, model, instance string) (Claims, error) {
+	return s.verify(ctx, token, model, instance, true)
 }
 
 // VerifyReceipt authenticates the immutable credential scope for a historical
 // call. It deliberately does not require a currently published rate: rate
 // retirement must not make durable receipts unreconcilable.
 func (s *Service) VerifyReceipt(ctx context.Context, token, model string) (Claims, error) {
-	return s.verify(ctx, token, model, false)
+	return s.verify(ctx, token, model, "", false)
 }
 
-func (s *Service) verify(ctx context.Context, token, model string, enforceRate bool) (Claims, error) {
-	if len(token) != 73 || !strings.HasPrefix(token, "uh_model_") {
+func (s *Service) VerifyReceiptForInstance(ctx context.Context, token, model, instance string) (Claims, error) {
+	return s.verify(ctx, token, model, instance, false)
+}
+
+func (s *Service) verify(ctx context.Context, token, model, instance string, enforceRate bool) (Claims, error) {
+	if !(len(token) == 73 && strings.HasPrefix(token, "uh_model_")) && !(len(token) == 71 && strings.HasPrefix(token, "uh_key_")) {
 		return Claims{}, ErrCredential
 	}
 	var c Claims
 	var data []byte
-	e := s.pool.QueryRow(ctx, `SELECT id,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version FROM model_credentials WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&c.ID, &c.ActorID, &c.AccountID, &c.OriginProductID, &data, &c.TaskID, &c.ExpiresAt, &c.FundingMode, &c.Asset, &c.BillingProfileVersion)
+	e := s.pool.QueryRow(ctx, `SELECT id,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,instance_id FROM model_credentials WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&c.ID, &c.ActorID, &c.AccountID, &c.OriginProductID, &data, &c.TaskID, &c.ExpiresAt, &c.FundingMode, &c.Asset, &c.BillingProfileVersion, &c.CredentialKind, &c.InstanceID)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return c, ErrCredential
 	}
 	if e != nil {
 		return c, e
+	}
+	// PostgreSQL timestamptz may be decoded in the host's local timezone. The
+	// no-expiry sentinel must stay UTC so a positive offset cannot render year
+	// 10000 and break JSON serialization after a success status was written.
+	c.ExpiresAt = c.ExpiresAt.UTC()
+	if c.CredentialKind == "api_key" && (instance == "" || instance != c.InstanceID) {
+		return Claims{}, ErrCredential
 	}
 	if e = json.Unmarshal(data, &c.Models); e != nil {
 		return c, e
@@ -234,11 +280,40 @@ func (s *Service) verify(ctx context.Context, token, model string, enforceRate b
 	if model != "" && !slices.Contains(c.Models, model) {
 		return Claims{}, ErrCredential
 	}
-	// Receipt proof authenticates the saved immutable scope only; it grants no
-	// new dispatch or hold and must survive later user/policy disablement.
+	// Receipt reads may outlive rate retirement, but a revoked/expired key is
+	// never public authority. Internal service reconciliation uses stored calls.
 	if !enforceRate {
+		if c.CredentialKind == "api_key" {
+			if e = s.activeOn(ctx, s.pool, c.ActorID); e != nil {
+				return Claims{}, ErrCredential
+			}
+			if _, e = s.accounts.Role(ctx, c.ActorID, c.AccountID); e != nil {
+				return Claims{}, ErrCredential
+			}
+			if e = s.apiKeyProductActive(ctx, s.pool, c.ActorID, c.OriginProductID, c.InstanceID); e != nil {
+				return Claims{}, ErrCredential
+			}
+			auth, e := s.authorize(ctx, c.ActorID, c.AccountID, c.OriginProductID, c.FundingMode)
+			if e != nil || auth.Asset != c.Asset {
+				return Claims{}, ErrCredential
+			}
+			models, e := s.productModels(ctx, s.pool, c.OriginProductID)
+			if e != nil {
+				return Claims{}, ErrCredential
+			}
+			for _, model := range c.Models {
+				if models != nil && !slices.Contains(models, model) {
+					return Claims{}, ErrCredential
+				}
+			}
+		}
 		c.Audience = "llmrouter"
 		return c, nil
+	}
+	if c.CredentialKind == "api_key" {
+		if e = s.apiKeyProductActive(ctx, s.pool, c.ActorID, c.OriginProductID, c.InstanceID); e != nil {
+			return Claims{}, ErrCredential
+		}
 	}
 	if enforceRate {
 		if e = s.activeOn(ctx, s.pool, c.ActorID); e != nil {
@@ -277,6 +352,9 @@ func (s *Service) Revoke(ctx context.Context, actor, account, id string) error {
 // RevokeForProduct preserves account and actor checks while restricting product
 // clients to their own immutable credential origin. Empty product is console scope.
 func (s *Service) RevokeForProduct(ctx context.Context, actor, account, id, product string) error {
+	return s.revoke(ctx, actor, account, id, product, "", "task")
+}
+func (s *Service) revoke(ctx context.Context, actor, account, id, product, instance, kind string) error {
 	tx, e := s.pool.Begin(ctx)
 	if e != nil {
 		return e
@@ -289,14 +367,17 @@ func (s *Service) RevokeForProduct(ctx context.Context, actor, account, id, prod
 	if e != nil {
 		return e
 	}
-	var owner, origin string
-	if e = tx.QueryRow(ctx, `SELECT actor_id,origin_product_id FROM model_credentials WHERE id=$1 AND account_id=$2`, id, account).Scan(&owner, &origin); e != nil {
+	var owner, origin, storedInstance, storedKind string
+	if e = tx.QueryRow(ctx, `SELECT actor_id,origin_product_id,instance_id,credential_kind FROM model_credentials WHERE id=$1 AND account_id=$2`, id, account).Scan(&owner, &origin, &storedInstance, &storedKind); e != nil {
 		if errors.Is(e, pgx.ErrNoRows) {
 			return accounts.ErrNotFound
 		}
 		return e
 	}
 	if product != "" && product != origin {
+		return accounts.ErrNotFound
+	}
+	if (kind != "" && kind != storedKind) || (instance != "" && instance != storedInstance) {
 		return accounts.ErrNotFound
 	}
 	if actor != owner && role != "owner" && role != "billing_admin" {

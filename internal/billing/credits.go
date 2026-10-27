@@ -78,6 +78,25 @@ func (s *Service) GetCall(ctx context.Context, service, callID string) (Call, er
 	return call, nil
 }
 func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest) (Call, error) {
+	return s.ReserveWithScope(ctx, service, r, "", "")
+}
+
+func reserveRequestHash(service string, r ReserveRequest, instance, task string) string {
+	if instance == "" && task == "" {
+		// Preserve the exact immutable digest shape of historical task calls.
+		return hash(struct {
+			S string
+			R ReserveRequest
+		}{service, r})
+	}
+	return hash(struct {
+		S                  string
+		R                  ReserveRequest
+		InstanceID, TaskID string
+	}{service, r, instance, task})
+}
+
+func (s *Service) ReserveWithScope(ctx context.Context, service string, r ReserveRequest, instance, task string) (Call, error) {
 	var out Call
 	if e := s.trust(service); e != nil {
 		return out, e
@@ -93,10 +112,7 @@ func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest)
 			if e = c.QueryRow(ctx, `SELECT request_digest FROM billing_calls WHERE id=$1`, r.CallID).Scan(&h); e != nil {
 				return e
 			}
-			if h != hash(struct {
-				S string
-				R ReserveRequest
-			}{service, r}) {
+			if h != reserveRequestHash(service, r, instance, task) {
 				return ErrConflict
 			}
 			out = old
@@ -130,6 +146,10 @@ func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest)
 				return accounts.ErrForbidden
 			}
 		}
+		budgetCall := Call{CredentialID: r.CredentialID, ActorID: r.ActorID, AccountID: r.AccountID, OriginProductID: r.OriginProductID, InstanceID: instance, FundingMode: auth.FundingMode, ChargeAsset: auth.Asset}
+		if e = s.checkUsageBudget(ctx, c, budgetCall, n, n); e != nil {
+			return e
+		}
 		alloc := []Allocation{}
 		posts := []ledger.Posting{}
 		if auth.Asset == CashAsset {
@@ -144,7 +164,7 @@ func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest)
 		if e != nil {
 			return e
 		}
-		out = Call{ServiceID: service, CredentialID: r.CredentialID, CallID: r.CallID, ActorID: r.ActorID, AccountID: r.AccountID, OriginProductID: r.OriginProductID, RequestDigest: r.RequestDigest, Rate: rate, Held: r.Amount, Charged: "0", PlatformDifference: "0", Status: "PENDING", Allocations: alloc, ChargeAsset: auth.Asset, FundingMode: auth.FundingMode, FundingProductID: "llmrouter", BillingProfileVersion: auth.ProfileVersion}
+		out = Call{ServiceID: service, CredentialID: r.CredentialID, CallID: r.CallID, ActorID: r.ActorID, AccountID: r.AccountID, OriginProductID: r.OriginProductID, RequestDigest: r.RequestDigest, Rate: rate, Held: r.Amount, Charged: "0", PlatformDifference: "0", Status: "PENDING", Allocations: alloc, ChargeAsset: auth.Asset, FundingMode: auth.FundingMode, FundingProductID: "llmrouter", BillingProfileVersion: auth.ProfileVersion, InstanceID: instance, TaskID: task}
 		if auth.Asset == CashAsset {
 			out.CashHoldAddress = CashHoldAddress(r.AccountID, r.CallID)
 		}
@@ -155,10 +175,7 @@ func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest)
 			return e
 		}
 		defer database.Rollback(tx)
-		_, e = tx.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,$3,$4)`, out.CallID, out.AccountID, hash(struct {
-			S string
-			R ReserveRequest
-		}{service, r}), encode(out))
+		_, e = tx.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,$3,$4)`, out.CallID, out.AccountID, reserveRequestHash(service, r, instance, task), encode(out))
 		if e != nil {
 			return e
 		}
@@ -269,6 +286,9 @@ func (s *Service) TopUp(ctx context.Context, service, callID, amount, key string
 		held, _ := integer(call.Held, true)
 		if n > int64(^uint64(0)>>1)-held {
 			return ErrInvalid
+		}
+		if e = s.checkUsageBudget(ctx, c, call, n, held+n); e != nil {
+			return e
 		}
 		alloc := []Allocation{}
 		posts := []ledger.Posting{}

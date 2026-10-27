@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.9"
+  "version": "0.4.10"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -2347,6 +2347,41 @@
           "schema":
             "$ref": "#/components/schemas/BillingAsset"
           "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
+  "/v1/accounts/{account}/api-keys":
+    "get":
+      "operationId": "apiKeys"
+      "description": "List durable UniHub managed keys for this verified product/instance. Members see their own keys; account owner/billing_admin see the account scope. Never returns a bearer or digest. Budget amounts are integer strings in the immutable asset, not a wallet balance."
+      "x-product-scopes": ["model-credentials:write"]
+      "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}},{"name":"product_id","in":"query","schema":{"type":"string"}},{"name":"instance_id","in":"query","schema":{"type":"string"}}]
+      "responses": {"200":{"description":"Keys without bearers","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/ManagedAPIKey"}}}}},"403":{"$ref":"#/components/responses/Error"}}
+    "post":
+      "operationId": "createAPIKey"
+      "description": "Creates a durable hashed credential bound to current actor, selected payer account, verified product/instance, models and funding asset. Current membership, product:use permission (managed manifests), funding policy and one published same-asset rate per model are required. Omitted expiry has no fixed lifetime. Omitted caps are unlimited; zero denies new holds. The bearer is returned once; there is no automatic retry or secret recovery."
+      "x-product-scopes": ["model-credentials:write"]
+      "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}}]
+      "requestBody": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ManagedAPIKeyRequest"}}}}
+      "responses": {"201":{"description":"Created key and one-time bearer","content":{"application/json":{"schema":{"allOf":[{"$ref":"#/components/schemas/ManagedAPIKey"},{"type":"object","required":["token"],"properties":{"token":{"type":"string","readOnly":true}}}]}}}},"400":{"$ref":"#/components/responses/Error"},"403":{"$ref":"#/components/responses/Error"}}
+  "/v1/accounts/{account}/api-keys/{key}":
+    "delete":
+      "operationId": "revokeAPIKey"
+      "description": "Actor may revoke their own key; account owner/billing_admin may revoke any key within this exact product and instance. Revocation immediately stops new reserve/topup operations; public models/task/result/receipt reads are also denied. Independently service-authenticated settlement of already dispatched calls remains possible."
+      "x-product-scopes": ["model-credentials:write"]
+      "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}},{"name":"key","in":"path","required":true,"schema":{"type":"string"}},{"name":"product_id","in":"query","schema":{"type":"string"}},{"name":"instance_id","in":"query","schema":{"type":"string"}}]
+      "responses": {"204":{"description":"Revoked"},"403":{"$ref":"#/components/responses/Error"},"404":{"$ref":"#/components/responses/Error"}}
+  "/v1/accounts/{account}/usage-budget":
+    "get":
+      "operationId": "usageBudget"
+      "description": "Requires account owner/billing_admin and registry usage:read. Current account/product/instance/funding-asset lifetime budget, held exposure and used charges. An absent policy has version 0 and unlimited caps. Product identity/instance derive from verified registry. Budget is distinct from spendable wallet balance; no credit is granted."
+      "x-product-scopes": ["usage:read"]
+      "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}},{"name":"product_id","in":"query","schema":{"type":"string"}},{"name":"instance_id","in":"query","schema":{"type":"string"}},{"name":"funding_mode","in":"query","schema":{"$ref":"#/components/schemas/FundingMode"}}]
+      "responses": {"200":{"description":"Lifetime budget","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UsageBudget"}}}},"403":{"$ref":"#/components/responses/Error"}}
+    "put":
+      "operationId": "setUsageBudget"
+      "description": "Requires registry settings:write AND account owner/billing_admin. Version is compare-and-swap, initially 0. Exact integer string caps are lifetime amounts in the selected immutable funding asset. Empty cap is unlimited; zero blocks new holds. Lowering below held/used exposure does not undo accepted ledger work. New reserve/topup enforces shared and key caps under the central account mutation lock; releases free held capacity and settlements count final charged amount once."
+      "x-product-scopes": ["settings:write"]
+      "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}},{"name":"product_id","in":"query","schema":{"type":"string"}},{"name":"instance_id","in":"query","schema":{"type":"string"}},{"name":"funding_mode","in":"query","schema":{"$ref":"#/components/schemas/FundingMode"}}]
+      "requestBody": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/UsageBudgetRequest"}}}}
+      "responses": {"200":{"description":"Updated budget","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UsageBudget"}}}},"400":{"$ref":"#/components/responses/Error"},"403":{"$ref":"#/components/responses/Error"},"409":{"$ref":"#/components/responses/Error"}}
   "/v1/accounts/{account}/model-credentials":
     "post":
       "operationId": "issueModelCredential"
@@ -2491,6 +2526,63 @@
           "schema":
             "$ref": "#/components/schemas/Error"
   "schemas":
+    "ManagedAPIKeyRequest":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["name","models"]
+      "properties":
+        "name": {"type":"string","minLength":1,"maxLength":128}
+        "origin_product_id": {"type":"string"}
+        "instance_id": {"type":"string","default":"default"}
+        "models": {"type":"array","minItems":1,"maxItems":32,"items":{"type":"string"}}
+        "funding_mode": {"$ref":"#/components/schemas/FundingMode"}
+        "expires_at": {"type":"string","format":"date-time"}
+        "max_total": {"type":"string","pattern":"^$|^(0|[1-9][0-9]{0,18})$"}
+        "max_per_call": {"type":"string","pattern":"^$|^(0|[1-9][0-9]{0,18})$"}
+    "ManagedAPIKey":
+      "type": "object"
+      "properties":
+        "id": {"type":"string"}
+        "credential_kind": {"const":"api_key"}
+        "name": {"type":"string"}
+        "actor_id": {"type":"string"}
+        "account_id": {"type":"string"}
+        "origin_product_id": {"type":"string"}
+        "instance_id": {"type":"string"}
+        "models": {"type":"array","items":{"type":"string"}}
+        "funding_mode": {"$ref":"#/components/schemas/FundingMode"}
+        "asset": {"$ref":"#/components/schemas/BillingAsset"}
+        "billing_profile_version": {"type":"integer"}
+        "created_at": {"type":"string","format":"date-time"}
+        "expires_at": {"type":["string","null"],"format":"date-time"}
+        "revoked_at": {"type":["string","null"],"format":"date-time"}
+        "max_total": {"type":"string"}
+        "max_per_call": {"type":"string"}
+        "held": {"type":"string"}
+        "used": {"type":"string"}
+        "remaining": {"type":["string","null"]}
+    "UsageBudgetRequest":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["version"]
+      "properties":
+        "version": {"type":"integer","minimum":0}
+        "max_total": {"type":"string","pattern":"^$|^(0|[1-9][0-9]{0,18})$"}
+        "max_per_call": {"type":"string","pattern":"^$|^(0|[1-9][0-9]{0,18})$"}
+    "UsageBudget":
+      "type": "object"
+      "properties":
+        "version": {"type":"integer","minimum":0}
+        "max_total": {"type":"string"}
+        "max_per_call": {"type":"string"}
+        "account_id": {"type":"string"}
+        "origin_product_id": {"type":"string"}
+        "instance_id": {"type":"string"}
+        "funding_mode": {"$ref":"#/components/schemas/FundingMode"}
+        "asset": {"$ref":"#/components/schemas/BillingAsset"}
+        "held": {"type":"string"}
+        "used": {"type":"string"}
+        "remaining": {"type":["string","null"]}
     "IdentityProfile":
       "type": "object"
       "additionalProperties": false
