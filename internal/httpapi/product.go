@@ -14,7 +14,7 @@ type productPolicyKey struct{}
 func productRouteAllowed(pattern string) bool {
 	switch pattern {
 	case "GET /v1/me", "GET /v1/accounts", "GET /v1/products", "GET /v1/catalog",
-		"GET /v1/accounts/{account}/subscriptions", "GET /v1/accounts/{account}/credits", "GET /v1/products/{product}/billing-profile", "GET /v1/billing-presets",
+		"GET /v1/accounts/{account}/subscriptions", "GET /v1/accounts/{account}/credits", "GET /v1/products/{product}/model-consistency", "GET /v1/products/{product}/billing-profile", "GET /v1/billing-presets",
 		"POST /v1/accounts/{account}/model-credentials":
 		return true
 	}
@@ -27,14 +27,14 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 	}
 	scope := map[string]string{
 		"GET /v1/me/profile": "accounts:read", "PATCH /v1/me/profile": "profile:write", "POST /v1/me/password": "profile:write", "GET /v1/me/avatar": "accounts:read", "PUT /v1/me/avatar": "profile:write",
-		"GET /v1/products/{product}/billing-profile": "catalog:read", "GET /v1/billing-presets": "catalog:read",
+		"GET /v1/products/{product}/model-consistency": "catalog:read", "GET /v1/products/{product}/billing-profile": "catalog:read", "GET /v1/billing-presets": "catalog:read",
 		"GET /v1/me": "accounts:read", "GET /v1/capabilities": "accounts:read",
 		"GET /v1/accounts": "accounts:read", "POST /v1/accounts": "accounts:write",
 		"GET /v1/accounts/{account}/members": "members:read",
 		"GET /v1/invitations":                "members:read", "GET /v1/accounts/{account}/invitations": "members:read",
 		"POST /v1/accounts/{account}/invitations": "members:write", "POST /v1/invitations/{invitation}/accept": "members:write",
 		"DELETE /v1/accounts/{account}/invitations/{invitation}": "members:write",
-		"PATCH /v1/accounts/{account}/members/{member}": "members:write", "DELETE /v1/accounts/{account}/members/{member}": "members:write",
+		"PATCH /v1/accounts/{account}/members/{member}":          "members:write", "DELETE /v1/accounts/{account}/members/{member}": "members:write",
 		"GET /v1/products": "catalog:read", "GET /v1/catalog": "catalog:read",
 		"GET /v1/accounts/{account}/subscriptions": "subscriptions:read", "GET /v1/accounts/{account}/credits": "credits:read",
 		"GET /v1/accounts/{account}/resources": "subscriptions:read", "GET /v1/accounts/{account}/wallets": "wallets:read",

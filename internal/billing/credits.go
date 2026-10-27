@@ -109,7 +109,7 @@ func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest)
 		if e = s.clear(ctx, c, r.AccountID); e != nil {
 			return e
 		}
-		rate, e := load[Rate](ctx, c, `SELECT snapshot FROM billing_rates WHERE id=$1`, r.RateID)
+		rate, e := load[Rate](ctx, c, `SELECT snapshot FROM billing_rates WHERE id=$1 AND status='published'`, r.RateID)
 		if e != nil {
 			return e
 		}
@@ -120,6 +120,15 @@ func (s *Service) Reserve(ctx context.Context, service string, r ReserveRequest)
 		rate.Asset = normalizedAsset(rate.Asset)
 		if rate.Asset != auth.Asset {
 			return accounts.ErrForbidden
+		}
+		if r.CredentialID != "" {
+			var count int
+			if e = c.QueryRow(ctx, `SELECT count(*) FROM billing_rates WHERE status='published' AND snapshot->>'model'=$1 AND COALESCE(NULLIF(snapshot->>'asset',''),'CREDIT/6')=$2`, rate.Model, auth.Asset).Scan(&count); e != nil {
+				return e
+			}
+			if count != 1 {
+				return accounts.ErrForbidden
+			}
 		}
 		alloc := []Allocation{}
 		posts := []ledger.Posting{}

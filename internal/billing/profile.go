@@ -22,6 +22,7 @@ type BillingComponent struct {
 	Enabled bool `json:"enabled"`
 }
 type UsagePolicy struct {
+	Models              []string `json:"models"` // nil retains legacy catalog; empty explicitly denies all models.
 	Enabled             bool     `json:"enabled"`
 	RequireSubscription bool     `json:"require_subscription"`
 	FundingModes        []string `json:"funding_modes"`
@@ -43,6 +44,16 @@ var billingProductID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 func (p BillingProfile) Validate() error {
 	if !billingProductID.MatchString(p.ProductID) || p.Version < 0 {
 		return ErrInvalid
+	}
+	if len(p.Usage.Models) > 32 {
+		return ErrInvalid
+	}
+	seenModels := map[string]bool{}
+	for _, m := range p.Usage.Models {
+		if m == "" || len(m) > 128 || seenModels[m] {
+			return ErrInvalid
+		}
+		seenModels[m] = true
 	}
 	modes := map[string]bool{}
 	for _, mode := range p.Usage.FundingModes {

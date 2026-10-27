@@ -96,6 +96,13 @@ func (s *Service) usageFundingOn(ctx context.Context, q accounts.Querier, creden
 	if e != nil {
 		return auth, e
 	}
+	p, e := s.ProfileOn(ctx, q, origin)
+	if e != nil {
+		return UsageAuthorization{}, e
+	}
+	if p.Usage.Models != nil && !slices.Contains(p.Usage.Models, model) {
+		return UsageAuthorization{}, accounts.ErrForbidden
+	}
 	if credential != "" {
 		if asset != auth.Asset {
 			return UsageAuthorization{}, accounts.ErrForbidden

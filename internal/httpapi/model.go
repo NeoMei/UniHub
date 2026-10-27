@@ -9,6 +9,25 @@ import (
 
 func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 	a := s.options.ModelAccess
+	add("GET /v1/products/{product}/model-consistency", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		product := r.PathValue("product")
+		if origin := originProduct(r); origin != "" && product != origin {
+			return accounts.ErrForbidden
+		}
+		profile, e := s.options.Billing.Profile(r.Context(), product)
+		if e != nil {
+			return e
+		}
+		asset := billing.CreditAsset
+		if profile.Usage.DefaultFundingMode == billing.FundingPrepaidCash {
+			asset = billing.CashAsset
+		}
+		out, e := a.Consistency(r.Context(), product, asset)
+		if e != nil {
+			return e
+		}
+		return respond(w, 200, out)
+	})
 	b := s.options.Billing
 	add("POST /v1/accounts/{account}/model-credentials", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body modelaccess.Request
@@ -36,13 +55,17 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 	})
 	m.HandleFunc("POST /internal/v1/model-credentials/verify", s.serviceAuthenticated(func(w http.ResponseWriter, r *http.Request) error {
 		var body struct {
-			Token string `json:"token"`
-			Model string `json:"model"`
+			Token   string `json:"token"`
+			Model   string `json:"model"`
+			Purpose string `json:"purpose"`
 		}
 		if e := decode(w, r, &body); e != nil {
 			return e
 		}
 		v, e := a.Verify(r.Context(), body.Token, body.Model)
+		if body.Purpose == "receipt" {
+			v, e = a.VerifyReceipt(r.Context(), body.Token, body.Model)
+		}
 		if e != nil {
 			return e
 		}

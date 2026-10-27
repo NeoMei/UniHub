@@ -55,6 +55,9 @@ func TestNativeMeteredUnitsAndAssetsHTTPAcceptance(t *testing.T) {
 					if first.Status != "SETTLED" || first.Charged != tc.want || first.ChargeAsset != asset || first.FinalDigest == "" || first.FinalDigest != replay.FinalDigest || replay.Charged != first.Charged {
 						t.Fatalf("receipt/replay: first=%+v replay=%+v", first, replay)
 					}
+					// Retiring a rate preserves this call snapshot, and prevents the
+					// next modality's rate from creating an ambiguous active model price.
+					f.request("POST", "/ops/v1/rates/"+rate.ID+"/retire", "alice", nil, "", 204, nil)
 					// A final command with a different amount must not mutate money.
 					usage.Metered.Measurements[0].Quantity = metering.Quantity{Value: "0"}
 					f.request("POST", path, billingModesServiceToken, map[string]any{"usage": usage, "provider_cost": "0"}, "", 409, nil)

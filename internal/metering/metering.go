@@ -69,7 +69,11 @@ func ValidatePrice(p Price) error {
 		}
 		compatible := false
 		switch p.Operation {
-		case "chat", "responses", "embedding":
+		case "chat":
+			// Chat supports ordinary token tariffs and bounded per-request
+			// tariffs for providers that expose a flat call price.
+			compatible = t.Unit == "token" || t.Unit == "request"
+		case "responses", "embedding":
 			compatible = t.Unit == "token"
 		case "speech":
 			compatible = t.Unit == "character"

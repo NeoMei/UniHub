@@ -111,6 +111,10 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 	if r.OriginProductID == "" || len(r.Models) == 0 || len(r.Models) > 32 || strings.TrimSpace(r.TaskID) == "" || len(r.TaskID) > 128 {
 		return Grant{}, billing.ErrInvalid
 	}
+	policyModels, e := s.productModels(ctx, s.pool, r.OriginProductID)
+	if e != nil {
+		return Grant{}, e
+	}
 	auth, e := s.authorize(ctx, actor, account, r.OriginProductID, r.FundingMode)
 	if e != nil {
 		return Grant{}, e
@@ -119,23 +123,11 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 	if e != nil {
 		return Grant{}, e
 	}
-	allowed := map[string]bool{}
-	for _, v := range rates {
-		asset := v.Asset
-		if asset == "" {
-			asset = billing.CreditAsset
-		}
-		if v.Status == "published" && asset == auth.Asset {
-			allowed[v.Model] = true
-		}
-	}
 	models := slices.Clone(r.Models)
 	slices.Sort(models)
 	models = slices.Compact(models)
-	for _, v := range models {
-		if !allowed[v] {
-			return Grant{}, accounts.ErrForbidden
-		}
+	if e = checkModelRates(models, policyModels, rates, auth.Asset); e != nil {
+		return Grant{}, e
 	}
 	token, e := opaque("uh_model_")
 	if e != nil {
@@ -173,6 +165,24 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 	if current.Asset != auth.Asset || current.FundingMode != auth.FundingMode || current.ProfileVersion < 0 {
 		return Grant{}, accounts.ErrForbidden
 	}
+	policyModels, e = s.productModels(ctx, tx, r.OriginProductID)
+	if e != nil {
+		return Grant{}, e
+	}
+	// Real billing rates are re-read inside the transaction, so retirement cannot
+	// leave a newly issued capability using stale catalog state.
+	if _, ok := s.eligibility.(*billing.Service); ok {
+		var ratesData []byte
+		if e = tx.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(snapshot),'[]'::jsonb) FROM billing_rates WHERE status='published'`).Scan(&ratesData); e != nil {
+			return Grant{}, e
+		}
+		if e = json.Unmarshal(ratesData, &rates); e != nil {
+			return Grant{}, e
+		}
+	}
+	if e = checkModelRates(models, policyModels, rates, current.Asset); e != nil {
+		return Grant{}, e
+	}
 	grant.BillingProfileVersion = current.ProfileVersion
 	if !current.ExpiresAt.IsZero() && current.ExpiresAt.Before(grant.ExpiresAt) {
 		grant.ExpiresAt = current.ExpiresAt
@@ -189,6 +199,17 @@ func (s *Service) Issue(ctx context.Context, actor, account string, r Request) (
 // Verify is called only by the separately authenticated gateway. It returns no
 // capability secret. New reservations also recheck membership in billing's lock.
 func (s *Service) Verify(ctx context.Context, token, model string) (Claims, error) {
+	return s.verify(ctx, token, model, true)
+}
+
+// VerifyReceipt authenticates the immutable credential scope for a historical
+// call. It deliberately does not require a currently published rate: rate
+// retirement must not make durable receipts unreconcilable.
+func (s *Service) VerifyReceipt(ctx context.Context, token, model string) (Claims, error) {
+	return s.verify(ctx, token, model, false)
+}
+
+func (s *Service) verify(ctx context.Context, token, model string, enforceRate bool) (Claims, error) {
 	if len(token) != 73 || !strings.HasPrefix(token, "uh_model_") {
 		return Claims{}, ErrCredential
 	}
@@ -210,6 +231,24 @@ func (s *Service) Verify(ctx context.Context, token, model string) (Claims, erro
 	auth, e := s.authorize(ctx, c.ActorID, c.AccountID, c.OriginProductID, c.FundingMode)
 	if e != nil || auth.Asset != c.Asset {
 		return Claims{}, ErrCredential
+	}
+	models, e := s.productModels(ctx, s.pool, c.OriginProductID)
+	if e != nil {
+		return Claims{}, ErrCredential
+	}
+	for _, m := range c.Models {
+		if models != nil && !slices.Contains(models, m) {
+			return Claims{}, ErrCredential
+		}
+	}
+	if enforceRate {
+		rates, e := s.eligibility.Rates(ctx)
+		if e != nil {
+			return Claims{}, e
+		}
+		if e = checkModelRates(c.Models, models, rates, c.Asset); e != nil {
+			return Claims{}, ErrCredential
+		}
 	}
 	c.Audience = "llmrouter"
 	return c, nil
@@ -253,4 +292,97 @@ func (s *Service) RevokeForProduct(ctx context.Context, actor, account, id, prod
 		return e
 	}
 	return tx.Commit(ctx)
+}
+
+func (s *Service) productModels(ctx context.Context, q accounts.Querier, product string) ([]string, error) {
+	var enabled bool
+	if e := q.QueryRow(ctx, `SELECT enabled FROM products WHERE id=$1`, product).Scan(&enabled); e != nil || !enabled {
+		return nil, accounts.ErrForbidden
+	}
+	var data []byte
+	e := q.QueryRow(ctx, `SELECT snapshot FROM product_billing_profiles WHERE product_id=$1 ORDER BY version DESC LIMIT 1`, product).Scan(&data)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if e != nil {
+		return nil, e
+	}
+	var profile billing.BillingProfile
+	if e = json.Unmarshal(data, &profile); e != nil {
+		return nil, e
+	}
+	if !profile.Usage.Enabled {
+		return nil, accounts.ErrForbidden
+	}
+	return profile.Usage.Models, nil
+}
+func checkModelRates(models, allowlist []string, rates []billing.Rate, asset string) error {
+	counts := map[string]int{}
+	for _, r := range rates {
+		a := r.Asset
+		if a == "" {
+			a = billing.CreditAsset
+		}
+		if r.Status == "published" && a == asset {
+			counts[r.Model]++
+		}
+	}
+	for _, m := range models {
+		if m == "" || (allowlist != nil && !slices.Contains(allowlist, m)) || counts[m] != 1 {
+			return accounts.ErrForbidden
+		}
+	}
+	return nil
+}
+
+type Consistency struct {
+	ProductID       string         `json:"product_id"`
+	Asset           string         `json:"asset"`
+	Allowlist       []string       `json:"allowlist"`
+	PublishedRates  []billing.Rate `json:"published_rates"`
+	MissingModels   []string       `json:"missing_models"`
+	ExtraModels     []string       `json:"extra_models"`
+	DuplicateModels []string       `json:"duplicate_models"`
+}
+
+func (s *Service) Consistency(ctx context.Context, product, asset string) (Consistency, error) {
+	out := Consistency{ProductID: product, Asset: asset, Allowlist: []string{}, PublishedRates: []billing.Rate{}, MissingModels: []string{}, ExtraModels: []string{}, DuplicateModels: []string{}}
+	models, e := s.productModels(ctx, s.pool, product)
+	if e != nil {
+		return out, e
+	}
+	out.Allowlist = append(out.Allowlist, models...)
+	rates, e := s.eligibility.Rates(ctx)
+	if e != nil {
+		return out, e
+	}
+	counts := map[string]int{}
+	for _, r := range rates {
+		a := r.Asset
+		if a == "" {
+			a = billing.CreditAsset
+		}
+		if r.Status == "published" && a == asset {
+			out.PublishedRates = append(out.PublishedRates, r)
+			counts[r.Model]++
+		}
+	}
+	for _, m := range models {
+		if counts[m] == 0 {
+			out.MissingModels = append(out.MissingModels, m)
+		}
+	}
+	for m, n := range counts {
+		if models != nil && !slices.Contains(models, m) {
+			out.ExtraModels = append(out.ExtraModels, m)
+		}
+		if n > 1 {
+			out.DuplicateModels = append(out.DuplicateModels, m)
+		}
+	}
+	slices.Sort(out.Allowlist)
+	slices.Sort(out.MissingModels)
+	slices.Sort(out.ExtraModels)
+	slices.Sort(out.DuplicateModels)
+	return out, nil
 }
