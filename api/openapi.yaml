@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.6"
+  "version": "0.4.7"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -857,6 +857,58 @@
           "schema":
             "type": "string"
             "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+  "/v1/products/{product}/model-consistency":
+    "get":
+      "operationId": "productModelConsistency"
+      "summary": "Read product model and rate consistency"
+      "description": "Read-only projection; issues no credentials and changes no billing state. Product tokens require catalog:read and may read only their own product. Uses CNY/6 when the product default funding mode is prepaid_cash, otherwise CREDIT/6. Published rates include all models in that asset; extra_models reports those outside an explicit allowlist. Disabled product usage is forbidden."
+      "security":
+        - "BearerAuth": []
+      "x-product-scopes": ["catalog:read"]
+      "parameters":
+        - "name": "product"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+      "responses":
+        "200":
+          "description": "Current model and rate consistency"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/ModelConsistency"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+  "/ops/v1/rates/{rate}/retire":
+    "post":
+      "operationId": "retireRate"
+      "summary": "Retire a rate from prospective selection"
+      "description": "Requires a distinct operator token and configured operator allowlist. Marks only future rate selection as retired; existing call and rate snapshots remain immutable for settlement/reconciliation. Repeated retirement of an existing rate returns 204."
+      "security":
+        - "OperatorBearerAuth": []
+      "parameters":
+        - "name": "rate"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+      "responses":
+        "204":
+          "description": "Rate retired"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
   "/ops/v1/products/{product}/billing-profile":
     "get":
       "operationId": "operatorBillingProfile"
@@ -3561,9 +3613,43 @@
       "required":
         - "enabled"
       "additionalProperties": false
+    "ModelConsistency":
+      "type": "object"
+      "properties":
+        "product_id":
+          "type": "string"
+        "asset":
+          "$ref": "#/components/schemas/BillingAsset"
+        "allowlist":
+          "type": "array"
+          "items": {"type": "string"}
+          "description": "Sorted configured models. An empty projection may represent either the legacy null policy or an explicit empty policy; inspect BillingProfile.usage.models to distinguish them."
+        "published_rates":
+          "type": "array"
+          "items": {"$ref": "#/components/schemas/Rate"}
+        "missing_models":
+          "type": "array"
+          "items": {"type": "string"}
+        "extra_models":
+          "type": "array"
+          "items": {"type": "string"}
+        "duplicate_models":
+          "type": "array"
+          "items": {"type": "string"}
+      "required": ["product_id", "asset", "allowlist", "published_rates", "missing_models", "extra_models", "duplicate_models"]
+      "additionalProperties": false
     "UsagePolicy":
       "type": "object"
       "properties":
+        "models":
+          "type": ["array", "null"]
+          "items":
+            "type": "string"
+            "minLength": 1
+            "maxLength": 128
+          "maxItems": 32
+          "uniqueItems": true
+          "description": "Product model allowlist. Omitted or null retains the legacy catalog; an explicit empty array denies all models. New credentials require exactly one published rate per requested model in the selected asset."
         "enabled":
           "type": "boolean"
         "require_subscription":
