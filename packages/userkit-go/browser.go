@@ -164,18 +164,21 @@ func (b *Browser) Complete(ctx context.Context, binding, callbackURL string) (Br
 		return BrowserIdentity{}, ErrDenied
 	}
 	q, e := url.ParseQuery(u.RawQuery)
-	if e != nil || len(q["state"]) != 1 || len(q["code"]) != 1 || q.Get("code") == "" || q.Get("error") != "" {
+	if e != nil || len(q["state"]) != 1 {
 		return BrowserIdentity{}, ErrDenied
 	}
 	state := q.Get("state")
 	hash := sha256.Sum256([]byte(binding))
 	b.mu.Lock()
 	tx, ok := b.transactions[state]
-	if ok {
+	if ok && subtle.ConstantTimeCompare(hash[:], tx.Binding[:]) == 1 {
 		delete(b.transactions, state)
 	}
 	b.mu.Unlock()
 	if !ok || !tx.ExpiresAt.After(time.Now()) || subtle.ConstantTimeCompare(hash[:], tx.Binding[:]) != 1 {
+		return BrowserIdentity{}, ErrDenied
+	}
+	if len(q["code"]) != 1 || q.Get("code") == "" || q.Get("error") != "" {
 		return BrowserIdentity{}, ErrDenied
 	}
 	ctx, cancel := context.WithTimeout(oidc.ClientContext(ctx, b.http), 30*time.Second)

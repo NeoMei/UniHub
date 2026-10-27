@@ -74,6 +74,21 @@ func TestBrowserOIDCTransaction(t *testing.T) {
 	}
 	callback := begin()
 	if _, err = b.Complete(context.Background(), "wrong-browser", callback); err == nil {
+		t.Fatal("wrong browser accepted")
+	}
+	if _, err = b.Complete(context.Background(), "browser-secret", callback); err != nil {
+		t.Fatalf("wrong browser cancelled real browser: %v", err)
+	}
+	callback = begin()
+	denied := "http://127.0.0.1:8080/callback?error=access_denied&state=" + auth.Get("state")
+	if _, err = b.Complete(context.Background(), "browser-secret", denied); err == nil {
+		t.Fatal("provider deny accepted")
+	}
+	if _, err = b.Complete(context.Background(), "browser-secret", callback); err == nil {
+		t.Fatal("provider deny state replay accepted")
+	}
+	callback = begin()
+	if _, err = b.Complete(context.Background(), "wrong-browser", callback); err == nil {
 		t.Fatal("cross-browser callback accepted")
 	}
 	callback = begin()
