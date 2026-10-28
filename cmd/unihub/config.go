@@ -29,6 +29,8 @@ type config struct {
 	IdentityManagementClientID, IdentityManagementSecret          string
 	IdentityAuditVerified                                         bool
 	IdentityTrustLoopbackProxy                                    bool
+	AdminIdentityDeploymentVerified, AdminPasswordResetVerified   bool
+	AdminSessionRevocationVerified                                bool
 	Production, SandboxCatalog                                    bool
 	Sandbox                                                       bool
 	SigningKey                                                    []byte
@@ -159,9 +161,6 @@ func readConfig(get func(string) string) (config, error) {
 			c.UserAdminIDs = append(c.UserAdminIDs, id)
 		}
 	}
-	if len(c.UserAdminIDs) > 0 && len(c.ProductUserManifests) == 0 {
-		return c, fmt.Errorf("USER_ADMIN_IDS requires product user manifests")
-	}
 	c.IdentityKey = []byte(get("HEADLESS_IDENTITY_KEY"))
 	c.IdentityManagementClientID = get("HEADLESS_MANAGEMENT_CLIENT_ID")
 	c.IdentityManagementSecret = get("HEADLESS_MANAGEMENT_CLIENT_SECRET")
@@ -175,6 +174,20 @@ func readConfig(get func(string) string) (config, error) {
 		return c, fmt.Errorf("HEADLESS_TRUST_LOOPBACK_PROXY must be true or false")
 	}
 	c.IdentityTrustLoopbackProxy = proxy == "true"
+	for _, item := range []struct {
+		name string
+		dst  *bool
+	}{
+		{"ADMIN_IDENTITY_DEPLOYMENT_VERIFIED", &c.AdminIdentityDeploymentVerified},
+		{"ADMIN_PASSWORD_RESET_VERIFIED", &c.AdminPasswordResetVerified},
+		{"ADMIN_SESSION_REVOCATION_VERIFIED", &c.AdminSessionRevocationVerified},
+	} {
+		v := get(item.name)
+		if v != "" && v != "true" && v != "false" {
+			return c, fmt.Errorf("%s must be true or false", item.name)
+		}
+		*item.dst = v == "true"
+	}
 	enabledIdentity := false
 	for _, client := range c.ProductAccess {
 		enabledIdentity = enabledIdentity || client.PasswordLogin || client.Registration

@@ -7,6 +7,7 @@ import (
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
+	"unihub/internal/platformadmin"
 	"unihub/internal/productusers"
 )
 
@@ -56,11 +57,31 @@ func (s *api) productUserRoutes(add func(string, action)) {
 		if originProduct(r) != "" {
 			return accounts.ErrForbidden
 		}
+		if s.options.PlatformAdmin != nil {
+			p, e := s.options.PlatformAdmin.Principal(r.Context(), u.ID)
+			if e != nil {
+				return e
+			}
+			can := false
+			for _, permission := range p.Permissions {
+				if permission == "users:status" {
+					can = true
+				}
+			}
+			return respond(w, 200, map[string]bool{"enabled": true, "can_manage": p.Enabled && can})
+		}
 		return respond(w, 200, map[string]bool{"enabled": s.options.ProductUsers.Enabled(), "can_manage": s.options.ProductUsers.CanManage(u.ID)})
 	})
 	admin := func(pattern string, f action) {
 		add(pattern, func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-			if originProduct(r) != "" || !s.options.ProductUsers.CanManage(u.ID) {
+			if originProduct(r) != "" {
+				return accounts.ErrForbidden
+			}
+			if s.options.PlatformAdmin != nil {
+				if e := s.options.PlatformAdmin.Require(r.Context(), u.ID, "users:read"); e != nil {
+					return e
+				}
+			} else if !s.options.ProductUsers.CanManage(u.ID) {
 				return accounts.ErrForbidden
 			}
 			return f(w, r, u)
@@ -77,6 +98,17 @@ func (s *api) productUserRoutes(add func(string, action)) {
 				return accounts.ErrInvalid
 			}
 			limit = v
+		}
+		if s.options.PlatformAdmin != nil {
+			p, e := s.options.PlatformAdmin.ListUsers(r.Context(), u.ID, platformadmin.ListOptions{Search: r.URL.Query().Get("q"), Limit: limit})
+			if e != nil {
+				return e
+			}
+			out := []productusers.ManagedUser{}
+			for _, v := range p.Items {
+				out = append(out, productusers.ManagedUser{ID: v.ID, Name: v.Name, Email: v.Email, Active: v.Active, Version: v.Version})
+			}
+			return respond(w, 200, out)
 		}
 		out, e := s.options.ProductUsers.Users(r.Context(), r.URL.Query().Get("q"), limit)
 		if e != nil {
@@ -103,6 +135,13 @@ func (s *api) productUserRoutes(add func(string, action)) {
 		if b.Version == nil || b.Active == nil || b.Roles == nil {
 			return accounts.ErrInvalid
 		}
+		if s.options.PlatformAdmin != nil {
+			out, e := s.options.PlatformAdmin.SetProductAccess(r.Context(), u.ID, r.PathValue("user"), r.PathValue("product"), r.URL.Query().Get("instance"), *b.Roles, *b.Active, *b.Version, "legacy user-management request")
+			if e != nil {
+				return e
+			}
+			return respond(w, 200, out)
+		}
 		out, e := s.options.ProductUsers.SetAccess(r.Context(), u.ID, r.PathValue("user"), r.PathValue("product"), r.URL.Query().Get("instance"), *b.Roles, *b.Active, *b.Version)
 		if e != nil {
 			return e
@@ -119,6 +158,13 @@ func (s *api) productUserRoutes(add func(string, action)) {
 		}
 		if b.Version == nil || b.Active == nil {
 			return accounts.ErrInvalid
+		}
+		if s.options.PlatformAdmin != nil {
+			out, e := s.options.PlatformAdmin.SetStatus(r.Context(), u.ID, r.PathValue("user"), *b.Active, *b.Version, "legacy user-management request")
+			if e != nil {
+				return e
+			}
+			return respond(w, 200, out)
 		}
 		out, e := s.options.ProductUsers.SetStatus(r.Context(), u.ID, r.PathValue("user"), *b.Active, *b.Version)
 		if e != nil {

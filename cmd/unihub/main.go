@@ -20,6 +20,7 @@ import (
 	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
+	"unihub/internal/platformadmin"
 	"unihub/internal/productauth"
 	"unihub/internal/products"
 	"unihub/internal/productusers"
@@ -37,8 +38,8 @@ func run() error {
 	if len(os.Args) > 1 {
 		mode = os.Args[1]
 	}
-	if mode != "serve" && mode != "worker" && mode != "migrate" {
-		return errors.New("usage: unihub [serve|worker|migrate]")
+	if mode != "serve" && mode != "worker" && mode != "migrate" && mode != "platform-bootstrap" && mode != "platform-recover" && mode != "platform-import-legacy" {
+		return errors.New("usage: unihub [serve|worker|migrate|platform-bootstrap|platform-recover|platform-import-legacy]")
 	}
 	c, e := readConfig(os.Getenv)
 	if e != nil {
@@ -68,6 +69,30 @@ func run() error {
 	}
 	a := accounts.New(pool)
 	productUsers := productusers.New(pool, c.ProductUserManifests, c.PublicURL, c.UserAdminIDs)
+	platformAdmin := platformadmin.New(pool, productUsers)
+	// The deployment allowlist is imported only when its UUID has no persisted
+	// authority row. ImportLegacy keeps a revoked row as a tombstone, so a
+	// restart cannot silently re-grant a role that an administrator revoked.
+	if len(c.UserAdminIDs) > 0 {
+		if e = platformAdmin.ImportLegacy(startup, "deployment-config", c.UserAdminIDs, "initial legacy user-management compatibility import"); e != nil {
+			return e
+		}
+	}
+	if mode == "platform-bootstrap" || mode == "platform-recover" {
+		if len(os.Args) != 3 {
+			return errors.New("usage: unihub [platform-bootstrap|platform-recover] <central-user-uuid>")
+		}
+		reason := "explicit platform bootstrap from deployment tool"
+		if mode == "platform-recover" {
+			e = platformAdmin.RecoverSuperAdmin(startup, "deployment-cli", os.Args[2], reason)
+		} else {
+			e = platformAdmin.Bootstrap(startup, "deployment-cli", os.Args[2], reason)
+		}
+		return e
+	}
+	if mode == "platform-import-legacy" {
+		return platformAdmin.ImportLegacy(startup, "deployment-cli", c.UserAdminIDs, "explicit legacy user-management import")
+	}
 	w := wallet.New(pool, a, l)
 	b := billing.New(pool, a, l)
 	b.ConfigureProductUsers(productUsers)
@@ -122,6 +147,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if c.AdminIdentityDeploymentVerified || c.AdminPasswordResetVerified || c.AdminSessionRevocationVerified {
+		provider, providerErr := identity.AdministrationProvider(startup, identityapi.AdminProviderOptions{PinnedVersion: identityapi.AdminPinnedVersion, Organization: "unihub", PublicOrigin: c.PublicURL, DeploymentVerified: c.AdminIdentityDeploymentVerified, PasswordResetVerified: c.AdminPasswordResetVerified, SessionRevocationVerified: c.AdminSessionRevocationVerified})
+		if providerErr == nil {
+			platformAdmin.SetIdentityProvider(provider)
+		}
+	}
 	var profileService httpapi.ProfileService
 	if identity.ProfileEnabled() {
 		profileService = identity
@@ -131,7 +162,7 @@ func run() error {
 		productAuth = productauth.New(pool, a, productUsers, c.PublicURL)
 		productAuth.ConfigureBrowserClients(c.ProductAccess)
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir})
 		if err != nil {
@@ -139,10 +170,23 @@ func run() error {
 		}
 		handler = browser.Handler(handler)
 	}
-	if productAuth != nil {
-		handler = productAuth.BrowserHandler(handler)
+	baseHandler := identity.Handler(handler)
+	if c.PublicURL != "" {
+		recovery := platformAdmin.RecoveryHandler(c.PublicURL)
+		baseHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/auth/recovery" {
+				recovery.ServeHTTP(w, r)
+				return
+			}
+			baseHandler.ServeHTTP(w, r)
+		})
 	}
-	handler = products.CORS(identity.Handler(handler), c.ProductAccess)
+	if productAuth != nil {
+		handler = productAuth.BrowserHandler(baseHandler)
+	} else {
+		handler = baseHandler
+	}
+	handler = products.CORS(handler, c.ProductAccess)
 	handler = publicapi.Handler(handler)
 	server := &http.Server{Addr: c.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	done := make(chan struct{})
@@ -182,3 +226,4 @@ func work(ctx context.Context, w *wallet.Service, b *billing.Service) {
 		}
 	}
 }
+

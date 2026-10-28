@@ -32,6 +32,7 @@ test-branding:
 	python3 scripts/test-branding.py
 
 test-integration:
+	@test -f .local/dev.env || (echo "missing .local/dev.env; run make dev-setup first" >&2; exit 1)
 	@set -a; . ./.local/dev.env; set +a; UNIHUB_TEST_DATABASE_URL="$$DATABASE_URL" UNIHUB_TEST_LEDGER_URL="$$LEDGER_URL" go test -race -count=1 -timeout 90s ./...
 
 build:

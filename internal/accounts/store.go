@@ -155,8 +155,28 @@ func (s *Store) teamMutation(ctx context.Context, actorID, accountID string, fn 
 	if kind != "team" {
 		return ErrForbidden
 	}
+	if err = s.requireManagedTeamOn(ctx, tx, accountID, actorID); err != nil {
+		return err
+	}
 	if err = fn(tx, role); err != nil {
 		return domainError(err)
 	}
 	return tx.Commit(ctx)
+}
+
+// Native account authority cannot bypass the platform's recovery state. The
+// dedicated platform owner invitation is the sole path to restore management.
+func (s *Store) requireManagedTeamOn(ctx context.Context, tx pgx.Tx, accountID, actorID string) error {
+	var active, managed bool
+	err := tx.QueryRow(ctx, `SELECT u.active,EXISTS(SELECT 1 FROM account_members m JOIN users owner_user ON owner_user.id=m.user_id WHERE m.account_id=$1 AND m.role='owner' AND owner_user.active) FROM users u WHERE u.id=$2`, accountID, actorID).Scan(&active, &managed)
+	if err != nil {
+		return domainError(err)
+	}
+	if !active {
+		return ErrForbidden
+	}
+	if !managed {
+		return ErrConflict
+	}
+	return nil
 }

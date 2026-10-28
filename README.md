@@ -22,6 +22,7 @@ UniHub 提供独立后台 JSON API，以及可嵌入接入产品的用户基础�
 ## 项目资料
 
 - [产品用户模块、源码初始化与双模式接入](docs/integrations/product-user-foundation.md)
+- [平台后台管理与权限矩阵](docs/platform-administration.md)
 - [产品角色与用户管理 API](docs/product-user-api.md)
 - [可独立引用的 Go 用户模块](packages/userkit-go/README.md)
 - [领域术语](CONTEXT.md)

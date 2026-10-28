@@ -515,3 +515,43 @@ func TestStaticCannotEscapeRootThroughSymlink(t *testing.T) {
 		t.Fatalf("static symlink escaped root: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestPlatformAPIBoundaryRequiresSessionAndCSRF(t *testing.T) {
+	_, i, _, h := fixture(t)
+	if w := request(h, "POST", "/admin/v1/mutate", nil, "", ""); w.Code != 401 {
+		t.Fatalf("unauthed management=%d", w.Code)
+	}
+	_, _, loginResponse := login(t, i, h)
+	cookie := sessionCookie(t, loginResponse)
+	response := request(h, "GET", "/auth/session", cookie, "", "")
+	var session struct {
+		CSRF string `json:"csrf_token"`
+	}
+	if e := json.Unmarshal(response.Body.Bytes(), &session); e != nil {
+		t.Fatal(e)
+	}
+	if w := request(h, "POST", "/admin/v1/mutate", cookie, "", ""); w.Code != 403 {
+		t.Fatalf("missing csrf=%d", w.Code)
+	}
+	w := request(h, "POST", "/admin/v1/mutate", cookie, "http://localhost:8088", session.CSRF)
+	if w.Code != 204 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("admin session=%d %s", w.Code, w.Body)
+	}
+}
+
+func TestDisabledAndRevokedBrowserCannotUseSessionEndpoint(t *testing.T) {
+	_, i, p, h := fixture(t)
+	_, _, response := login(t, i, h)
+	cookie := sessionCookie(t, response)
+	if w := request(h, "GET", "/auth/session", cookie, "", ""); w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	_, e := p.Exec(context.Background(), `UPDATE users SET session_not_before=clock_timestamp()+interval '1 second'`)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w := request(h, "GET", "/auth/session", cookie, "", "")
+	if strings.Contains(w.Body.String(), `"authenticated":true`) {
+		t.Fatalf("revoked browser exposed session %s", w.Body)
+	}
+}
