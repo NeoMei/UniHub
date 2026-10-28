@@ -173,13 +173,7 @@ func run() error {
 	baseHandler := identity.Handler(handler)
 	if c.PublicURL != "" {
 		recovery := platformAdmin.RecoveryHandler(c.PublicURL)
-		baseHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/auth/recovery" {
-				recovery.ServeHTTP(w, r)
-				return
-			}
-			baseHandler.ServeHTTP(w, r)
-		})
+		baseHandler = recoveryRoute(baseHandler, recovery)
 	}
 	if productAuth != nil {
 		handler = productAuth.BrowserHandler(baseHandler)
@@ -206,6 +200,17 @@ func run() error {
 	}
 	return e
 }
+
+func recoveryRoute(next, recovery http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/recovery" {
+			recovery.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func work(ctx context.Context, w *wallet.Service, b *billing.Service) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -226,4 +231,3 @@ func work(ctx context.Context, w *wallet.Service, b *billing.Service) {
 		}
 	}
 }
-
