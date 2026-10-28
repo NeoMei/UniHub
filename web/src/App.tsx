@@ -204,7 +204,7 @@ export default function App() {
       setProfileView(undefined);
       window.sessionStorage.removeItem("unihub.account");
       window.sessionStorage.removeItem("unihub.return-admin");
-      setVersion((v) => v + 1);
+      window.location.assign("/auth/login?switch_account=1");
     } catch (error) {
       setLogoutError((error as Error).message);
     } finally {
