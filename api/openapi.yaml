@@ -2496,6 +2496,51 @@
           "schema":
             "type": "string"
           "description": ""
+  "/admin/v1/overview/timeseries":
+    "get":
+      "operationId": "adminOverviewTimeseries"
+      "summary": "adminOverviewTimeseries"
+      "description": "Platform admin with system:read only. Returns the last 14 UTC days of daily new users, calls and failed calls, the pending refund queue and the top 5 models by failure rate over the last 7 days. Failed calls are terminal REJECTED/CANCELED outcomes; calls with unresolved billing commands report UNKNOWN and are excluded. Call, refund and model risk data additionally require finance:read; without it days stay zeroed for those series, top_failed_models is empty and finance_scope=false. All windows are fixed, parameterized, half-open UTC ranges."
+      "responses":
+        "200":
+          "description": "Successful response"
+          "content":
+            "application/json":
+              "schema":
+                "type": "object"
+                "required": ["as_of", "timezone", "finance_scope", "days", "pending_refunds", "top_failed_models"]
+                "properties":
+                  "as_of": {"type": "string", "format": "date-time"}
+                  "timezone": {"type": "string", "enum": ["UTC"]}
+                  "finance_scope": {"type": "boolean", "description": "True when the caller has finance:read and call/refund/model data are populated."}
+                  "days":
+                    "type": "array"
+                    "description": "Exactly 14 UTC day buckets, oldest first, current day last."
+                    "items":
+                      "type": "object"
+                      "required": ["date", "new_users", "calls", "failed_calls"]
+                      "properties":
+                        "date": {"type": "string", "description": "UTC calendar day, YYYY-MM-DD."}
+                        "new_users": {"type": "integer", "minimum": 0}
+                        "calls": {"type": "integer", "minimum": 0, "description": "0 without finance:read."}
+                        "failed_calls": {"type": "integer", "minimum": 0, "description": "Terminal REJECTED/CANCELED calls; UNKNOWN outcomes excluded."}
+                  "pending_refunds": {"type": "integer", "minimum": 0, "description": "Orders with refund_status MANUAL_REVIEW; 0 without finance:read."}
+                  "top_failed_models":
+                    "type": "array"
+                    "maxItems": 5
+                    "description": "Models with at least one failed call in the last 7 days, highest failure rate first, ties broken by call count then model name."
+                    "items":
+                      "type": "object"
+                      "required": ["model", "calls", "failed_calls", "failure_rate"]
+                      "properties":
+                        "model": {"type": "string"}
+                        "calls": {"type": "integer", "minimum": 0}
+                        "failed_calls": {"type": "integer", "minimum": 0}
+                        "failure_rate": {"type": "number", "minimum": 0, "maximum": 1, "description": "failed_calls/calls rounded to 4 decimals."}
+        "400": {"$ref": "#/components/responses/Error"}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "503": {"$ref": "#/components/responses/Error"}
 "components":
   "securitySchemes":
     "BearerAuth":

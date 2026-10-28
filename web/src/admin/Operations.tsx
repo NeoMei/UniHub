@@ -58,7 +58,46 @@ const metricStatusText:Record<string,string>={separate_provider_query_required:'
 function metricDisplay(v:unknown):string {if(typeof v==='number')return v.toLocaleString('zh-CN');if(typeof v==='boolean')return v?'是':'否';if(typeof v==='string'&&metricStatusText[v])return metricStatusText[v];return text(v);}
 function formatStamp(v:unknown):string {const d=new Date(String(v??''));if(Number.isNaN(d.getTime()))return text(v);const p=(n:number)=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
 function KpiStrip({ariaLabel,entries,secondary=false}:{ariaLabel:string;entries:{key:string;label:string;value:string}[];secondary?:boolean}) {return <section className={secondary?'admin-kpi-strip admin-kpi-secondary':'admin-kpi-strip'} aria-label={ariaLabel}>{entries.map(m=><div key={m.key} className="admin-kpi"><span className="admin-kpi-label">{m.label}</span><strong className="admin-kpi-value">{m.value}</strong></div>)}</section>;}
-function Overview({principal}:{principal:AdminPrincipal}) {const r=useResource<Row>('/admin/v1/overview');if(r.error)return <Notice kind="error">{r.error}</Notice>;const data=r.data||{};const pick=(keys:readonly string[])=>keys.filter(k=>data[k]!==undefined&&data[k]!==null).map(k=>({key:k,label:metricNames[k]||k,value:metricDisplay(data[k])}));return <><h1>管理概览</h1><p>平台范围 · 真实到账、测试交易与模型额度分别记录。</p>{r.loading?<p role="status">正在加载概览…</p>:<><KpiStrip ariaLabel="平台关键指标" entries={pick(overviewPrimaryKeys)}/><div className="admin-kpi-meta"><span>查询时间 {formatStamp(data.as_of)}</span><span>数据一致性 {metricDisplay(data.consistency)}</span><span>身份目录 {metricDisplay(data.identity_directory_status)}</span></div>{pick(overviewSecondaryKeys).length?<KpiStrip ariaLabel="运营与资金队列" secondary entries={pick(overviewSecondaryKeys)}/>:null}</>}<Panel title="常用管理"><div className="admin-actions">{[['users','用户管理','users:read'],['accounts','账户与团队','accounts:read'],['orders','订单','finance:read'],['audit-events','审计日志','audit:read'],['system-status','系统状态','system:read']].filter(([, ,p])=>can(principal,p)).map(([p,label])=><button key={p} onClick={()=>go(`/admin/${p}`)}>{label}</button>)}</div></Panel></>;}
+export function Overview({principal}:{principal:AdminPrincipal}) {const r=useResource<Row>('/admin/v1/overview');if(r.error)return <Notice kind="error">{r.error}</Notice>;const data=r.data||{};const pick=(keys:readonly string[])=>keys.filter(k=>data[k]!==undefined&&data[k]!==null).map(k=>({key:k,label:metricNames[k]||k,value:metricDisplay(data[k])}));return <><h1>管理概览</h1><p>平台范围 · 真实到账、测试交易与模型额度分别记录。</p>{r.loading?<p role="status">正在加载概览…</p>:<><KpiStrip ariaLabel="平台关键指标" entries={pick(overviewPrimaryKeys)}/><div className="admin-kpi-meta"><span>查询时间 {formatStamp(data.as_of)}</span><span>数据一致性 {metricDisplay(data.consistency)}</span><span>身份目录 {metricDisplay(data.identity_directory_status)}</span></div>{pick(overviewSecondaryKeys).length?<KpiStrip ariaLabel="运营与资金队列" secondary entries={pick(overviewSecondaryKeys)}/>:null}</>}{can(principal,'system:read')?<OverviewTrends/>:null}<Panel title="常用管理"><div className="admin-actions">{[['users','用户管理','users:read'],['accounts','账户与团队','accounts:read'],['orders','订单','finance:read'],['audit-events','审计日志','audit:read'],['system-status','系统状态','system:read']].filter(([, ,p])=>can(principal,p)).map(([p,label])=><button key={p} onClick={()=>go(`/admin/${p}`)}>{label}</button>)}</div></Panel></>;}
+const trendSeries=[{key:'new_users',label:'每日新增用户'},{key:'calls',label:'每日调用'},{key:'failed_calls',label:'每日失败调用'}] as const;
+type TrendDay={date:string;new_users:number;calls:number;failed_calls:number};
+type FailedModelRow={model:string;calls:number;failed_calls:number;failure_rate:number};
+type OperationTimeseries={as_of:string;timezone:string;finance_scope:boolean;days:TrendDay[];pending_refunds:number;top_failed_models:FailedModelRow[]};
+function trendPct(v:number):string {return (v*100).toFixed(1).replace(/\.0$/,'')+'%';}
+function TrendChart({label,days,pick}:{label:string;days:TrendDay[];pick:(d:TrendDay)=>number}) {
+ const w=264,h=88,pad=8,n=days.length;
+ if(n<2)return null;
+ const values=days.map(pick);
+ const max=Math.max(1,...values);
+ const x=(i:number)=>pad+i*(w-2*pad)/(n-1);
+ const y=(v:number)=>h-pad-v/max*(h-2*pad);
+ const points=values.map((v,i)=>x(i).toFixed(1)+','+y(v).toFixed(1)).join(' ');
+ return <figure className="admin-trend"><figcaption>{label}</figcaption>
+ <svg viewBox={'0 0 '+w+' '+h} role="img" aria-label={label+'，最近 '+n+' 天，峰值 '+max.toLocaleString('zh-CN')}>
+  {[0.25,0.5,0.75,1].map(g=><line key={g} className="admin-trend-grid" x1={pad} x2={w-pad} y1={pad+g*(h-2*pad)} y2={pad+g*(h-2*pad)}/>)}
+  <polyline className="admin-trend-line" points={points}/>
+  <circle className="admin-trend-dot" cx={x(n-1).toFixed(1)} cy={y(values[n-1]).toFixed(1)} r="2.5"/>
+ </svg>
+ <span className="admin-trend-range">{days[0].date} – {days[n-1].date} · 峰值 {max.toLocaleString('zh-CN')}</span>
+ </figure>;
+}
+function OverviewTrends() {
+ const [revision,setRevision]=useState(0);
+ const r=useResource<OperationTimeseries>('/admin/v1/overview/timeseries',revision);
+ return <Panel title="运营趋势" className="admin-trends">
+ {r.error?<div className="admin-trend-error"><Notice kind="error">{r.error}</Notice><button onClick={()=>setRevision(v=>v+1)}>重试</button></div>
+ :r.loading?<p role="status">正在加载运营趋势…</p>
+ :r.data?(d=>{const charts=d.finance_scope?trendSeries:[trendSeries[0]];return <><div className="admin-trend-charts">{charts.map(s=><TrendChart key={s.key} label={s.label} days={d.days} pick={day=>Number(day[s.key]||0)}/>)}</div>
+ {d.finance_scope?null:<p className="admin-trend-note">调用与退款趋势需要财务管理权限。</p>}
+ <div className="admin-trend-tables">
+ <table className="admin-trend-table"><caption>退款队列</caption><thead><tr><th scope="col">队列</th><th scope="col">待处理</th></tr></thead>
+ <tbody><tr><td>待处理退款</td><td>{d.pending_refunds.toLocaleString('zh-CN')}</td></tr></tbody></table>
+ <table className="admin-trend-table"><caption>失败率最高的模型（最近 7 天）</caption><thead><tr><th scope="col">模型</th><th scope="col">调用数</th><th scope="col">失败率</th></tr></thead>
+ <tbody>{d.top_failed_models.length?d.top_failed_models.map(m=><tr key={m.model}><td>{m.model}</td><td>{m.calls.toLocaleString('zh-CN')}</td><td>{trendPct(m.failure_rate)}</td></tr>):<tr><td colSpan={3}>最近 7 天没有失败的模型调用。</td></tr>}</tbody></table>
+ </div></>;})(r.data):null}
+ </Panel>;
+}
+
 const metricNames:Record<string,string>={users:'平台用户',total_users:'平台用户',central_users:'平台用户',active_users:'启用用户',enabled_users:'启用用户',disabled_users:'停用用户',teams:'团队',accounts:'账户',products:'产品',orders:'订单',materialized_identity_links:'已关联身份',registered_identity_total:'注册身份总数',identity_directory_status:'身份目录',pending_refunds:'待复核退款',refund_reviews:'待复核退款',pending_commands:'未决命令',unknown_commands:'待核实命令',calls:'调用',failed_calls:'失败调用',logical_calls:'逻辑调用',settled:'已结算',released:'已释放',processing:'处理中',window_from:'统计开始',window_to:'统计截止',timezone:'时区',failure_rate:'失败率',failure_rate_status:'失败率状态',attempts_status:'尝试数据状态',as_of:'查询时间',consistency:'数据一致性',income_status:'收入统计状态',sandbox:'测试环境',real_payments_configured:'真实支付已接入',status:'状态',reason:'原因',postgresql:'PostgreSQL',ledger:'账本',oidc:'OIDC 身份',configuration_source:'配置来源',platform_authority:'权限来源',secret_configuration_editable:'密钥配置可编辑',oldest_pending_at:'最早未决时间',workers:'后台任务',worker_telemetry_status:'任务遥测'};
 function SystemStatus(){const [rev,setRev]=useState(0);const r=useResource<Row>('/admin/v1/system-status',rev);return <><h1>系统状态</h1><button onClick={()=>setRev(v=>v+1)}>刷新状态</button>{r.error?<Notice kind="error">{r.error}</Notice>:r.loading?<p role="status">正在检查…</p>:<div className="admin-status-grid">{Object.entries(r.data||{}).map(([key,v])=><Panel key={key} title={metricNames[key]||key}>{v&&typeof v==='object'?<Info row={v as Row} fields={Object.keys(v).map(k=>[k,metricNames[k]||k])}/>:<p>{text(v)}</p>}</Panel>)}</div>}</>;}
 function Wallets(){const [account,setAccount]=useState(new URLSearchParams(window.location.search).get('account_id')||'');const [selected,setSelected]=useState(account);return <><h1>钱包与资金</h1><p>余额由账本实时提供；人民币现金与模型额度分别显示。</p><form className="admin-filters" onSubmit={e=>{e.preventDefault();setSelected(account);}}><label>付费账户 ID<input required value={account} onChange={e=>setAccount(e.target.value)}/></label><button>查询余额</button></form>{selected?<DataList key={selected} endpoint="wallets" initialFilters={{account_id:selected}} columns={[["product_id","产品"],["asset","资产"],["amount","余额（百万分之一单位）"],["available","可用（百万分之一单位）"]]}/>:<Panel><p>选择具体账户查询权威余额。</p></Panel>}</>;}

@@ -45,6 +45,13 @@ func (s *api) adminOperationRoutes(add func(string, action)) {
 		}
 		return respond(w, 200, v)
 	})
+	add("GET /admin/v1/overview/timeseries", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		v, e := a.OperationTimeseries(r.Context(), u.ID)
+		if e != nil {
+			return e
+		}
+		return respond(w, 200, v)
+	})
 	for _, resource := range []string{"accounts", "api-keys", "calls", "transactions", "recharges", "orders", "refunds", "subscriptions", "credit-batches", "products", "offers", "rates", "billing-profiles", "usage-budgets", "audit-events"} {
 		add("GET /admin/v1/"+resource, func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 			o, e := adminOperationsOptions(r)

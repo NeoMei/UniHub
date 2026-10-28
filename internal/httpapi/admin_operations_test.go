@@ -40,7 +40,7 @@ func TestAdminOperationsHTTPRealAuthorityAndDomains(t *testing.T) {
 	admin := platformadmin.New(pool, nil)
 	b := billing.New(pool, a, nil)
 	h := New(verifier{}, a, wallet.New(pool, a, noLedger{}), Options{PlatformAdmin: admin, Billing: b, ProductVerifiers: map[string]auth.Verifier{"sw": anyProductVerifier{}}})
-	for _, resource := range []string{"overview", "accounts", "api-keys", "calls", "transactions", "recharges", "orders", "refunds", "subscriptions", "credit-batches", "products", "offers", "rates", "billing-profiles", "usage-budgets", "audit-events", "system-status"} {
+	for _, resource := range []string{"overview", "overview/timeseries", "accounts", "api-keys", "calls", "transactions", "recharges", "orders", "refunds", "subscriptions", "credit-batches", "products", "offers", "rates", "billing-profiles", "usage-budgets", "audit-events", "system-status"} {
 		w := call(h, "GET", "/admin/v1/"+resource, "alice", "", "")
 		if w.Code != 200 {
 			t.Errorf("%s => %d %s", resource, w.Code, w.Body)
@@ -55,6 +55,10 @@ func TestAdminOperationsHTTPRealAuthorityAndDomains(t *testing.T) {
 		if w.Code != 403 {
 			t.Errorf("useradmin finance %s %d %s", resource, w.Code, w.Body)
 		}
+	}
+	wts := call(h, "GET", "/admin/v1/overview/timeseries", "bob", "", "")
+	if wts.Code != 200 {
+		t.Errorf("useradmin timeseries %d %s", wts.Code, wts.Body)
 	}
 	for _, path := range []string{"/admin/v1/accounts?limit=101", "/admin/v1/accounts?limit=bad", "/admin/v1/accounts?from=yesterday", "/admin/v1/accounts?cursor=invalid", "/admin/v1/accounts?from=2026-10-28T00:00:00Z&to=2026-10-27T00:00:00Z"} {
 		w := call(h, "GET", path, "alice", "", "")
