@@ -71,6 +71,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 	})
 	add := func(pattern string, f action) { m.HandleFunc(pattern, s.authenticated(f)) }
 	s.productUserRoutes(add)
+	s.productRuntimeRoutes(m)
+	s.productRuntimeRefundRoutes(m)
+	s.productAuthRoutes(m)
 	s.adminRoutes(add)
 	s.platformInvitationRoutes(add)
 	s.invitationQueryRoutes(add)
@@ -424,6 +427,8 @@ func fail(w http.ResponseWriter, status int, code string) {
 }
 func writeError(w http.ResponseWriter, e error) {
 	switch {
+	case errors.Is(e, errRuntimeActor):
+		fail(w, 401, "actor_proof_required")
 	case errors.Is(e, accounts.ErrForbidden):
 		fail(w, 403, "forbidden")
 	case errors.Is(e, modelaccess.ErrCredential):
