@@ -16,7 +16,10 @@ func Database(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("UNIHUB_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("UNIHUB_TEST_DATABASE_URL is not set")
+		if os.Getenv("UNIHUB_ALLOW_SKIP_DATABASE_TESTS") == "1" {
+			t.Skip("UNIHUB_TEST_DATABASE_URL is not set")
+		}
+		t.Fatal("UNIHUB_TEST_DATABASE_URL is required; run make test-integration or set UNIHUB_ALLOW_SKIP_DATABASE_TESTS=1 to skip")
 	}
 	ctx := context.Background()
 	admin, err := pgxpool.New(ctx, dsn)

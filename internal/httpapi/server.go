@@ -18,6 +18,7 @@ import (
 	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
+	"unihub/internal/platformadmin"
 	"unihub/internal/productauth"
 	"unihub/internal/products"
 	"unihub/internal/productusers"
@@ -25,13 +26,14 @@ import (
 )
 
 type Options struct {
+	PlatformAdmin    *platformadmin.Store
+	ProductRuntime   map[string]RuntimeService
+	ProductAuth      *productauth.Service
 	Sandbox          bool
 	Merchant         string
 	SigningKey       []byte
 	Billing          *billing.Service
 	ServiceToken     string
-	ProductRuntime   map[string]RuntimeService
-	ProductAuth      *productauth.Service
 	ModelAccess      *modelaccess.Service
 	OperatorVerifier auth.Verifier
 	ProductVerifiers map[string]auth.Verifier
@@ -69,9 +71,8 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 	})
 	add := func(pattern string, f action) { m.HandleFunc(pattern, s.authenticated(f)) }
 	s.productUserRoutes(add)
-	s.productRuntimeRoutes(m)
-	s.productRuntimeRefundRoutes(m)
-	s.productAuthRoutes(m)
+	s.adminRoutes(add)
+	s.platformInvitationRoutes(add)
 	s.invitationQueryRoutes(add)
 	if o.Identity != nil {
 		s.profileRoutes(add)
@@ -371,6 +372,12 @@ func (s *api) authenticated(next action) http.HandlerFunc {
 			writeError(w, e)
 			return
 		}
+		if s.options.PlatformAdmin != nil {
+			if e = s.options.PlatformAdmin.CredentialAllowed(r.Context(), u.ID, c.IssuedAt); e != nil {
+				writeError(w, e)
+				return
+			}
+		}
 		if s.options.ProductUsers != nil {
 			if e = s.options.ProductUsers.CheckActive(r.Context(), u.ID); e != nil {
 				writeError(w, e)
@@ -417,8 +424,6 @@ func fail(w http.ResponseWriter, status int, code string) {
 }
 func writeError(w http.ResponseWriter, e error) {
 	switch {
-	case errors.Is(e, errRuntimeActor):
-		fail(w, 401, "actor_proof_required")
 	case errors.Is(e, accounts.ErrForbidden):
 		fail(w, 403, "forbidden")
 	case errors.Is(e, modelaccess.ErrCredential):

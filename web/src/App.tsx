@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   ArrowRight,
   BookOpen,
@@ -57,6 +57,8 @@ import {
 } from "./ui";
 import { Catalog, Members, SettingsPage, Wallets } from "./forms";
 import {ProductApplications,ProductUserManagement} from "./ProductUsers";
+import type { AdminPrincipal } from "./admin/types";
+const AdminConsole = lazy(() => import("./admin/AdminConsole").then(m => ({default:m.AdminConsole})));
 export type Page =
  | "applications"
  | "user-management"
@@ -120,6 +122,15 @@ function initialPage(): Page {
   return window.sessionStorage.getItem("unihub.return-view") === "user-management"
     ? "user-management" : "overview";
 }
+function initialAdminPath() {
+  if (/^\/admin(?:\/|$)/.test(window.location.pathname)) {
+    const path = window.location.pathname + window.location.search;
+    window.sessionStorage.setItem("unihub.return-admin", path);
+    return path;
+  }
+  const hint = window.sessionStorage.getItem("unihub.return-admin") || "";
+  return /^\/admin(?:\/|$)/.test(hint) ? hint : "";
+}
 export default function App() {
   const [version, setVersion] = useState(0);
   const session = useResource<Session>("/auth/session", version);
@@ -131,6 +142,19 @@ export default function App() {
   );
   const [selected, setSelected] = useState(initialAccount);
   const [page, setPage] = useState<Page>(initialPage);
+  const [adminPath, setAdminPath] = useState(initialAdminPath);
+  const platform = useResource<AdminPrincipal>(session.data?.authenticated ? "/admin/v1/me" : undefined, version);
+  useEffect(() => {
+    const pop = () => setAdminPath(/^\/admin(?:\/|$)/.test(window.location.pathname) ? window.location.pathname + window.location.search : "");
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
+  }, []);
+  useEffect(() => {
+    if (session.data?.authenticated && adminPath) {
+      window.history.replaceState(null, "", adminPath);
+      window.sessionStorage.removeItem("unihub.return-admin");
+    }
+  }, [session.data?.authenticated, adminPath]);
   useEffect(() => {
     if (session.data?.authenticated) window.sessionStorage.removeItem("unihub.return-view");
   }, [session.data?.authenticated]);
@@ -179,6 +203,7 @@ export default function App() {
       setSelected("");
       setProfileView(undefined);
       window.sessionStorage.removeItem("unihub.account");
+      window.sessionStorage.removeItem("unihub.return-admin");
       setVersion((v) => v + 1);
     } catch (error) {
       setLogoutError((error as Error).message);
@@ -192,6 +217,12 @@ export default function App() {
     setProfileOpen(false);
     setPortalOpen(true);
   }
+  if (adminPath) return <Suspense fallback={<p role="status">正在加载平台后台…</p>}><AdminConsole principal={platform} csrf={session.data.csrf_token} sandbox={session.data.sandbox} busy={busy} onLogout={logout} onRetry={() => setVersion(v => v + 1)} onReturn={() => {
+    window.sessionStorage.removeItem("unihub.return-admin");
+    window.history.pushState(null, "", "/");
+    setAdminPath("");
+    setPortalOpen(false);
+  }}/></Suspense>;
   if (portalOpen)
     return (
       <ProductPortal
@@ -234,6 +265,7 @@ export default function App() {
           ))}
           <button className={page==="applications"?"active":""} onClick={()=>{setProfileOpen(false);setPage("applications")}}><Box size={19}/><span>我的应用</span></button>
           {userManagement.data?.can_manage && <button className={page==="user-management"?"active":""} onClick={()=>{setProfileOpen(false);setPage("user-management")}}><Users size={19}/><span>用户管理</span></button>}
+          {platform.data?.enabled ? <button onClick={() => {window.history.pushState(null,"","/admin/users");setAdminPath("/admin/users");}}><ShieldCheck size={19}/><span>平台管理</span></button> : null}
         </nav>
         <span className="sidebar-footer">归一 UniHub · 统一身份与账户中心</span>
       </aside>
@@ -291,6 +323,7 @@ export default function App() {
         <main>
           {session.data.sandbox && <Notice>测试环境 · 不涉及真实支付</Notice>}
           {logoutError && <Notice kind="error">{logoutError}</Notice>}
+          <PlatformInvitations csrf={session.data.csrf_token}/>
           {accounts.error && <Notice kind="error">{accounts.error}</Notice>}
           {selected && accounts.data && !account && <Notice kind="error">所选账户不可访问，请明确选择一个账户。</Notice>}
           {profileOpen ? (
@@ -304,6 +337,7 @@ export default function App() {
             />
           ) : page==="applications" ? <ProductApplications/> : page==="user-management" ? (
             userManagement.loading ? <Notice>正在核对管理权限…</Notice>
+            : userManagement.error ? <Notice kind="error">{userManagement.error}<button onClick={()=>setVersion(v=>v+1)}>重试</button></Notice>
             : userManagement.data?.can_manage ? <ProductUserManagement csrf={session.data.csrf_token}/>
             : <Panel title="用户管理"><Notice kind="error">当前账户没有 UniHub 用户管理权限。</Notice><p>个人或团队账户的所有者身份不等于平台管理员。请由已配置的 UniHub 用户管理员在用户管理中分配产品角色；LLMRouter 管理员角色不授予 UniHub 全局管理权限。</p><p>新用户通过归一注册并登录后，会自动获得产品的默认成员权限，无需在 LLMRouter 重复注册。</p><button onClick={() => setPage("applications")}>查看我的应用</button></Panel>
           ) : account ? (
@@ -1340,4 +1374,13 @@ function ProfileSettings({
       )}
     </section>
   );
+}
+
+function PlatformInvitations({csrf}:{csrf?:string}) {
+  const [revision,setRevision]=useState(0);
+  const invitations=useResource<{items:{id:string;account_id:string;role:string;version:number}[]}>('/v1/platform-invitations',revision);
+  const [error,setError]=useState('');const [busy,setBusy]=useState(false);
+  async function accept(id:string,version:number){setBusy(true);setError('');try{await request(`/v1/platform-invitations/${encodeURIComponent(id)}/accept`,{method:'POST',csrf,body:{expected_version:version}});setRevision(v=>v+1);}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
+  if(!invitations.data?.items?.length&&!error)return null;
+  return <Panel title="平台团队邀请">{error?<Notice kind="error">{error}</Notice>:null}{invitations.data?.items.map(i=><div className="invitation" key={i.id}><p>团队 {i.account_id} · {roles[i.role]||i.role}</p><button disabled={busy} onClick={()=>accept(i.id,i.version)}>接受团队邀请</button></div>)}</Panel>;
 }

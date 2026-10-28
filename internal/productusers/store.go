@@ -53,16 +53,25 @@ type Application struct {
 	EntryURL string `json:"entry_url"`
 }
 type Store struct {
-	pool     *pgxpool.Pool
-	registry Registry
-	issuer   string
-	admins   []string
+	pool       *pgxpool.Pool
+	registry   Registry
+	issuer     string
+	admins     []string
+	management Management
 }
 
 func New(pool *pgxpool.Pool, registry Registry, issuer string, admins []string) *Store {
-	return &Store{pool, registry, strings.TrimSuffix(issuer, "/"), normalize(admins)}
+	return &Store{pool: pool, registry: registry, issuer: strings.TrimSuffix(issuer, "/"), admins: normalize(admins)}
 }
-func (s *Store) Enabled() bool { return len(s.admins) > 0 }
+
+// Management delegates compatibility mutations to the current platform authority.
+type Management interface {
+	SetLegacyAccess(context.Context, string, string, string, string, []string, bool, int64) (Assignment, error)
+	SetLegacyStatus(context.Context, string, string, bool, int64) (ManagedUser, error)
+}
+
+func (s *Store) ConfigureManagement(m Management) { s.management = m }
+func (s *Store) Enabled() bool                    { return len(s.admins) > 0 }
 func (s *Store) CanManage(user string) bool {
 	for _, id := range s.admins {
 		if user == id {
@@ -273,6 +282,9 @@ func (s *Store) mutation(ctx context.Context, actor, target string, fn func(pgx.
 	return tx.Commit(ctx)
 }
 func (s *Store) SetAccess(ctx context.Context, actor, target, product, instance string, roles []string, active bool, expected int64) (Assignment, error) {
+	if s.management != nil {
+		return s.management.SetLegacyAccess(ctx, actor, target, product, instance, roles, active, expected)
+	}
 	m, ok := s.registry.Get(product, instance)
 	if !ok {
 		return Assignment{}, accounts.ErrNotFound
@@ -314,6 +326,9 @@ func (s *Store) SetAccess(ctx context.Context, actor, target, product, instance 
 	return v, e
 }
 func (s *Store) SetStatus(ctx context.Context, actor, target string, active bool, expected int64) (ManagedUser, error) {
+	if s.management != nil {
+		return s.management.SetLegacyStatus(ctx, actor, target, active, expected)
+	}
 	var u ManagedUser
 	if expected < 1 {
 		return u, accounts.ErrInvalid

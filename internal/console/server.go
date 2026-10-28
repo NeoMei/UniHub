@@ -172,7 +172,7 @@ func (s *Server) Handler(api http.Handler) http.Handler {
 			}
 			s.logout(w, r)
 		default:
-			if p == "/v1" || strings.HasPrefix(p, "/v1/") || p == "/ops/v1" || strings.HasPrefix(p, "/ops/v1/") {
+			if p == "/v1" || strings.HasPrefix(p, "/v1/") || p == "/ops/v1" || strings.HasPrefix(p, "/ops/v1/") || p == "/admin/v1" || strings.HasPrefix(p, "/admin/v1/") {
 				w.Header().Set("Cache-Control", "no-store")
 				s.api(api, w, r)
 				return
@@ -340,6 +340,17 @@ func (s *Server) callbackRequest(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		_ = tx.Rollback(ctx)
 	}()
+	var active bool
+	var cutoff time.Time
+	var centralID string
+	if err = tx.QueryRow(r.Context(), `SELECT u.id,u.active,u.session_not_before FROM users u JOIN identities i ON i.user_id=u.id WHERE i.issuer=$1 AND i.subject=$2 FOR SHARE OF u`, claims.Issuer, claims.Subject).Scan(&centralID, &active, &cutoff); err != nil {
+		failure(w, 503)
+		return
+	}
+	if !active || (cutoff.After(time.Unix(0, 0)) && (claims.IssuedAt <= 0 || time.Unix(claims.IssuedAt, 0).Before(cutoff))) {
+		failure(w, 401)
+		return
+	}
 	if old, err := r.Cookie("unihub_session"); err == nil {
 		if _, err = tx.Exec(r.Context(), `DELETE FROM browser_sessions WHERE id_hash=$1`, digest(old.Value)); err != nil {
 			failure(w, 503)
@@ -351,6 +362,14 @@ func (s *Server) callbackRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err = tx.Exec(r.Context(), `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, digest(id), claims.Issuer, claims.Subject, claims.Name, claims.Email, csrf, expiry); err != nil {
+		failure(w, 503)
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `UPDATE users SET last_authenticated_at=clock_timestamp() WHERE id=$1`, centralID); err != nil {
+		failure(w, 503)
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `INSERT INTO platform_admin_audit(actor_id,action,target_id,reason,detail) VALUES($1,'identity.login',$1,'verified OIDC authorization-code authentication','{}')`, centralID); err != nil {
 		failure(w, 503)
 		return
 	}
@@ -368,7 +387,7 @@ func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 	}
 	var claims auth.Claims
 	var csrf string
-	err = s.pool.QueryRow(r.Context(), `SELECT issuer,subject,name,email,csrf_token,extract(epoch from expires_at)::bigint FROM browser_sessions WHERE id_hash=$1 AND expires_at>now() AND NOT EXISTS(SELECT 1 FROM product_browser_session_origins o LEFT JOIN product_auth_subjects p ON p.binding_id=o.binding_id LEFT JOIN product_runtime_bindings b ON b.id=p.binding_id LEFT JOIN users u ON u.id=b.user_id LEFT JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id WHERE o.session_id_hash=browser_sessions.id_hash AND (p.binding_id IS NULL OR p.deleted OR p.auth_version<>o.auth_version OR NOT u.active OR NOT a.active))`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt)
+	err = s.pool.QueryRow(r.Context(), `SELECT b.issuer,b.subject,b.name,b.email,b.csrf_token,extract(epoch from b.expires_at)::bigint,extract(epoch from b.created_at)::bigint FROM browser_sessions b JOIN identities i ON i.issuer=b.issuer AND i.subject=b.subject JOIN users u ON u.id=i.user_id WHERE b.id_hash=$1 AND b.expires_at>now() AND u.active AND b.created_at>=u.session_not_before AND NOT EXISTS(SELECT 1 FROM product_browser_session_origins o LEFT JOIN product_auth_subjects p ON p.binding_id=o.binding_id LEFT JOIN product_runtime_bindings pb ON pb.id=p.binding_id LEFT JOIN users pu ON pu.id=pb.user_id LEFT JOIN product_user_access a ON a.user_id=pb.user_id AND a.product_id=pb.product_id AND a.instance_id=pb.instance_id WHERE o.session_id_hash=b.id_hash AND (p.binding_id IS NULL OR p.deleted OR p.auth_version<>o.auth_version OR NOT pu.active OR NOT a.active))`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt, &claims.IssuedAt)
 	return claims, csrf, err == nil
 }
 func (s *Server) csrf(r *http.Request, expected string) bool {
@@ -478,3 +497,4 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeContent(w, r, "index.html", info.ModTime(), index)
 }
+

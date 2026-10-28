@@ -21,6 +21,7 @@ type Claims struct {
 	Name      string
 	Email     string
 	ExpiresAt int64
+	IssuedAt  int64
 }
 
 // Verifier verifies a raw bearer access token before exposing an identity.
@@ -91,6 +92,7 @@ func (v *OIDC) Verify(ctx context.Context, rawToken string) (Claims, error) {
 		TokenType       string   `json:"tokenType"`
 		Scope           string   `json:"scope"`
 		Expiry          *float64 `json:"exp"`
+		IssuedAt        *float64 `json:"iat"`
 		AuthorizedParty string   `json:"azp"`
 	}
 	if err := token.Claims(&claims); err != nil {
@@ -122,7 +124,14 @@ func (v *OIDC) Verify(ctx context.Context, rawToken string) (Claims, error) {
 	if !hasOpenID {
 		return Claims{}, errors.New("access token requires openid scope")
 	}
-	return Claims{Issuer: token.Issuer, Subject: token.Subject, Name: claims.Name, Email: claims.Email, ExpiresAt: token.Expiry.Unix()}, nil
+	var issuedAt int64
+	if claims.IssuedAt != nil {
+		issuedAt = int64(*claims.IssuedAt)
+		if issuedAt <= 0 || issuedAt > time.Now().Add(5*time.Minute).Unix() || issuedAt >= token.Expiry.Unix() {
+			return Claims{}, errors.New("access token has invalid issue time")
+		}
+	}
+	return Claims{Issuer: token.Issuer, Subject: token.Subject, Name: claims.Name, Email: claims.Email, ExpiresAt: token.Expiry.Unix(), IssuedAt: issuedAt}, nil
 }
 
 func validateEndpoint(raw string) error {

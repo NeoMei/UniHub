@@ -109,6 +109,16 @@ func (s *Store) AcceptInvitation(ctx context.Context, userID, invitationID strin
 	if a.Kind != "team" {
 		return Account{}, ErrForbidden
 	}
+	if err = s.requireManagedTeamOn(ctx, tx, accountID, invitedBy); err != nil {
+		return Account{}, err
+	}
+	var recipientActive bool
+	if err = tx.QueryRow(ctx, `SELECT active FROM users WHERE id=$1`, userID).Scan(&recipientActive); err != nil {
+		return Account{}, domainError(err)
+	}
+	if !recipientActive {
+		return Account{}, ErrForbidden
+	}
 	// Recheck the inviter's current authority so a revoked manager cannot leave
 	// usable invitations granting authority after their removal or demotion.
 	inviterRole, err := s.RoleOn(ctx, tx, invitedBy, accountID)
@@ -183,10 +193,10 @@ func (s *Store) mutateMember(ctx context.Context, actorID, accountID, userID, ne
 		}
 		if current == "owner" && (remove || nextRole != "owner") {
 			var owners int
-			if err := tx.QueryRow(ctx, `SELECT count(*) FROM account_members WHERE account_id=$1 AND role='owner'`, accountID).Scan(&owners); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT count(*) FROM account_members m JOIN users u ON u.id=m.user_id WHERE m.account_id=$1 AND m.role='owner' AND u.active AND m.user_id<>$2`, accountID, userID).Scan(&owners); err != nil {
 				return err
 			}
-			if owners <= 1 {
+			if owners == 0 {
 				return ErrConflict
 			}
 		}

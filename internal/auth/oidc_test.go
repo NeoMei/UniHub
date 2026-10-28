@@ -9,9 +9,11 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -108,7 +110,7 @@ func TestOIDCVerifiesCasdoorAccessToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid access token rejected: %v", err)
 	}
-	want := Claims{Issuer: i.server.URL, Subject: "casdoor-user-123", Name: "Alice", Email: "alice@example.com", ExpiresAt: verifiedClaims["exp"].(int64)}
+	want := Claims{Issuer: i.server.URL, Subject: "casdoor-user-123", Name: "Alice", Email: "alice@example.com", ExpiresAt: verifiedClaims["exp"].(int64), IssuedAt: verifiedClaims["iat"].(int64)}
 	if got != want {
 		t.Fatalf("identity = %#v, want %#v", got, want)
 	}
@@ -354,5 +356,24 @@ func TestOIDCSeparatesConsoleAndProductAudiences(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestVerifiedAccessPreservesIssueTime(t *testing.T) {
+	i := newTestIssuer(t)
+	v, e := NewOIDC(context.Background(), i.server.URL, "unihub")
+	if e != nil {
+		t.Fatal(e)
+	}
+	claims := i.claims()
+	issued := time.Now().Add(-time.Minute).Unix()
+	claims["iat"] = issued
+	c, e := v.Verify(context.Background(), signJWT(t, i.key, claims, "RS256"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	raw, _ := json.Marshal(c)
+	if !strings.Contains(string(raw), fmt.Sprintf(`"IssuedAt":%d`, issued)) {
+		t.Fatalf("verified issue time lost %s", raw)
 	}
 }
