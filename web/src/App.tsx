@@ -265,7 +265,20 @@ export default function App() {
           ))}
           <button className={page==="applications"?"active":""} onClick={()=>{setProfileOpen(false);setPage("applications")}}><Box size={19}/><span>我的应用</span></button>
           {userManagement.data?.can_manage && <button className={page==="user-management"?"active":""} onClick={()=>{setProfileOpen(false);setPage("user-management")}}><Users size={19}/><span>用户管理</span></button>}
-          {platform.data?.enabled ? <button onClick={() => {window.history.pushState(null,"","/admin/users");setAdminPath("/admin/users");}}><ShieldCheck size={19}/><span>平台管理</span></button> : null}
+          <button
+            className={adminPath ? "active" : ""}
+            aria-current={adminPath ? "page" : undefined}
+            title={platform.data?.enabled ? "打开系统维护与平台管理" : "当前账号需要平台管理员资格才能进入系统维护"}
+            onClick={() => {
+              setProfileOpen(false);
+              const path = "/admin/overview";
+              window.history.pushState(null, "", path);
+              setAdminPath(path);
+            }}
+          >
+            <ShieldCheck size={19}/>
+            <span>系统维护</span>
+          </button>
         </nav>
         <span className="sidebar-footer">归一 UniHub · 统一身份与账户中心</span>
       </aside>

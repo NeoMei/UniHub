@@ -35,6 +35,15 @@ it("explains missing central administration authority on a product user-manageme
   expect(screen.getByText(/个人或团队账户的所有者身份不等于平台管理员/)).toBeDefined();
   expect(screen.queryByText("搜索用户")).toBeNull();
 });
+it("keeps the system maintenance entry discoverable before platform permission is loaded", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/auth/session" ? { authenticated: true, user: { id: "member", name: "Member" }, sandbox: true, csrf_token: "csrf" }
+    : path === "/admin/v1/me" ? { enabled: false, user_id: "member", roles: [], permissions: [], version: 0 }
+    : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }] : []
+  ), { status: 200 })));
+  render(<App />);
+  expect(await screen.findByRole("button", { name: "系统维护" })).toBeDefined();
+});
 it("retains the allowlisted user-management destination through a signed-out console login", async () => {
   window.history.replaceState(null, "", "/?view=user-management");
   let authenticated = false;
