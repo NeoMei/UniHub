@@ -232,6 +232,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	hash := sha256.Sum256([]byte(verifier))
 	q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(hash[:]))
 	q.Set("code_challenge_method", "S256")
+	if r.URL.Query().Get("switch_account") == "1" {
+		q.Set("prompt", "login")
+	}
 	u.RawQuery = q.Encode()
 	http.Redirect(w, r, u.String(), 302)
 }
@@ -497,4 +500,3 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeContent(w, r, "index.html", info.ModTime(), index)
 }
-

@@ -263,6 +263,21 @@ func TestBrowserLoginSessionCSRFAndLogout(t *testing.T) {
 		t.Fatalf("revoked session=%d", w.Code)
 	}
 }
+
+func TestSwitchAccountLoginForcesIdentityProviderReauthentication(t *testing.T) {
+	_, _, _, h := fixture(t)
+	w := request(h, "GET", "/auth/login?switch_account=1", nil, "", "")
+	if w.Code != http.StatusFound {
+		t.Fatalf("switch login status=%d %s", w.Code, w.Body)
+	}
+	u, err := url.Parse(w.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.Query().Get("prompt"); got != "login" {
+		t.Fatalf("prompt=%q, want login", got)
+	}
+}
 func TestLoginRejectsBadNonceIdentityAndRedirect(t *testing.T) {
 	for _, mode := range []string{"bad nonce", "wrong identity", "token redirect", "invalid access", "missing ID", "wrong audience"} {
 		t.Run(mode, func(t *testing.T) {
