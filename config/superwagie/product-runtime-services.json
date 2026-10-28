@@ -1,0 +1,27 @@
+{
+  "superwagie": {
+    "token": "REPLACE_WITH_PRIVATE_SUPERWAGIE_RUNTIME_SERVICE_TOKEN_MIN_32_BYTES",
+    "product_id": "superwagie",
+    "instance_id": "default",
+    "allowed_ops": [
+      "identity:register",
+      "identity:authenticate",
+      "identity:lookup",
+      "identity:lifecycle",
+      "identity:manage",
+      "identity:browser",
+      "bindings:write",
+      "access:read",
+      "users:read",
+      "users:write",
+      "billing:read",
+      "billing:write",
+      "credits:adjust",
+      "credits:award",
+      "budgets:read",
+      "budgets:write",
+      "calls:refund",
+      "calls:reprice"
+    ]
+  }
+}

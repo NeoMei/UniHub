@@ -1,0 +1,21 @@
+[
+  {
+    "product_id": "superwagie",
+    "instance_id": "default",
+    "name": "SuperWagie",
+    "entry_url": "https://www.superwagie.com",
+    "version": 1,
+    "default_roles": [
+      "member"
+    ],
+    "roles": [
+      {
+        "id": "member",
+        "name": "Member",
+        "permissions": [
+          "product:use"
+        ]
+      }
+    ]
+  }
+]
