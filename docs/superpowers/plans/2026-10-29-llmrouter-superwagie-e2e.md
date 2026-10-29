@@ -36,6 +36,7 @@
 - [ ] Make one tiny ordinary and one tiny streaming supplier call, using separate stable Idempotency-Key values; wait for SETTLED.
 - [ ] Compare gateway receipt and central call; independently sum Fraction rates and ceil once, reconcile budget and wallet. Replaying successful call is rejected without new call.
 - [ ] Revoke key and prove new invocation denied; retain access credentials only for follow-up controlled checks.
+- [ ] Route central-identity keys, wallet and overview to existing central account components, retaining native-identity behavior and payer-isolated caches; generate chat examples only from known chat models.
 - [ ] Independent review of driver/report; browser registration/login/recharge/key and UI log readback.
 
 ### Task 2: LLMRouter knowledge operation integration and safe deployment
