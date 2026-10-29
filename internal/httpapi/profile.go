@@ -33,6 +33,7 @@ func profileError(w http.ResponseWriter, err error) error {
 }
 
 func (s *api) profileRoutes(add func(string, action)) {
+	s.mfaRoutes(add)
 	add("GET /v1/me/profile", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		v, err := s.options.Identity.Profile(r.Context(), u.ID)
 		if err != nil {

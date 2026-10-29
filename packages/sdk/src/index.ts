@@ -20,6 +20,8 @@ export interface UsageBudget extends UsageBudgetRequest { account_id: string; or
 export interface Registration { username: string; password: string; email?: string; display_name?: string }
 export interface RegistrationResult { registration_id: string; status: 'CREATED' | 'UNKNOWN'; login_required?: boolean; retry_after?: number }
 export interface TokenSet { access_token: string; id_token: string; token_type: 'Bearer'; scope: string; expires_in: number }
+/** Returned when the password factor was accepted but the user's TOTP answer is still required. Keep the login context and answer with mfaLogin; the code_verifier stays inside the client. */
+export interface MfaPending { error: 'mfa_pending'; mfa_token: string; expires_in: number }
 export interface User { id: string; name: string; email: string }
 export interface IdentityProfile { id: string; username: string; display_name: string; avatar_url: '' | '/v1/me/avatar'; email: string; version: string }
 export interface ProductAccess {issuer:string;subject:string;product_id:string;instance_id:string;user:User;roles:string[];permissions:string[];version:number;active:boolean;expires_at:number}
@@ -93,8 +95,18 @@ export class UniHubClient {
   const random=()=>encoded(this.cryptoAPI.getRandomValues(new Uint8Array(32)));const verifier=random(),state=random(),nonce=random();
   const challenge=encoded(new Uint8Array(await this.cryptoAPI.subtle.digest('SHA-256',new TextEncoder().encode(verifier))));
   const auth=await this.perform<{authorization_id:string;code:string;state:string}>('POST','/v1/identity/authorize/password',{body:{client_id:this.clientId,redirect_uri:this.redirectUri,scope:'openid profile email',state,nonce,code_challenge_method:'S256',code_challenge:challenge,username:body.username,password:body.password}},false);
+  if(auth&&typeof auth==='object'&&'error'in auth&&(auth as {error?:string}).error==='mfa_pending'){const mfa=auth as unknown as MfaPending;if(typeof mfa.mfa_token!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(mfa.mfa_token))throw new UniHubError(502,'invalid_authorization_response',undefined);throw Object.assign(new Error('mfa_pending'),{mfa:{token:mfa.mfa_token,verifier} as const});}
   if(auth?.state!==state||typeof auth.authorization_id!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(auth.authorization_id)||typeof auth.code!=='string'||!/^[0-9a-f]{64}$/.test(auth.code))throw new UniHubError(502,'invalid_authorization_response',undefined);
   const tokens=await this.perform<TokenSet>('POST','/v1/identity/token',{body:{grant_type:'authorization_code',authorization_id:auth.authorization_id,client_id:this.clientId,redirect_uri:this.redirectUri,code:auth.code,code_verifier:verifier}},false);
+  if(typeof tokens?.access_token!=='string'||!tokens.access_token||typeof tokens.id_token!=='string'||!tokens.id_token||tokens.token_type!=='Bearer'||tokens.scope!=='openid profile email'||!Number.isInteger(tokens.expires_in)||tokens.expires_in<=0)throw new UniHubError(502,'invalid_token_response',undefined);
+  this.setAccessToken(tokens.access_token);return tokens;
+ }
+ /** Completes an mfa_pending login with the login context thrown by passwordLogin and the current TOTP passcode. */
+ async mfaLogin(mfa: {token: string; verifier: string},passcode: string): Promise<TokenSet>{
+  if(!mfa||!/^[A-Za-z0-9_-]{43}$/.test(mfa.token)||!/^[A-Za-z0-9._~-]{43,128}$/.test(mfa.verifier)||!/^[0-9]{6}$/.test(passcode))throw new UniHubError(400,'invalid_request',undefined);
+  const auth=await this.perform<{authorization_id:string;code:string}>('POST','/v1/identity/authorize/mfa',{body:{client_id:this.clientId,mfa_token:mfa.token,passcode}},false);
+  if(typeof auth?.authorization_id!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(auth.authorization_id)||typeof auth.code!=='string'||!/^[0-9a-f]{64}$/.test(auth.code))throw new UniHubError(502,'invalid_authorization_response',undefined);
+  const tokens=await this.perform<TokenSet>('POST','/v1/identity/token',{body:{grant_type:'authorization_code',authorization_id:auth.authorization_id,client_id:this.clientId,redirect_uri:this.redirectUri,code:auth.code,code_verifier:mfa.verifier}},false);
   if(typeof tokens?.access_token!=='string'||!tokens.access_token||typeof tokens.id_token!=='string'||!tokens.id_token||tokens.token_type!=='Bearer'||tokens.scope!=='openid profile email'||!Number.isInteger(tokens.expires_in)||tokens.expires_in<=0)throw new UniHubError(502,'invalid_token_response',undefined);
   this.setAccessToken(tokens.access_token);return tokens;
  }

@@ -46,6 +46,10 @@ type ProfileService interface {
 	UpdateDisplayName(context.Context, string, string) (identityapi.Profile, error)
 	ChangePassword(context.Context, string, string, string) error
 	SessionAllowed(context.Context, string) bool
+	MfaStatus(context.Context, string) (mfaStatus, error)
+	MfaEnroll(context.Context, string) (mfaSetup, mfaStatus, error)
+	MfaConfirm(context.Context, string, string, string, string) (mfaStatus, error)
+	MfaDisable(context.Context, string, string, string) (mfaStatus, error)
 }
 type api struct {
 	verifier auth.Verifier

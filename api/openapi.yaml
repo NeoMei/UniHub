@@ -135,6 +135,47 @@
           "application/json":
             "schema":
               "$ref": "#/components/schemas/PasswordAuthorizeRequest"
+  "/v1/identity/authorize/mfa":
+    "post":
+      "operationId": "authorizeMfa"
+      "summary": "authorizeMfa"
+      "description": "Continues a password authorization that returned mfa_pending: one short-lived mfa_token plus the current TOTP passcode. Single-use, five-minute window with a five-attempt budget per token; browser Origin rules match password authorization."
+      "security": []
+      "responses":
+        "200":
+          "description": "Successful response; same binding as password authorization"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/PasswordAuthorizeResult"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "402":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+        "405":
+          "$ref": "#/components/responses/Error"
+        "415":
+          "$ref": "#/components/responses/Error"
+        "502":
+          "$ref": "#/components/responses/Error"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/MfaAuthorizeRequest"
   "/v1/identity/token":
     "post":
       "operationId": "exchangeAuthorizationCode"
@@ -214,6 +255,96 @@
         "400":
           "$ref": "#/components/responses/Error"
         "403":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+  "/v1/me/mfa":
+    "get":
+      "operationId": "getIdentityMfaStatus"
+      "description": "Sandbox; central identity only. Reports whether TOTP second factor is enabled at Casdoor. Product-owned credentials return credentials_managed_by_product."
+      "responses":
+        "200":
+          "description": "Current TOTP status"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/IdentityMfaStatus"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+  "/v1/me/mfa/enroll":
+    "post":
+      "operationId": "enrollIdentityMfa"
+      "description": "Sandbox; central identity only. Begins TOTP enrollment at Casdoor and returns the one-time secret, otpauth URL and recovery code. UniHub never stores them. Already enabled returns 409."
+      "responses":
+        "200":
+          "description": "Pending enrollment material"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/IdentityMfaEnrollResult"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+  "/v1/me/mfa/confirm":
+    "post":
+      "operationId": "confirmIdentityMfa"
+      "description": "Sandbox; central identity only. Verifies one passcode against the pending secret, enables TOTP at Casdoor and writes audit_events. Never stores the secret or recovery code."
+      "requestBody":
+        "required": true,
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/IdentityMfaConfirmRequest"
+      "responses":
+        "200":
+          "description": "TOTP enabled"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/IdentityMfaStatus"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+  "/v1/me/mfa/disable":
+    "post":
+      "operationId": "disableIdentityMfa"
+      "description": "Sandbox; central identity only. Requires the current password and one valid passcode before deleting TOTP at Casdoor; writes audit_events."
+      "requestBody":
+        "required": true,
+        "content":
+          "application/json":
+            "schema":
+              "$ref": "#/components/schemas/IdentityMfaDisableRequest"
+      "responses":
+        "200":
+          "description": "TOTP disabled"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/IdentityMfaStatus"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
@@ -2639,6 +2770,58 @@
         "avatar_url": {"type": "string", "enum": ["", "/v1/me/avatar"]}
         "email": {"type": "string"}
         "version": {"type": "string", "description": "Opaque profile version"}
+    "IdentityMfaStatus":
+      "type": "object"
+      "properties":
+        "enabled": {"type": "boolean"}
+      "required":
+        - "enabled"
+      "additionalProperties": false
+    "IdentityMfaEnrollResult":
+      "type": "object"
+      "description": "One-time enrollment material. UniHub does not persist the secret, otpauth URL or recovery code."
+      "properties":
+        "secret": {"type": "string"}
+        "otpauth_url": {"type": "string", "format": "uri"}
+        "recovery_code": {"type": "string"}
+        "enabled": {"const": false}
+      "required":
+        - "secret"
+        - "otpauth_url"
+        - "recovery_code"
+        - "enabled"
+      "additionalProperties": false
+    "IdentityMfaConfirmRequest":
+      "type": "object"
+      "properties":
+        "passcode": {"type": "string", "writeOnly": true}
+        "secret": {"type": "string", "writeOnly": true}
+        "recovery_code": {"type": "string", "writeOnly": true}
+      "required":
+        - "passcode"
+        - "secret"
+        - "recovery_code"
+      "additionalProperties": false
+    "IdentityMfaDisableRequest":
+      "type": "object"
+      "properties":
+        "current_password": {"type": "string", "format": "password", "writeOnly": true}
+        "passcode": {"type": "string", "writeOnly": true}
+      "required":
+        - "current_password"
+        - "passcode"
+      "additionalProperties": false
+    "MfaAuthorizeRequest":
+      "type": "object"
+      "properties":
+        "client_id": {"type": "string"}
+        "mfa_token": {"type": "string", "minLength": 43, "maxLength": 43}
+        "passcode": {"type": "string", "writeOnly": true}
+      "required":
+        - "client_id"
+        - "mfa_token"
+        - "passcode"
+      "additionalProperties": false
     "IntegerString":
       "type": "string"
       "pattern": "^(0|[1-9][0-9]*)$"

@@ -31,6 +31,8 @@ import type {
   Product,
   Session,
   Profile,
+  MfaStatus,
+  MfaEnroll,
   Subscription,
   Wallet,
 } from "./types";
@@ -57,6 +59,7 @@ import {
 } from "./ui";
 import { Catalog, Members, SettingsPage, Wallets } from "./forms";
 import {ProductApplications,ProductUserManagement} from "./ProductUsers";
+import QRCode from "qrcode";
 import type { AdminPrincipal } from "./admin/types";
 const AdminConsole = lazy(() => import("./admin/AdminConsole").then(m => ({default:m.AdminConsole})));
 export type Page =
@@ -1261,11 +1264,27 @@ function ProfileSettings({
   const [savingPassword, setSavingPassword] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordError, setPasswordError] = useState("");
+  const [mfa, setMfa] = useState<MfaStatus>();
+  const [mfaEnroll, setMfaEnroll] = useState<MfaEnroll>();
+  const [mfaQr, setMfaQr] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaDisable, setMfaDisable] = useState({ password: "", code: "" });
+  const [mfaBusy, setMfaBusy] = useState(false);
+  const [mfaMessage, setMfaMessage] = useState("");
+  const [mfaError, setMfaError] = useState("");
 
   useEffect(() => {
     setCurrent(profile);
     setDisplayName(profile?.display_name || "");
   }, [profile]);
+  useEffect(() => {
+    if (!current || productCredentials) return;
+    request<MfaStatus>("/v1/me/mfa").then(setMfa).catch(() => setMfa(undefined));
+  }, [current?.credential_source, profile?.version]);
+  useEffect(() => {
+    if (!mfaEnroll) return;
+    QRCode.toDataURL(mfaEnroll.otpauth_url, { margin: 1, width: 180 }).then(setMfaQr).catch(() => setMfaQr(""));
+  }, [mfaEnroll]);
 
   async function saveProfile() {
     setProfileError("");
@@ -1344,6 +1363,31 @@ function ProfileSettings({
   }
 
   const productCredentials = current?.credential_source === "product";
+  async function startMfaEnroll() {
+    setMfaError(""); setMfaMessage(""); setMfaBusy(true);
+    try {
+      setMfaEnroll(await request<MfaEnroll>("/v1/me/mfa/enroll", { method: "POST", csrf: session.csrf_token }));
+    } catch (e) { setMfaError((e as Error).message); } finally { setMfaBusy(false); }
+  }
+  async function confirmMfa(event: FormEvent) {
+    event.preventDefault();
+    if (!mfaEnroll) return;
+    setMfaError(""); setMfaMessage(""); setMfaBusy(true);
+    try {
+      const next = await request<MfaStatus>("/v1/me/mfa/confirm", { method: "POST", csrf: session.csrf_token, body: { passcode: mfaCode, secret: mfaEnroll.secret, recovery_code: mfaEnroll.recovery_code } });
+      setMfa(next); setMfaEnroll(undefined); setMfaQr(""); setMfaCode("");
+      setMfaMessage("两步验证已开启。请保存恢复码，验证器无法使用时可用它恢复登录。");
+    } catch (e) { setMfaError((e as Error).message); } finally { setMfaBusy(false); }
+  }
+  async function disableMfa(event: FormEvent) {
+    event.preventDefault();
+    setMfaError(""); setMfaMessage(""); setMfaBusy(true);
+    try {
+      const next = await request<MfaStatus>("/v1/me/mfa/disable", { method: "POST", csrf: session.csrf_token, body: { current_password: mfaDisable.password, passcode: mfaDisable.code } });
+      setMfa(next); setMfaDisable({ password: "", code: "" });
+      setMfaMessage("两步验证已关闭。");
+    } catch (e) { setMfaError((e as Error).message); } finally { setMfaBusy(false); }
+  }
   const avatar = current?.avatar_url ? `${current.avatar_url}?version=${encodeURIComponent(current.version)}` : "";
   return (
     <section className="profile-settings">
@@ -1382,6 +1426,23 @@ function ProfileSettings({
               {passwordMessage && <Notice>{passwordMessage}</Notice>}
               <button type="submit" disabled={savingPassword || !passwords.current || !passwords.next || !passwords.confirm}>更新密码</button>
             </form>}
+            {!productCredentials && <div className="stack-form">
+              <h3>两步验证（TOTP）</h3>
+              <p>{mfa ? (mfa.enabled ? "已开启：登录时需要输入验证器中的一次码。" : "未开启：使用验证器 App 生成的一次码保护登录。") : "状态不可用。"}</p>
+              {mfaMessage && <Notice>{mfaMessage}</Notice>}
+              {mfaError && <Notice kind="error">{mfaError}</Notice>}
+              {mfa?.enabled ? <form onSubmit={disableMfa}>
+                <label>当前密码<input type="password" autoComplete="current-password" value={mfaDisable.password} onChange={(event) => setMfaDisable({ ...mfaDisable, password: event.target.value })} /></label>
+                <label>验证器一次码<input inputMode="numeric" pattern="[0-9]*" maxLength={6} value={mfaDisable.code} onChange={(event) => setMfaDisable({ ...mfaDisable, code: event.target.value.replace(/\D/g, "") })} /></label>
+                <button type="submit" disabled={mfaBusy || !mfaDisable.password || mfaDisable.code.length !== 6}>关闭两步验证</button>
+              </form> : mfa && !mfaEnroll ? <button onClick={startMfaEnroll} disabled={mfaBusy}>开启两步验证</button> : null}
+              {mfaEnroll && <form onSubmit={confirmMfa}>
+                {mfaQr && <img className="mfa-qr" src={mfaQr} alt="两步验证二维码" width={180} height={180} />}
+                <p>密钥 <code>{mfaEnroll.secret}</code>（无法扫码时手动输入）。请立即保存恢复码 <code>{mfaEnroll.recovery_code}</code>，它只显示这一次。</p>
+                <label>输入验证器 6 位一次码完成开启<input inputMode="numeric" pattern="[0-9]*" maxLength={6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value.replace(/\D/g, ""))} /></label>
+                <button type="submit" disabled={mfaBusy || mfaCode.length !== 6}>验证并开启</button>
+              </form>}
+            </div>}
           </Panel>
         </div>
       )}

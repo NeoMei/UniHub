@@ -35,6 +35,7 @@ import (
 
 const registrationPath = "/v1/identity/registrations"
 const authorizePath = "/v1/identity/authorize/password"
+const mfaPath = "/v1/identity/authorize/mfa"
 const tokenPath = "/v1/identity/token"
 const scopes = "openid profile email"
 
@@ -54,10 +55,11 @@ type Options struct {
 	ClientCredentials map[string]string
 }
 type Server struct {
-	opts      Options
-	pool      *pgxpool.Pool
-	client    *http.Client
-	verifiers map[string]*oidc.IDTokenVerifier
+	opts            Options
+	pool            *pgxpool.Pool
+	client          *http.Client
+	verifiers       map[string]*oidc.IDTokenVerifier
+	providerSession string
 }
 type cappedTransport struct{ base http.RoundTripper }
 type cappedBody struct {
@@ -112,6 +114,9 @@ func New(ctx context.Context, pool *pgxpool.Pool, opts Options) (*Server, error)
 		return nil, errors.New("invalid headless OIDC discovery")
 	}
 	keys := oidc.NewRemoteKeySet(oidc.ClientContext(context.WithoutCancel(ctx), s.client), meta.JWKS)
+	// Best effort: the exact cookie name is only needed to replay a pending
+	// second-factor login against the same provider session.
+	s.providerSession = "casdoor_session_id"
 	for id, c := range s.opts.Clients {
 		if c.PasswordLogin || c.Registration {
 			s.verifiers[id] = oidc.NewVerifier(opts.Issuer, keys, &oidc.Config{ClientID: id, SupportedSigningAlgs: []string{oidc.RS256}})
@@ -183,7 +188,7 @@ func interaction(w http.ResponseWriter, kind string) {
 func (s *Server) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if p != registrationPath && p != authorizePath && p != tokenPath {
+		if p != registrationPath && p != authorizePath && p != mfaPath && p != tokenPath {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -209,6 +214,8 @@ func (s *Server) Handler(next http.Handler) http.Handler {
 			s.register(w, r)
 		case authorizePath:
 			s.authorize(w, r)
+		case mfaPath:
+			s.authorizeMfa(w, r)
 		case tokenPath:
 			s.token(w, r)
 		}
@@ -572,6 +579,14 @@ type authorizeRequest struct {
 	Password        string `json:"password"`
 }
 
+// mfaPendingResponse tells an authorized product client that the password
+// factor was accepted but the login continues with the user's second factor.
+type mfaPendingResponse struct {
+	Error     string `json:"error"`
+	Token     string `json:"mfa_token"`
+	ExpiresIn int    `json:"expires_in"`
+}
+
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	var req authorizeRequest
 	if !decode(w, r, &req) {
@@ -602,11 +617,12 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	q := url.Values{"clientId": {c.ClientID}, "responseType": {"code"}, "redirectUri": {req.RedirectURI}, "type": {"code"}, "scope": {scopes}, "state": {req.State}, "nonce": {req.Nonce}, "code_challenge_method": {"S256"}, "code_challenge": {req.Challenge}}
 	body := map[string]any{"type": "code", "signinMethod": "Password", "organization": "unihub", "application": c.Application, "username": req.Username, "password": req.Password, "autoSignin": false}
-	var env envelope
-	if e := s.providerJSON(r.Context(), "POST", "/api/login?"+q.Encode(), body, false, &env); e != nil {
+	var login providerLogin
+	if e := s.providerLoginJSON(r.Context(), "/api/login?"+q.Encode(), body, s.providerSession, &login); e != nil {
 		fail(w, 503, "identity_unavailable")
 		return
 	}
+	env := login.envelope
 	if env.Status != "ok" {
 		fail(w, 401, "invalid_credentials")
 		return
@@ -618,6 +634,12 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	kinds := map[string]string{"NextMfa": "mfa", "RequiredMfa": "mfa_enrollment", "RequiredUpdatePassword": "password_change", "SelectPlan": "provider_policy", "BuyPlanResult": "provider_policy"}
 	if kind := kinds[code]; kind != "" {
+		// TOTP continues on this accepted credential state; every other
+		// interaction stays an explicit unsupported result.
+		if kind == "mfa" && login.session != "" {
+			s.pendingMfa(w, r, c, req, login.session)
+			return
+		}
 		interaction(w, kind)
 		return
 	}
@@ -632,6 +654,108 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonResponse(w, 200, map[string]any{"authorization_id": id, "code": code, "state": req.State, "expires_in": 300})
+}
+
+// pendingMfa stores only hashed, short-lived continuation state. The provider
+// session is consumed once by the mfa_token holder's single passcode attempt
+// budget, and expired rows are dropped opportunistically.
+func (s *Server) pendingMfa(w http.ResponseWriter, r *http.Request, c products.Client, req authorizeRequest, session string) {
+	if _, e := s.pool.Exec(r.Context(), `DELETE FROM identity_mfa_pending WHERE expires_at<=now()`); e != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	id := randomID()
+	if _, e := s.pool.Exec(r.Context(), `INSERT INTO identity_mfa_pending(id_hash,client_id,redirect_uri,state_hash,nonce_hash,pkce_challenge,provider_session,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '5 minutes')`, s.providerMfaToken(id), c.ClientID, req.RedirectURI, s.mac("state", req.State), s.mac("nonce", req.Nonce), req.Challenge, session); e != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	jsonResponse(w, 200, mfaPendingResponse{Error: "mfa_pending", Token: id, ExpiresIn: 300})
+}
+
+// providerMfaToken binds the token hash to this UniHub instance so a database
+// restored into another deployment cannot replay pending continuations.
+func (s *Server) providerMfaToken(token string) string {
+	return s.mac("mfa_pending", token)
+}
+
+func (s *Server) authorizeMfa(w http.ResponseWriter, r *http.Request) {
+	var req mfaAuthorizeRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	c, ok := s.clientFor(w, r, req.ClientID, false)
+	if !ok {
+		return
+	}
+	if len(req.Token) != 43 || req.Passcode == "" || utf8.RuneCountInString(req.Passcode) > 8 || len(req.Passcode) > 32 {
+		fail(w, 400, "invalid_request")
+		return
+	}
+	if !s.limit(r.Context(), r, c, "", "token") {
+		fail(w, 429, "rate_limited")
+		return
+	}
+	var row struct {
+		RedirectURI, stateHash, nonceHash, challenge, session string
+	}
+	want := s.providerMfaToken(req.Token)
+	err := s.pool.QueryRow(r.Context(), `UPDATE identity_mfa_pending SET attempts=attempts+1 WHERE id_hash=$1 AND client_id=$2 AND expires_at>now() AND attempts<5 RETURNING redirect_uri,state_hash,nonce_hash,pkce_challenge,provider_session`, want, c.ClientID).Scan(&row.RedirectURI, &row.stateHash, &row.nonceHash, &row.challenge, &row.session)
+	if err == pgx.ErrNoRows {
+		fail(w, 400, "invalid_mfa_token")
+		return
+	}
+	if err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	q := url.Values{"clientId": {c.ClientID}, "responseType": {"code"}, "redirectUri": {row.RedirectURI}, "type": {"code"}, "scope": {scopes}, "code_challenge_method": {"S256"}, "code_challenge": {row.challenge}}
+	body := map[string]any{"type": "code", "organization": "unihub", "application": c.Application, "mfaType": mfaTypeTotp, "passcode": req.Passcode}
+	req2, e := http.NewRequestWithContext(r.Context(), "POST", strings.TrimSuffix(s.opts.Issuer, "/")+"/api/login?"+q.Encode(), nil)
+	if e != nil {
+		fail(w, 503, "identity_unavailable")
+		return
+	}
+	raw, _ := json.Marshal(body)
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Accept", "application/json")
+	req2.Header.Set("Accept-Language", "en")
+	req2.Header.Set("Cookie", row.session)
+	req2.Body = io.NopCloser(bytes.NewReader(raw))
+	res, e := s.client.Do(req2)
+	if e != nil {
+		fail(w, 503, "identity_unavailable")
+		return
+	}
+	defer res.Body.Close()
+	b, e := io.ReadAll(io.LimitReader(res.Body, (1<<20)+1))
+	if e != nil || len(b) > 1<<20 || res.StatusCode != 200 {
+		fail(w, 503, "identity_unavailable")
+		return
+	}
+	var env envelope
+	if json.Unmarshal(b, &env) != nil {
+		fail(w, 502, "invalid_identity_response")
+		return
+	}
+	if env.Status != "ok" {
+		fail(w, 401, "invalid_mfa_code")
+		return
+	}
+	var code string
+	if json.Unmarshal(env.Data, &code) != nil || !authorizationCode.MatchString(code) || !emptyProviderField(env.Data2) || !emptyProviderField(env.Data3) {
+		interaction(w, "provider_policy")
+		return
+	}
+	id := randomID()
+	if _, e := s.pool.Exec(r.Context(), `DELETE FROM identity_mfa_pending WHERE id_hash=$1`, want); e != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	if _, e := s.pool.Exec(r.Context(), `INSERT INTO identity_authorizations(id,client_id,redirect_uri,code_hash,pkce_challenge,nonce_hash,state_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '5 minutes')`, id, c.ClientID, row.RedirectURI, s.mac("code", code), row.challenge, row.nonceHash, row.stateHash); e != nil {
+		fail(w, 400, "authorization_conflict")
+		return
+	}
+	jsonResponse(w, 200, map[string]any{"authorization_id": id, "code": code, "expires_in": 300})
 }
 
 type tokenRequest struct {

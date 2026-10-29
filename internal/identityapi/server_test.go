@@ -124,12 +124,25 @@ func newTestIssuer(t *testing.T) *testIssuer {
 			}
 			ok(i.user)
 		case "/api/login":
-			if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
-				t.Error("ambient credentials leaked to login")
-			}
 			q := r.URL.Query()
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			if i.mode == "mfa verify" {
+				if r.Header.Get("Cookie") != "casdoor_session_id=mfa-session" || r.Header.Get("Authorization") != "" {
+					t.Error("mfa continuation must replay the pended provider session only")
+				}
+				if q.Get("clientId") != "native" || q.Get("responseType") != "code" || q.Get("code_challenge_method") != "S256" || body["type"] != "code" || body["signinMethod"] != nil || body["organization"] != "unihub" || body["application"] != "native-app" {
+					t.Error("incorrect mfa continuation protocol")
+				}
+				if body["passcode"] == "654321" && body["mfaType"] == "totp" && body["password"] == nil {
+					i.nonce = q.Get("nonce")
+					i.challenge = q.Get("code_challenge")
+					ok("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+					return
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"status": "error", "msg": "totp passcode error"})
+				return
+			}
 			if q.Get("clientId") != "native" || q.Get("responseType") != "code" || q.Get("code_challenge_method") != "S256" || q.Get("scope") != "openid profile email" || body["type"] != "code" || body["signinMethod"] != "Password" || body["organization"] != "unihub" || body["application"] != "native-app" {
 				t.Error("incorrect password-to-code protocol")
 			}
@@ -144,7 +157,14 @@ func newTestIssuer(t *testing.T) *testIssuer {
 				ok("unihub/alice")
 				return
 			case "mfa":
-				ok("NextMfa")
+				if r.Header.Get("Cookie") != "" || r.Header.Get("Authorization") != "" {
+					t.Error("ambient credentials leaked to mfa-creating login")
+				}
+				http.SetCookie(w, &http.Cookie{Name: "casdoor_session_id", Value: "mfa-session"})
+				ok2 := func(data any, list any) {
+					_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok", "msg": "", "data": data, "data2": list, "data3": nil})
+				}
+				ok2("NextMfa", []any{map[string]any{"mfaType": "totp", "enabled": true}})
 				return
 			case "enrollment":
 				ok("RequiredMfa")
@@ -361,7 +381,7 @@ func TestTokenBindingRejectsWrongURIAndVerifierBeforeExchange(t *testing.T) {
 	}
 }
 func TestInteractionsNeverProduceCodeOrExchange(t *testing.T) {
-	for _, mode := range []string{"mfa", "enrollment", "password change", "consent"} {
+	for _, mode := range []string{"enrollment", "password change", "consent"} {
 		t.Run(mode, func(t *testing.T) {
 			s, i, _ := setup(t)
 			i.mode = mode

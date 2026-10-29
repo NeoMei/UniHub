@@ -52,6 +52,7 @@ func (s *Server) ProfileEnabled() bool { return s.pool != nil }
 type providerUser struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
+	TotpSecret      string `json:"totpSecret"`
 	DisplayName     string `json:"displayName"`
 	Avatar          string `json:"avatar"`
 	PermanentAvatar string `json:"permanentAvatar"`

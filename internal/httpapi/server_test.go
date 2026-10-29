@@ -47,6 +47,18 @@ func (f *profileFixture) ChangePassword(_ context.Context, user, current, next s
 }
 func (f *profileFixture) SessionAllowed(_ context.Context, _ string) bool        { return !f.revoked }
 func (f *profileFixture) BrowserSessionAllowed(_ context.Context, _ string) bool { return !f.revoked }
+func (f *profileFixture) MfaStatus(context.Context, string) (identityapi.MfaStatus, error) {
+	return identityapi.MfaStatus{Enabled: false}, nil
+}
+func (f *profileFixture) MfaEnroll(context.Context, string) (identityapi.MfaSetup, identityapi.MfaStatus, error) {
+	return identityapi.MfaSetup{}, identityapi.MfaStatus{}, identityapi.ErrMfaState
+}
+func (f *profileFixture) MfaConfirm(context.Context, string, string, string, string) (identityapi.MfaStatus, error) {
+	return identityapi.MfaStatus{}, identityapi.ErrInvalidInput
+}
+func (f *profileFixture) MfaDisable(context.Context, string, string, string) (identityapi.MfaStatus, error) {
+	return identityapi.MfaStatus{}, identityapi.ErrInvalidInput
+}
 func (f *profileFixture) PutAvatar(_ context.Context, _ string, _ string, data []byte) (identityProfile, error) {
 	f.avatar = bytes.Clone(data)
 	f.profile.AvatarURL = "/v1/me/avatar"
