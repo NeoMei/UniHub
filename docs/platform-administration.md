@@ -42,3 +42,5 @@
 ## 身份适配开关
 
 `ADMIN_IDENTITY_DEPLOYMENT_VERIFIED`、`ADMIN_PASSWORD_RESET_VERIFIED`、`ADMIN_SESSION_REVOCATION_VERIFIED` 默认关闭。仅在锁定 Casdoor v4.23.0 审计构建、真实部署读回和脱敏/会话/重置验收完成后逐项打开。源码 fixture 或本地页面不能证明生产能力；真实邮件发送与生产权限变更需要单独的运维授权。
+
+当前生产部署状态（2026-10-29 核验）：部署与撤销开关已打开。运行容器为钉住审计构建（upstream commit `1b91d9d319a127e9b1af88fa7a20bb35c052b9d8`，镜像 ID 与 `shared/headless-audit.json` 记录一致，`/server` 校验和匹配）；当日重新执行受控探针（注册 201、跨源 403、错误密码 401、授权 200、令牌 200、重放 400），并对探针用户完成真实撤销：`delete-session` 返回 Affected，会话清零，关联令牌 `expires_in` 由 3600 置 0，原 bearer 访问 userinfo 被拒绝并提示令牌已过期。密码重置开关保持关闭：恢复/激活邮件需配置 `RECOVERY_SMTP_ADDR/FROM/USERNAME/PASSWORD`（`internal/notify` 实现），并在真实邮箱完成一次端到端验收后才允许打开；配置校验会在缺少中继时拒绝启动该开关。

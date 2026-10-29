@@ -77,3 +77,19 @@ func TestBrowserAndServiceConfigurationRejectUnsafeBoundaries(t *testing.T) {
 		t.Fatal("production test catalog accepted")
 	}
 }
+
+func TestPasswordResetVerificationRequiresRecoveryMailRelay(t *testing.T) {
+	env := map[string]string{"APP_ENV": "development", "DATABASE_URL": "postgres://unused", "LEDGER_URL": "http://localhost:53068", "OIDC_ISSUER": "http://localhost:58000", "OIDC_AUDIENCE": "unihub", "ADMIN_PASSWORD_RESET_VERIFIED": "true"}
+	if _, err := readConfig(func(k string) string { return env[k] }); err == nil {
+		t.Fatal("password reset verified without recovery mail relay")
+	}
+	env["RECOVERY_SMTP_ADDR"] = "127.0.0.1:25"
+	if _, err := readConfig(func(k string) string { return env[k] }); err == nil {
+		t.Fatal("password reset verified without recovery sender address")
+	}
+	env["RECOVERY_SMTP_FROM"] = "recovery@quukk.com"
+	c, err := readConfig(func(k string) string { return env[k] })
+	if err != nil || c.RecoverySMTPAddr != "127.0.0.1:25" || c.RecoverySMTPFrom != "recovery@quukk.com" {
+		t.Fatalf("configured relay rejected: %+v %v", c, err)
+	}
+}

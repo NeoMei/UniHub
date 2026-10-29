@@ -20,6 +20,7 @@ import (
 	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
+	"unihub/internal/notify"
 	"unihub/internal/platformadmin"
 	"unihub/internal/productauth"
 	"unihub/internal/products"
@@ -148,7 +149,13 @@ func run() error {
 		return err
 	}
 	if c.AdminIdentityDeploymentVerified || c.AdminPasswordResetVerified || c.AdminSessionRevocationVerified {
-		provider, providerErr := identity.AdministrationProvider(startup, identityapi.AdminProviderOptions{PinnedVersion: identityapi.AdminPinnedVersion, Organization: "unihub", PublicOrigin: c.PublicURL, DeploymentVerified: c.AdminIdentityDeploymentVerified, PasswordResetVerified: c.AdminPasswordResetVerified, SessionRevocationVerified: c.AdminSessionRevocationVerified})
+		// Recovery mail uses the operator relay when configured; a nil interface keeps
+		// the recovery capability closed instead of failing on first use.
+		var delivery identityapi.RecoveryDelivery
+		if mailer := notify.NewRecoveryMailer(notify.SMTPOptions{Addr: c.RecoverySMTPAddr, From: c.RecoverySMTPFrom, Username: c.RecoverySMTPUsername, Password: c.RecoverySMTPPassword}); mailer != nil {
+			delivery = mailer
+		}
+		provider, providerErr := identity.AdministrationProvider(startup, identityapi.AdminProviderOptions{PinnedVersion: identityapi.AdminPinnedVersion, Organization: "unihub", PublicOrigin: c.PublicURL, DeploymentVerified: c.AdminIdentityDeploymentVerified, PasswordResetVerified: c.AdminPasswordResetVerified, SessionRevocationVerified: c.AdminSessionRevocationVerified, Delivery: delivery})
 		if providerErr == nil {
 			platformAdmin.SetIdentityProvider(provider)
 		}

@@ -27,6 +27,8 @@ type config struct {
 	BillingProfiles                                               []billing.BillingProfile
 	IdentityKey                                                   []byte
 	IdentityManagementClientID, IdentityManagementSecret          string
+	RecoverySMTPAddr, RecoverySMTPFrom                            string
+	RecoverySMTPUsername, RecoverySMTPPassword                    string
 	IdentityAuditVerified                                         bool
 	IdentityTrustLoopbackProxy                                    bool
 	AdminIdentityDeploymentVerified, AdminPasswordResetVerified   bool
@@ -187,6 +189,13 @@ func readConfig(get func(string) string) (config, error) {
 			return c, fmt.Errorf("%s must be true or false", item.name)
 		}
 		*item.dst = v == "true"
+	}
+	c.RecoverySMTPAddr = get("RECOVERY_SMTP_ADDR")
+	c.RecoverySMTPFrom = get("RECOVERY_SMTP_FROM")
+	c.RecoverySMTPUsername = get("RECOVERY_SMTP_USERNAME")
+	c.RecoverySMTPPassword = get("RECOVERY_SMTP_PASSWORD")
+	if c.AdminPasswordResetVerified && (c.RecoverySMTPAddr == "" || c.RecoverySMTPFrom == "") {
+		return c, fmt.Errorf("ADMIN_PASSWORD_RESET_VERIFIED requires RECOVERY_SMTP_ADDR and RECOVERY_SMTP_FROM")
 	}
 	enabledIdentity := false
 	for _, client := range c.ProductAccess {
