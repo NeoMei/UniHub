@@ -29,12 +29,12 @@
 **Consumes:** scripts/headless_e2e.py Client; deployed public registration/login/recharges/api-keys; /v1/models, /v1/chat/completions and /platform/v1/calls/{id}.
 **Produces:** acceptance user/account IDs, sandbox operation, key ID, actual call IDs, immutable rates/usage, exact recomputation and wallet delta; explicit UI checks still required.
 
-- [ ] Build a resumable driver with mode-0600 private state and redacted public output.
-- [ ] Register one new llmrouter-headless user and verify password PKCE login and product session projection.
-- [ ] Recharge 10000000 CNY/6 units through sandbox APIs, replay same recharge ID and wait for APPLIED.
-- [ ] Issue one scoped, bounded key for DeepSeek-V4-Flash-A; assert listing never includes plaintext.
-- [ ] Make one tiny ordinary and one tiny streaming supplier call, using separate stable Idempotency-Key values; wait for SETTLED.
-- [ ] Compare gateway receipt and central call; independently sum Fraction rates and ceil once, reconcile budget and wallet. Replaying successful call is rejected without new call.
+- [x] Build a resumable driver with mode-0600 private state and redacted public output.
+- [x] Register one new browser user and verify llmrouter-browser password PKCE login and product session projection. Registration201, exact audience/access:read, code replay400; durable state preserves this user.
+- [x] Recharge 10000000 CNY/6 units through sandbox APIs, replay same recharge ID and wait for APPLIED.
+- [x] Issue one scoped, bounded key for DeepSeek-V4-Flash-A; assert listing never includes plaintext.
+- [x] Make one tiny ordinary and one tiny streaming supplier call, using separate stable Idempotency-Key values; wait for SETTLED.
+- [x] Compare gateway receipt and central call; independently sum Fraction rates and ceil once, reconcile budget and wallet. Replaying successful call is rejected without new call.
 - [ ] Revoke key and prove new invocation denied; retain access credentials only for follow-up controlled checks.
 - [ ] Route central-identity keys, wallet and overview to existing central account components, retaining native-identity behavior and payer-isolated caches; generate chat examples only from known chat models.
 - [ ] Independent review of driver/report; browser registration/login/recharge/key and UI log readback.
@@ -64,3 +64,20 @@
 - [ ] Preview one 300-byte text fixture, disclose actual estimate and request cost confirmation; then index, retrieve and answer through actual knowledge backend.
 - [ ] Reconcile every operation, call receipt, provider attempt, exact charge and Formance wallet balance; no residual holds or double charge.
 - [ ] Final independent whole-change review and publish evidence with each acceptance item distinctly marked.
+
+
+### Task 1b: Close broker financial authorization using existing actor authority
+
+**Requirements:** The original complete product path includes current preferred product-broker and native registration flows, even when they do not have an OIDC identity. The implementation retains the existing central user/account/ledger architecture; no identity merge, balance move, or native-role rewrite is authorized. Read-only architecture evidence: `.superpowers/sdd/2026-10-29-llmrouter-superwagie-e2e/broker-finance-bridge-design.md`, Plan B. This is necessary work within the already authorized full-path objective, with no new user-facing commercial policy choice.
+
+**Files:** New focused `internal/httpapi/product_finance.go` and tests; minimal shared-action authorization factoring in `server.go`; `RuntimeService` configuration/parser tests; backend-only `packages/userkit-go` finance transport/tests/docs. Peer owns LLMRouter BFF/UI/cache adaptation.
+
+**Interface fixed for coordinated implementation:** private `/internal/v1/product-finance` prefix maps a finite set of existing `/v1` business route suffixes. Exactly one `Authorization: Bearer <runtime-service-token>` and one `X-UniHub-Actor-Authorization: Bearer <upa_actor>`; no Origin. Only current `upa_` assertions are accepted. Optional `finance_client_id` on runtime service selects a single registered product client of the exact service product/instance; newly explicit `finance:read` and `finance:write` operations gate the corresponding method. Missing or ambiguous policy mapping rejects at startup when finance is enabled. Existing services without finance keep their behavior.
+
+**Finite initial routes:** GET `/me`, `/accounts`, `/capabilities`, `/catalog`, `/products`, `/products/{product}/billing-profile`, `/products/{product}/model-consistency`; GET `/accounts/{account}/resources`, `/wallets`, `/usage-budget`, `/api-keys`, `/calls`, `/calls/{call}`, `/usage/summary`, `/operations`, `/operations/{operation}`, `/recharges`, `/recharges/{order}`; POST `/accounts/{account}/recharges`, `/recharges/{order}/sandbox-settle`, `/api-keys`; DELETE `/accounts/{account}/api-keys/{key}`; PUT `/accounts/{account}/usage-budget`. Transfers, model credentials, subscription/orders read routes may be added only if required by the existing panels/knowledge task and subject to the same product client scopes/account roles. No admin/ops, team membership writes, arbitrary URL forwarding, runtime-quota changes, model-pool extra authority or reusable bearer exchange.
+
+- [ ] Implement the smallest shared-handler wrapper, verify fresh actor/auth-version/global/product activity and product:use, derive actor solely from the assertion, apply the exact registered product scopes and billing-product restrictions, preserve route patterns/path variables and transactional account checks.
+- [ ] Implement a bounded server-only userkit transport with fixed target origin and finite operation/method/path mapping; preserve idempotency, strict headers/body/query bounds, no redirects or transport retry of writes. Keep raw credentials out of logs/browser/DTOs.
+- [ ] Add actual isolated HTTP tests for missing/duplicate/wrong credentials, Origin, wrong product/instance/client/scopes, expired/revoked actors, active-state changes, unrelated account/key/order/call, exact same financial-role enforcement, sandbox credit replay and unchanged original OIDC routes.
+- [ ] Independently review source and tests before publishing frozen contract to peer; root runs real PostgreSQL/Formance tests and preserves all native fund/key/role snapshots.
+- [ ] Peer integrates BFF with fresh actor after current local session/lifecycle validation, server-reported finance readiness, SID/session-version/login-method authority generation, stale response abort and key/CSRF clearing. Explicit sandbox-settle must match current sandbox config. Root verifies actual browser flow after deployment.
