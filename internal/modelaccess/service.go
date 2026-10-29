@@ -539,6 +539,29 @@ type Consistency struct {
 }
 
 func (s *Service) Consistency(ctx context.Context, product, asset string) (Consistency, error) {
+	return s.consistency(ctx, product, asset, false)
+}
+
+// ConsistencyForAccount returns only catalog entries the actor may use for the
+// payer, product instance and funding mode at the time of the request.
+func (s *Service) ConsistencyForAccount(ctx context.Context, actor, account, product, instance, mode string) (Consistency, error) {
+	if s.productUsers == nil || !s.productUsers.Managed(product, instance) {
+		return Consistency{}, accounts.ErrForbidden
+	}
+	if e := s.activeOn(ctx, s.pool, actor); e != nil {
+		return Consistency{}, e
+	}
+	if e := s.apiKeyProductActive(ctx, s.pool, actor, product, instance); e != nil {
+		return Consistency{}, e
+	}
+	auth, e := s.authorize(ctx, actor, account, product, mode)
+	if e != nil {
+		return Consistency{}, e
+	}
+	return s.consistency(ctx, product, auth.Asset, true)
+}
+
+func (s *Service) consistency(ctx context.Context, product, asset string, scoped bool) (Consistency, error) {
 	out := Consistency{ProductID: product, Asset: asset, Allowlist: []string{}, PublishedRates: []billing.Rate{}, MissingModels: []string{}, ExtraModels: []string{}, DuplicateModels: []string{}}
 	models, e := s.productModels(ctx, s.pool, product)
 	if e != nil {
@@ -555,7 +578,7 @@ func (s *Service) Consistency(ctx context.Context, product, asset string) (Consi
 		if a == "" {
 			a = billing.CreditAsset
 		}
-		if r.Status == "published" && a == asset {
+		if r.Status == "published" && a == asset && (!scoped || models == nil || slices.Contains(models, r.Model)) {
 			out.PublishedRates = append(out.PublishedRates, r)
 			counts[r.Model]++
 		}
@@ -566,6 +589,9 @@ func (s *Service) Consistency(ctx context.Context, product, asset string) (Consi
 		}
 	}
 	for m, n := range counts {
+		if scoped && models == nil {
+			out.Allowlist = append(out.Allowlist, m)
+		}
 		if models != nil && !slices.Contains(models, m) {
 			out.ExtraModels = append(out.ExtraModels, m)
 		}
