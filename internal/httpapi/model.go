@@ -13,6 +13,11 @@ import (
 	"unihub/internal/productusers"
 )
 
+type modelCredentialVerificationResponse struct {
+	modelaccess.Claims
+	ActorExpiresAt int64 `json:"actor_expires_at,omitempty"`
+}
+
 func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 	s.apiKeyRoutes(add)
 	a := s.options.ModelAccess
@@ -90,11 +95,12 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 			return e
 		}
 		var v modelaccess.Claims
+		var actorExpiresAt int64
 		var e error
 		if body.Purpose == "result_read" {
 			v, e = a.VerifyResultReadForInstance(r.Context(), body.Token, body.Model, body.InstanceID, body.WireOperation)
 			if e == nil {
-				e = s.authorizeResultReadActor(r, v)
+				actorExpiresAt, e = s.authorizeResultReadActor(r, v)
 			}
 		} else if body.Purpose != "" && body.Purpose != "receipt" {
 			return modelaccess.ErrCredential
@@ -108,7 +114,7 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
-		return respond(w, 200, v)
+		return respond(w, 200, modelCredentialVerificationResponse{Claims: v, ActorExpiresAt: actorExpiresAt})
 	}))
 	m.HandleFunc("POST /internal/v1/calls/reserve", s.serviceAuthenticated(func(w http.ResponseWriter, r *http.Request) error {
 		var body struct {
@@ -199,10 +205,10 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 
 // authorizeResultReadActor is a point-in-time prerequisite, not a substitute
 // for linearizing result delivery with account or login revocation.
-func (s *api) authorizeResultReadActor(r *http.Request, grant modelaccess.Claims) error {
+func (s *api) authorizeResultReadActor(r *http.Request, grant modelaccess.Claims) (int64, error) {
 	raw, ok := runtimeBearer(r, "X-UniHub-Actor-Authorization")
 	if !ok || strings.HasPrefix(raw, "upa_") || strings.HasPrefix(raw, "ubp_") || s.options.Identity == nil || s.options.ProductUsers == nil {
-		return errRuntimeActor
+		return 0, errRuntimeActor
 	}
 	var claims auth.Claims
 	matches := 0
@@ -218,18 +224,18 @@ func (s *api) authorizeResultReadActor(r *http.Request, grant modelaccess.Claims
 		}
 	}
 	if matches != 1 || !s.options.Identity.SessionAllowed(r.Context(), raw) {
-		return errRuntimeActor
+		return 0, errRuntimeActor
 	}
 	if s.options.PlatformAdmin != nil {
 		if err := s.options.PlatformAdmin.CredentialAllowed(r.Context(), grant.ActorID, claims.IssuedAt); err != nil {
-			return accounts.ErrForbidden
+			return 0, accounts.ErrForbidden
 		}
 	}
 	if err := s.options.ModelAccess.RequireResultReadIdentity(r.Context(), grant, claims.Issuer, claims.Subject); err != nil {
-		return err
+		return 0, err
 	}
 	if r.Context().Err() != nil || claims.ExpiresAt <= time.Now().Unix() {
-		return errRuntimeActor
+		return 0, errRuntimeActor
 	}
-	return nil
+	return claims.ExpiresAt, nil
 }
