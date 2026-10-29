@@ -235,7 +235,7 @@ func TestNativeBrowserHandoffCreatesCentralSessionAndSecondProductBinding(t *tes
 	if legacyGrant.SourceProofToken != "" || legacyGrant.SourceProofExpiresAt != 0 {
 		t.Fatal("legacy pending code incorrectly gained source-session authority")
 	}
-	legacyBind := map[string]string{"local_user_id": "205", "binding_key": "second-jit-205"}
+	legacyBind := map[string]string{"local_user_id": "204", "binding_key": "second-jit-204"}
 	decode(request("POST", "/internal/v1/product-runtime/bindings", "second", legacyGrant.ProofToken, legacyBind), 200, nil)
 	var count int
 	if e = p.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&count); e != nil {
