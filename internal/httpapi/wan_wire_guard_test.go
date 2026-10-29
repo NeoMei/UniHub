@@ -197,6 +197,39 @@ func TestPlannedVideoRejectsNewWireAndLegacyReserveButPreservesReceipt(t *testin
 	}
 	legacyReplay := map[string]string{"credential": grant.Token, "call_id": legacy.CallID, "request_digest": "digest", "rate_id": old.ID, "amount": "10", "task_id": "task", "instance_id": "default"}
 	request("/internal/v1/calls/reserve", legacyReplay, 200)
+	key, keyErr := access.CreateAPIKey(ctx, user.ID, account, modelaccess.APIKeyRequest{Name: "legacy video owner", OriginProductID: "superwagie", InstanceID: "default", Models: []string{"wan2.6-t2v"}})
+	if keyErr != nil {
+		t.Fatal(keyErr)
+	}
+	keyRequest := billing.ReserveRequest{CallID: "wan-history-key", ActorID: user.ID, AccountID: account, OriginProductID: "superwagie", RequestDigest: "key-digest", RateID: old.ID, Amount: "10", CredentialID: key.ID}
+	keyHash := hashJSON(struct {
+		S                  string
+		R                  billing.ReserveRequest
+		InstanceID, TaskID string
+	}{"llmrouter", keyRequest, "default", "key-task"})
+	keyHistory := history
+	keyHistory.CallID, keyHistory.CredentialID, keyHistory.RequestDigest, keyHistory.WireOperation, keyHistory.TaskID = keyRequest.CallID, key.ID, "key-digest", "", "key-task"
+	keyJSON, keyErr := json.Marshal(keyHistory)
+	if keyErr != nil {
+		t.Fatal(keyErr)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,$3,$4)`, keyHistory.CallID, account, keyHash, keyJSON); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO billing_commands(id,account_id,actor_id,kind,request_key,request_digest,command,effect,status) VALUES('old-key-reserve',$1,$2,'reserve',$3,'hash','{}','{}','APPLIED')`, account, user.ID, keyHistory.CallID); err != nil {
+		t.Fatal(err)
+	}
+	keyReplay := map[string]string{"credential": key.Token, "call_id": keyHistory.CallID, "request_digest": "key-digest", "rate_id": old.ID, "amount": "10", "task_id": "key-task", "instance_id": "default"}
+	request("/internal/v1/calls/reserve", keyReplay, 200)
+	keyReplay["task_id"] = "other"
+	request("/internal/v1/calls/reserve", keyReplay, 403)
+	keyReplay["task_id"] = "key-task"
+	keyReplay["instance_id"] = "other"
+	request("/internal/v1/calls/reserve", keyReplay, 403)
+	keyReplay["instance_id"] = "default"
+	keyReplay["amount"] = "11"
+	request("/internal/v1/calls/reserve", keyReplay, 409)
+	keyReplay["amount"] = "10"
 	for _, tc := range []struct{ model, wire, op string }{{"chat-model", "chat.completions.create", "chat"}, {"embed-model", "embeddings.create", "embedding"}} {
 		request("/internal/v1/model-credentials/verify", map[string]string{"token": grant.Token, "model": tc.model, "wire_operation": tc.wire, "instance_id": "default"}, 200)
 		request("/internal/v1/calls/reserve", map[string]string{"credential": grant.Token, "call_id": tc.model + "-call", "request_digest": "digest", "rate_id": tc.model + "-rate", "amount": "10", "task_id": "task", "instance_id": "default", "wire_operation": tc.wire}, 200)
@@ -211,4 +244,5 @@ func TestPlannedVideoRejectsNewWireAndLegacyReserveButPreservesReceipt(t *testin
 	}
 	request("/internal/v1/calls/reserve", replay, 200)
 	request("/internal/v1/calls/reserve", legacyReplay, 200)
+	request("/internal/v1/calls/reserve", keyReplay, 200)
 }
