@@ -186,32 +186,11 @@ func (m *RecoveryMailer) deliver(ctx context.Context, from, to mail.Address, sub
 	if err != nil {
 		return errors.New("configured recovery SMTP address needs host:port")
 	}
-	timeout := 15 * time.Second
-	if deadline, ok := ctx.Deadline(); ok {
-		if remaining := time.Until(deadline); remaining < timeout {
-			timeout = remaining
-		}
-	}
-	conn, err := new(net.Dialer).DialContext(ctx, "tcp", m.options.Addr)
+	client, closeClient, err := openSMTP(ctx, m.options.Addr, &tls.Config{ServerName: host})
 	if err != nil {
-		return errors.New("recovery SMTP relay unreachable")
+		return err
 	}
-	defer conn.Close()
-	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
-		return errors.New("recovery SMTP relay deadline failed")
-	}
-	client, err := smtp.NewClient(conn, host)
-	if err != nil {
-		return errors.New("recovery SMTP relay greeting failed")
-	}
-	defer client.Close()
-	if ok, _ := client.Extension("STARTTLS"); ok {
-		if err = client.StartTLS(&tls.Config{ServerName: host}); err != nil {
-			return errors.New("recovery SMTP relay TLS failed")
-		}
-	} else if !isLoopback(host) {
-		return errors.New("recovery SMTP relay refuses plaintext outside loopback")
-	}
+	defer closeClient()
 	if m.options.Username != "" {
 		if err = client.Auth(smtp.PlainAuth("", m.options.Username, m.options.Password, host)); err != nil {
 			return errors.New("recovery SMTP relay authentication failed")
