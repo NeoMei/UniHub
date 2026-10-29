@@ -7,7 +7,7 @@ Date: 2026-10-30 (Asia/Shanghai)
 - Repository: `/Users/neomei/.codex/worktrees/unihub-mail-layout/unihub`
 - Branch: `codex/product-path-e2e`
 - Base: `1ea77c4b2d4968eb53eafd891beadc90b7270610`
-- Current HEAD: pending commit
+- Implementation commit: `5fc343a1081bb1d963e0aaf7f8bcd51904223ccd`
 - No database schema, identity merge, balance move, runtime-fund mutation, native-role rewrite, deployment, SSH, push, or paid call was made.
 
 ## Changes
@@ -24,7 +24,7 @@ Date: 2026-10-30 (Asia/Shanghai)
 - Passed: `go test ./internal/httpapi -run '^TestProductFinanceRoutesRequireBothCredentialsAndStayFinite$' -count=1`
 - Passed: `(cd packages/userkit-go && go test ./... -count=1)`
 - Passed: `git diff --check`
-- Database-backed test was compiled but not executed: `UNIHUB_TEST_DATABASE_URL` is unset. It needs the root's configured PostgreSQL integration run. Formance acceptance and actual sandbox ledger readback were not run here.
+- Attempted database-backed test; the test harness stopped before running it because `UNIHUB_TEST_DATABASE_URL` is unset. It needs the root's configured PostgreSQL integration run. Formance acceptance and actual sandbox ledger readback were not run here.
 
 ## Remaining review and limits
 
