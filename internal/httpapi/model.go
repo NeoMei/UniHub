@@ -20,6 +20,21 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		if origin := originProduct(r); origin != "" && product != origin {
 			return accounts.ErrForbidden
 		}
+		query := r.URL.Query()
+		if query.Has("account_id") || query.Has("funding_mode") {
+			if len(query) != 2 || len(query["account_id"]) != 1 || len(query["funding_mode"]) != 1 || strings.TrimSpace(query.Get("account_id")) == "" || (query.Get("funding_mode") != billing.FundingCredits && query.Get("funding_mode") != billing.FundingPrepaidCash) {
+				return billing.ErrInvalid
+			}
+			_, instance, e := apiKeyScope(r, product, "")
+			if e != nil {
+				return e
+			}
+			out, e := a.ConsistencyForAccount(r.Context(), u.ID, query.Get("account_id"), product, instance, query.Get("funding_mode"))
+			if e != nil {
+				return e
+			}
+			return respond(w, 200, out)
+		}
 		profile, e := s.options.Billing.Profile(r.Context(), product)
 		if e != nil {
 			return e
