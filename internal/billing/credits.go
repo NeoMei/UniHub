@@ -145,6 +145,11 @@ func (s *Service) ReserveWithWire(ctx context.Context, service string, r Reserve
 		if e != nil {
 			return e
 		}
+		// Do not admit new managed video reservations, including no-wire
+		// callers. Existing calls are replayed above and remain reconcilable.
+		if rate.Semantics == "metered_v2" && rate.Metered != nil && rate.Metered.Operation == "video" {
+			return accounts.ErrForbidden
+		}
 		if wire != "" && !RateMatchesWire(rate, wire) {
 			return accounts.ErrForbidden
 		}

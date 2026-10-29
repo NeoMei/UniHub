@@ -30,6 +30,11 @@ func WireBillingOperation(wire string) string {
 }
 
 func RateMatchesWire(rate Rate, wire string) bool {
+	// Managed video is temporarily unavailable until provider and settlement
+	// recovery are certified. Historical receipt verification remains available.
+	if wire == "videos.create" {
+		return false
+	}
 	operation := WireBillingOperation(wire)
 	if operation == "" {
 		return false
