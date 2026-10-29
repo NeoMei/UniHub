@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.16 - 2026-10-29
+
+补齐安全、运营与接入准备四块缺口，资金保持沙盒。
+
+- 统一身份新增 TOTP 两步验证：账户设置自助开启/关闭，纯 JSON 密码登录在 `mfa_pending` 后经 `/v1/identity/authorize/mfa` 提交一次码；TOTP secret 与恢复码只经 Casdoor 单次返回，UniHub 不落库
+- 管理概览新增 14 天运营趋势（新增用户、调用、失败调用）与近 7 天失败率最高的模型，退款队列一并展示；视图只读、参数化、按 UTC 半开窗口统计
+- 新增 SuperWagie 生产接入配置与 runbook：runtime 服务声明、产品用户清单、Casdoor PKCE 客户端注册与验收步骤；线上配置未改动
+- 补齐发布前置：商业保留许可声明、TypeScript SDK 文档、Go 模块打标签说明，以及 GitHub Actions 的 vet/测试/前端构建/契约一致性检查
+
 ## 0.4.15 - 2026-10-28
 
 精修平台管理后台视觉。
