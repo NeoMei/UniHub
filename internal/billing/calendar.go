@@ -63,6 +63,9 @@ func CalculateCharge(r Rate, u Usage) (string, error) {
 		if r.Metered == nil || u.Metered == nil {
 			return "", ErrInvalid
 		}
+		if metering.WanCashTierPolicy(r.Metered.Policy) && (u.Metered.Source != r.Metered.Policy || strings.TrimSpace(u.Metered.ProviderRequestID) == "") {
+			return "", ErrInvalid
+		}
 		v, err := metering.Calculate(*r.Metered, *u.Metered)
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", ErrInvalid, err)
@@ -140,6 +143,19 @@ func validateRate(r Rate) error {
 		}
 		if err := metering.ValidatePrice(*r.Metered); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		if metering.WanCashTierPolicy(r.Metered.Policy) {
+			policy := r.Metered.Policy
+			modelOK := (policy == "ali_wan26_t2v_cny6_v2" && r.Model == "wan2.6-t2v") || (policy == "ali_wan27_t2v_cny6_v1" && (r.Model == "wan2.7-t2v" || r.Model == "wan2.7-t2v-2026-06-12"))
+			if normalizedAsset(r.Asset) != CashAsset || !modelOK {
+				return ErrInvalid
+			}
+			expected := map[string]metering.Rational{"video_720p": {Numerator: "600000", Denominator: "1"}, "video_1080p": {Numerator: "1000000", Denominator: "1"}}
+			for _, term := range r.Metered.Terms {
+				if term.Unit != "video_second" || term.Price != expected[term.Key] || term.Step != nil || term.Minimum != nil {
+					return ErrInvalid
+				}
+			}
 		}
 		return nil
 	}

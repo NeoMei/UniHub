@@ -29,7 +29,26 @@ func WireBillingOperation(wire string) string {
 	return ""
 }
 
+// allowedForNewCalls keeps historical settlement contracts readable without
+// allowing obsolete or ambiguous tariffs to authorize new supplier dispatches.
+func allowedForNewCalls(rate Rate) bool {
+	if rate.Semantics != "metered_v2" || rate.Metered == nil {
+		return true
+	}
+	p := rate.Metered
+	if p.Operation == "ocr" && p.Policy != "success_request" && p.Policy != "provider_tokens_v1" {
+		return false
+	}
+	if p.Operation == "video" && p.Policy == "ali_wan26_t2v_billable_duration_v1" {
+		return false
+	}
+	return true
+}
+
 func RateMatchesWire(rate Rate, wire string) bool {
+	if !allowedForNewCalls(rate) {
+		return false
+	}
 	operation := WireBillingOperation(wire)
 	if operation == "" {
 		return false

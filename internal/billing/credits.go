@@ -145,6 +145,9 @@ func (s *Service) ReserveWithWire(ctx context.Context, service string, r Reserve
 		if e != nil {
 			return e
 		}
+		if !allowedForNewCalls(rate) {
+			return ErrInvalid
+		}
 		if wire != "" && !RateMatchesWire(rate, wire) {
 			return accounts.ErrForbidden
 		}

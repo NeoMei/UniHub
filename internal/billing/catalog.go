@@ -167,6 +167,9 @@ func (s *Service) PublishRate(ctx context.Context, actor string, r Rate) (Rate, 
 	if e := validateRate(r); e != nil {
 		return Rate{}, e
 	}
+	if !allowedForNewCalls(r) {
+		return Rate{}, ErrInvalid
+	}
 	r.Status = "published"
 	tx, e := s.pool.Begin(ctx)
 	if e != nil {

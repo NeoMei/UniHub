@@ -3,6 +3,7 @@ package metering
 import (
 	"errors"
 	"math/big"
+	"strconv"
 	"strings"
 )
 
@@ -44,7 +45,14 @@ type Usage struct {
 }
 
 var units = map[string]bool{"token": true, "character": true, "audio_second": true, "image": true, "request": true, "video_second": true, "provider_unit": true}
-var ops = map[string]bool{"chat": true, "responses": true, "embedding": true, "speech": true, "transcription": true, "image_generation": true, "image_edit": true, "ocr": true, "video": true}
+
+// WanCashTierPolicy identifies the micro-yuan contract with exactly one
+// selected output tier. It does not reinterpret any historical tariff.
+func WanCashTierPolicy(policy string) bool {
+	return policy == "ali_wan26_t2v_cny6_v2" || policy == "ali_wan27_t2v_cny6_v1"
+}
+
+var ops = map[string]bool{"chat": true, "responses": true, "embedding": true, "rerank": true, "multimodal_embedding": true, "speech": true, "transcription": true, "image_generation": true, "image_edit": true, "ocr": true, "video": true}
 
 func parseQuantity(v Quantity) (*big.Rat, error) {
 	if v.Scale < 0 || v.Scale > 9 || v.Value == "" || (len(v.Value) > 1 && v.Value[0] == '0') || strings.Trim(v.Value, "0123456789") != "" || len(v.Value) > 38 {
@@ -73,23 +81,35 @@ func ValidatePrice(p Price) error {
 			// Chat supports ordinary token tariffs and bounded per-request
 			// tariffs for providers that expose a flat call price.
 			compatible = t.Unit == "token" || t.Unit == "request"
-		case "responses", "embedding":
+		case "responses", "embedding", "rerank", "multimodal_embedding":
 			compatible = t.Unit == "token"
 		case "speech":
-			compatible = t.Unit == "character"
+			compatible = t.Unit == "character" || (t.Unit == "provider_unit" && p.Policy == "elevenlabs_character_cost_v1" && t.ProviderUnit == "elevenlabs.character_cost.multilingual_v2.v1")
 		case "transcription":
 			compatible = t.Unit == "audio_second"
 		case "image_generation", "image_edit":
 			compatible = t.Unit == "image"
 		case "ocr":
-			compatible = t.Unit == "request"
+			compatible = t.Unit == "request" || (t.Unit == "token" && p.Policy == "provider_tokens_v1")
 		case "video":
 			compatible = t.Unit == "video_second" || t.Unit == "provider_unit"
 		}
 		if !compatible {
 			return errors.New("operation/unit mismatch")
 		}
-		if (t.Unit == "token" && t.Key != "input" && t.Key != "output" && t.Key != "cache_read" && t.Key != "cache_write" && t.Key != "reasoning") || (t.Unit == "character" && t.Key != "characters") || (t.Unit == "audio_second" && t.Key != "audio") || (t.Unit == "request" && t.Key != "requests") || (t.Unit == "video_second" && t.Key != "video") || (t.Unit == "provider_unit" && t.Key != "provider") {
+		tokenDimension := t.Key == "input" || t.Key == "output" || t.Key == "cache_read" || t.Key == "cache_write" || t.Key == "reasoning"
+		if p.Operation == "rerank" {
+			tokenDimension = t.Key == "input"
+		} else if p.Operation == "multimodal_embedding" {
+			tokenDimension = t.Key == "text" || t.Key == "visual"
+		} else if p.Operation == "ocr" {
+			tokenDimension = t.Key == "input" || t.Key == "output"
+		}
+		videoKey := t.Key == "video"
+		if p.Operation == "video" && WanCashTierPolicy(p.Policy) {
+			videoKey = t.Key == "video_720p" || t.Key == "video_1080p"
+		}
+		if (t.Unit == "token" && !tokenDimension) || (t.Unit == "character" && t.Key != "characters") || (t.Unit == "audio_second" && t.Key != "audio") || (t.Unit == "request" && t.Key != "requests") || (t.Unit == "video_second" && !videoKey) || (t.Unit == "provider_unit" && t.Key != "provider") {
 			return errors.New("unknown token dimension")
 		}
 
@@ -127,6 +147,18 @@ func ValidatePrice(p Price) error {
 			}
 		}
 	}
+	if p.Operation == "rerank" && (len(p.Terms) != 1 || !seen["input"]) {
+		return errors.New("invalid rerank tariff")
+	}
+	if p.Operation == "multimodal_embedding" && (len(p.Terms) != 2 || !seen["text"] || !seen["visual"]) {
+		return errors.New("missing multimodal token dimension")
+	}
+	if p.Operation == "ocr" && ((p.Policy == "success_request" && (len(p.Terms) != 1 || !seen["requests"])) || (p.Policy == "provider_tokens_v1" && (len(p.Terms) != 2 || !seen["input"] || !seen["output"]))) {
+		return errors.New("invalid OCR tariff")
+	}
+	if p.Operation == "video" && WanCashTierPolicy(p.Policy) && (len(p.Terms) != 2 || !seen["video_720p"] || !seen["video_1080p"]) {
+		return errors.New("missing Wan resolution tier")
+	}
 	return nil
 }
 func ValidateUsage(p Price, u Usage) error {
@@ -157,7 +189,15 @@ func ValidateUsage(p Price, u Usage) error {
 		}
 		seen[m.Key] = true
 	}
-	if len(seen) != len(terms) {
+	if p.Operation == "video" && WanCashTierPolicy(p.Policy) {
+		if len(seen) != 1 || (!seen["video_720p"] && !seen["video_1080p"]) {
+			return errors.New("missing selected Wan tier")
+		}
+		seconds, err := strconv.Atoi(u.Measurements[0].Quantity.Value)
+		if err != nil || u.Measurements[0].Quantity.Scale != 0 || seconds < 2 || seconds > 15 {
+			return errors.New("invalid Wan video duration")
+		}
+	} else if len(seen) != len(terms) {
 		return errors.New("missing measurement")
 	}
 	return nil
