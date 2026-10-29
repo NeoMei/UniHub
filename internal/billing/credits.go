@@ -97,6 +97,14 @@ func reserveRequestHash(service string, r ReserveRequest, instance, task string)
 }
 
 func (s *Service) ReserveWithScope(ctx context.Context, service string, r ReserveRequest, instance, task string) (Call, error) {
+	return s.ReserveWithWire(ctx, service, r, instance, task, "")
+}
+
+func (s *Service) ReserveWithWire(ctx context.Context, service string, r ReserveRequest, instance, task, wire string) (Call, error) {
+	requestHash := reserveRequestHash(service, r, instance, task)
+	if wire != "" {
+		requestHash = hash(struct{ Base, Wire string }{requestHash, wire})
+	}
 	var out Call
 	if e := s.trust(service); e != nil {
 		return out, e
@@ -112,7 +120,7 @@ func (s *Service) ReserveWithScope(ctx context.Context, service string, r Reserv
 			if e = c.QueryRow(ctx, `SELECT request_digest FROM billing_calls WHERE id=$1`, r.CallID).Scan(&h); e != nil {
 				return e
 			}
-			if h != reserveRequestHash(service, r, instance, task) {
+			if h != requestHash {
 				return ErrConflict
 			}
 			out = old
@@ -125,9 +133,20 @@ func (s *Service) ReserveWithScope(ctx context.Context, service string, r Reserv
 		if e = s.clear(ctx, c, r.AccountID); e != nil {
 			return e
 		}
+		tx, e := c.Begin(ctx)
+		if e != nil {
+			return e
+		}
+		defer database.Rollback(tx)
+		if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('unihub:billing-rate-catalog',0))`); e != nil {
+			return e
+		}
 		rate, e := load[Rate](ctx, c, `SELECT snapshot FROM billing_rates WHERE id=$1 AND status='published'`, r.RateID)
 		if e != nil {
 			return e
+		}
+		if wire != "" && !RateMatchesWire(rate, wire) {
+			return accounts.ErrForbidden
 		}
 		auth, e := s.usageFundingOn(ctx, c, r.CredentialID, r.ActorID, r.AccountID, r.OriginProductID, rate.Model, now)
 		if e != nil {
@@ -138,11 +157,11 @@ func (s *Service) ReserveWithScope(ctx context.Context, service string, r Reserv
 			return accounts.ErrForbidden
 		}
 		if r.CredentialID != "" {
-			var count int
-			if e = c.QueryRow(ctx, `SELECT count(*) FROM billing_rates WHERE status='published' AND snapshot->>'model'=$1 AND COALESCE(NULLIF(snapshot->>'asset',''),'CREDIT/6')=$2`, rate.Model, auth.Asset).Scan(&count); e != nil {
-				return e
+			rates, err := list[Rate](ctx, c, `SELECT snapshot FROM billing_rates WHERE status='published' AND snapshot->>'model'=$1 AND COALESCE(NULLIF(snapshot->>'asset',''),'CREDIT/6')=$2`, rate.Model, auth.Asset)
+			if err != nil {
+				return err
 			}
-			if count != 1 {
+			if !ModelRatesUnambiguous(rates, rate.Model, auth.Asset) {
 				return accounts.ErrForbidden
 			}
 		}
@@ -164,18 +183,13 @@ func (s *Service) ReserveWithScope(ctx context.Context, service string, r Reserv
 		if e != nil {
 			return e
 		}
-		out = Call{ServiceID: service, CredentialID: r.CredentialID, CallID: r.CallID, ActorID: r.ActorID, AccountID: r.AccountID, OriginProductID: r.OriginProductID, RequestDigest: r.RequestDigest, Rate: rate, Held: r.Amount, Charged: "0", PlatformDifference: "0", Status: "PENDING", Allocations: alloc, ChargeAsset: auth.Asset, FundingMode: auth.FundingMode, FundingProductID: "llmrouter", BillingProfileVersion: auth.ProfileVersion, InstanceID: instance, TaskID: task}
+		out = Call{WireOperation: wire, ServiceID: service, CredentialID: r.CredentialID, CallID: r.CallID, ActorID: r.ActorID, AccountID: r.AccountID, OriginProductID: r.OriginProductID, RequestDigest: r.RequestDigest, Rate: rate, Held: r.Amount, Charged: "0", PlatformDifference: "0", Status: "PENDING", Allocations: alloc, ChargeAsset: auth.Asset, FundingMode: auth.FundingMode, FundingProductID: "llmrouter", BillingProfileVersion: auth.ProfileVersion, InstanceID: instance, TaskID: task}
 		if auth.Asset == CashAsset {
 			out.CashHoldAddress = CashHoldAddress(r.AccountID, r.CallID)
 		}
 		held := out
 		held.Status = "RESERVED"
-		tx, e := c.Begin(ctx)
-		if e != nil {
-			return e
-		}
-		defer database.Rollback(tx)
-		_, e = tx.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,$3,$4)`, out.CallID, out.AccountID, reserveRequestHash(service, r, instance, task), encode(out))
+		_, e = tx.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,$3,$4)`, out.CallID, out.AccountID, requestHash, encode(out))
 		if e != nil {
 			return e
 		}

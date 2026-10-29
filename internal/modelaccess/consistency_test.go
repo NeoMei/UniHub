@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/billing"
 	"unihub/internal/database"
+	"unihub/internal/metering"
 	"unihub/internal/testutil"
 )
 
@@ -23,6 +25,7 @@ func TestProductModelRatesFailClosedBeforeCredentialInsert(t *testing.T) {
 		{name: "valid", models: `["model"]`, rates: []billing.Rate{{ID: "r1", Model: "model", Asset: billing.CashAsset, Status: "published"}}, want: true},
 		{name: "missing", models: `["model"]`},
 		{name: "duplicate", models: `["model"]`, rates: []billing.Rate{{ID: "r1", Model: "model", Asset: billing.CashAsset, Status: "published"}, {ID: "r2", Model: "model", Asset: billing.CashAsset, Status: "published"}}},
+		{name: "distinct operations", models: `["model"]`, rates: []billing.Rate{{ID: "gen", Model: "model", Asset: billing.CashAsset, Status: "published", Semantics: "metered_v2", Metered: &metering.Price{Operation: "image_generation"}}, {ID: "edit", Model: "model", Asset: billing.CashAsset, Status: "published", Semantics: "metered_v2", Metered: &metering.Price{Operation: "image_edit"}}}, want: true},
 		{name: "wrong asset", models: `["model"]`, rates: []billing.Rate{{ID: "r1", Model: "model", Asset: billing.CreditAsset, Status: "published"}}},
 		{name: "cross product model", models: `["other-model"]`, rates: []billing.Rate{{ID: "r1", Model: "model", Asset: billing.CashAsset, Status: "published"}}},
 		{name: "empty explicit allowlist", models: `[]`, rates: []billing.Rate{{ID: "r1", Model: "model", Asset: billing.CashAsset, Status: "published"}}},
@@ -74,6 +77,57 @@ func TestProductModelRatesFailClosedBeforeCredentialInsert(t *testing.T) {
 				t.Fatalf("issuance side effects %d: %v", count, err)
 			}
 		})
+	}
+}
+
+func TestIssueWaitsForRateCatalogMutation(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if err := database.Migrate(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	a := accounts.New(p)
+	u, err := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://rate-issuance", Subject: "actor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accountsList, err := a.ListAccounts(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := billing.New(p, a, nil)
+	profile, _ := billing.BillingPreset("llmrouter", "prepaid")
+	profile.Version = 1
+	profile.Usage.Models = []string{"model"}
+	raw, _ := json.Marshal(profile)
+	if _, err := p.Exec(ctx, `INSERT INTO product_billing_profiles(product_id,version,actor_id,snapshot) VALUES('llmrouter',1,'deployment',$1)`, raw); err != nil {
+		t.Fatal(err)
+	}
+	rate, _ := json.Marshal(billing.Rate{ID: "one", Model: "model", Asset: billing.CashAsset, Status: "published"})
+	if _, err := p.Exec(ctx, `INSERT INTO billing_rates(id,status,snapshot) VALUES('one','published',$1)`, rate); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Rollback(tx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('unihub:billing-rate-catalog',0))`); err != nil {
+		t.Fatal(err)
+	}
+	s := New(p, a, b)
+	req := Request{OriginProductID: "llmrouter", Models: []string{"model"}, TaskID: "task"}
+	blocked, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	_, err = s.Issue(blocked, u.ID, accountsList[0].ID, req)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("issuance crossed catalog mutation: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Issue(ctx, u.ID, accountsList[0].ID, req); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -168,15 +168,28 @@ func (s *Service) PublishRate(ctx context.Context, actor string, r Rate) (Rate, 
 		return Rate{}, e
 	}
 	r.Status = "published"
-	_, e := s.pool.Exec(ctx, `INSERT INTO billing_rates(id,status,snapshot) VALUES($1,'published',$2)`, r.ID, encode(r))
+	tx, e := s.pool.Begin(ctx)
 	if e != nil {
-		var old Rate
-		old, e = load[Rate](ctx, s.pool, `SELECT snapshot FROM billing_rates WHERE id=$1`, r.ID)
+		return Rate{}, e
+	}
+	defer database.Rollback(tx)
+	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('unihub:billing-rate-catalog',0))`); e != nil {
+		return Rate{}, e
+	}
+	result, e := tx.Exec(ctx, `INSERT INTO billing_rates(id,status,snapshot) VALUES($1,'published',$2) ON CONFLICT (id) DO NOTHING`, r.ID, encode(r))
+	if e != nil {
+		return Rate{}, e
+	}
+	if result.RowsAffected() == 0 {
+		old, err := load[Rate](ctx, tx, `SELECT snapshot FROM billing_rates WHERE id=$1`, r.ID)
 		old.Asset = normalizedAsset(old.Asset)
-		if e == nil && hash(old) == hash(r) {
+		if err == nil && hash(old) == hash(r) {
 			return old, nil
 		}
 		return Rate{}, ErrConflict
+	}
+	if e = tx.Commit(ctx); e != nil {
+		return Rate{}, e
 	}
 	return r, nil
 }
@@ -194,12 +207,20 @@ func (s *Service) RetireRate(ctx context.Context, actor, id string) error {
 	if e := s.operator(actor); e != nil {
 		return e
 	}
-	result, e := s.pool.Exec(ctx, `UPDATE billing_rates SET status='retired' WHERE id=$1`, id)
+	tx, e := s.pool.Begin(ctx)
+	if e != nil {
+		return e
+	}
+	defer database.Rollback(tx)
+	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('unihub:billing-rate-catalog',0))`); e != nil {
+		return e
+	}
+	result, e := tx.Exec(ctx, `UPDATE billing_rates SET status='retired' WHERE id=$1`, id)
 	if e != nil {
 		return e
 	}
 	if result.RowsAffected() != 1 {
 		return accounts.ErrNotFound
 	}
-	return nil
+	return tx.Commit(ctx)
 }
