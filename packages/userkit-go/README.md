@@ -1,5 +1,14 @@
 # UniHub product user kit (source contract v0.1.0)
 
+## Private product finance transport
+
+`NewProductFinanceClient` is a server-only client for the bounded
+`/internal/v1/product-finance` API. It binds one UniHub origin and service
+credential, accepts only fixed finance method/path pairs, and sends a fresh
+`upa_` assertion in `X-UniHub-Actor-Authorization`. Do not use it in browser
+code or expose the service token or assertion to a browser. `Do` returns a
+bounded response and does not retry requests or follow redirects.
+
 Independent Go module (Go 1.23+):
 `github.com/NeoMei/UniHub/packages/userkit-go`. It imports no UniHub internals and
 contains no billing, password storage or OIDC password implementation. Browser signature/discovery validation uses coreos/go-oidc and x/oauth2 (Go 1.23).

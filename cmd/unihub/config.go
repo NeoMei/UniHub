@@ -146,7 +146,7 @@ func readConfig(get func(string) string) (config, error) {
 		}
 	}
 	var runtimeErr error
-	c.ProductRuntime, runtimeErr = parseRuntimeServices(get("PRODUCT_RUNTIME_SERVICES_JSON"), c.ProductUserManifests, c.ModelServiceToken)
+	c.ProductRuntime, runtimeErr = parseRuntimeServicesWithClients(get("PRODUCT_RUNTIME_SERVICES_JSON"), c.ProductUserManifests, c.ModelServiceToken, c.ProductAccess)
 	if runtimeErr != nil {
 		return c, runtimeErr
 	}

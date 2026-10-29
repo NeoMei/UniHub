@@ -16,10 +16,11 @@ import (
 // RuntimeService is private deployment policy. Tokens are never accepted from
 // product configuration JSON and no legacy global billing token enables it.
 type RuntimeService struct {
-	Token      string   `json:"token"`
-	ProductID  string   `json:"product_id"`
-	InstanceID string   `json:"instance_id"`
-	AllowedOps []string `json:"allowed_ops"`
+	Token           string   `json:"token"`
+	ProductID       string   `json:"product_id"`
+	InstanceID      string   `json:"instance_id"`
+	FinanceClientID string   `json:"finance_client_id,omitempty"`
+	AllowedOps      []string `json:"allowed_ops"`
 }
 
 func runtimeBearer(r *http.Request, name string) (string, bool) {

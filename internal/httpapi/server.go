@@ -73,7 +73,11 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		respond(w, 200, map[string]string{"status": "ok", "service": "unihub"})
 	})
-	add := func(pattern string, f action) { m.HandleFunc(pattern, s.authenticated(f)) }
+	actions := map[string]action{}
+	add := func(pattern string, f action) {
+		actions[pattern] = f
+		m.HandleFunc(pattern, s.authenticated(f))
+	}
 	s.productUserRoutes(add)
 	s.productRuntimeRoutes(m)
 	s.productRuntimeRefundRoutes(m)
@@ -310,6 +314,7 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 			return respond(w, 202, op)
 		})
 	}
+	s.productFinanceRoutes(m, actions)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
