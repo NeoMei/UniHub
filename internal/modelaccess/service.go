@@ -589,6 +589,9 @@ func (s *Service) consistency(ctx context.Context, product, asset string, scoped
 		}
 	}
 	for m, n := range counts {
+		if scoped && models == nil {
+			out.Allowlist = append(out.Allowlist, m)
+		}
 		if models != nil && !slices.Contains(models, m) {
 			out.ExtraModels = append(out.ExtraModels, m)
 		}

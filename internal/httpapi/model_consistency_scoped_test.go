@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -172,13 +173,53 @@ func TestAccountModelConsistencyUsesAuthorizedFundingAndProduct(t *testing.T) {
 	if _, e = p.Exec(ctx, `UPDATE product_user_access SET roles='["member"]' WHERE user_id=$1`, alice.ID); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = p.Exec(ctx, `INSERT INTO product_billing_profiles(product_id,version,actor_id,snapshot) SELECT product_id,2,actor_id,jsonb_set(jsonb_set(snapshot,'{usage,funding_modes}','["credits"]'),'{version}','2') FROM product_billing_profiles WHERE product_id='superwagie' AND version=1`); e != nil {
+	// An omitted/null allowlist is an unrestricted product policy. The UI
+	// selects a model by membership in allowlist, so the scoped DTO must derive
+	// that list from this asset's actual published rates, not send an empty list.
+	if _, e = p.Exec(ctx, `INSERT INTO product_billing_profiles(product_id,version,actor_id,snapshot) SELECT product_id,2,actor_id,jsonb_set(jsonb_set(snapshot,'{usage,models}','null'),'{version}','2') FROM product_billing_profiles WHERE product_id='superwagie' AND version=1`); e != nil {
+		t.Fatal(e)
+	}
+	for _, tc := range []struct {
+		mode string
+		want []string
+	}{{"prepaid_cash", []string{"foreign-model", "shared"}}, {"credits", []string{"shared"}}} {
+		w := call(h, "GET", path(as[0].ID, tc.mode), aliceToken, "", "")
+		var out modelaccess.Consistency
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatalf("unrestricted %s: %d %s", tc.mode, w.Code, w.Body)
+		}
+		if !slices.Equal(out.Allowlist, tc.want) || len(out.ExtraModels) != 0 || len(out.MissingModels) != 0 {
+			t.Fatalf("unrestricted %s: %s", tc.mode, w.Body)
+		}
+		for _, r := range out.PublishedRates {
+			if !slices.Contains(out.Allowlist, r.Model) {
+				t.Fatalf("UI would reject published model %q", r.Model)
+			}
+		}
+	}
+	legacy := call(h, "GET", base, aliceToken, "", "")
+	var old modelaccess.Consistency
+	if legacy.Code != 200 || json.Unmarshal(legacy.Body.Bytes(), &old) != nil || len(old.Allowlist) != 0 {
+		t.Fatalf("legacy no-parameter changed: %d %s", legacy.Code, legacy.Body)
+	}
+	// Explicit empty is deny-all, despite published rates.
+	if _, e = p.Exec(ctx, `INSERT INTO product_billing_profiles(product_id,version,actor_id,snapshot) SELECT product_id,3,actor_id,jsonb_set(jsonb_set(snapshot,'{usage,models}','[]'),'{version}','3') FROM product_billing_profiles WHERE product_id='superwagie' AND version=2`); e != nil {
+		t.Fatal(e)
+	}
+	for _, mode := range []string{"prepaid_cash", "credits"} {
+		w := call(h, "GET", path(as[0].ID, mode), aliceToken, "", "")
+		var out modelaccess.Consistency
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || len(out.Allowlist) != 0 || len(out.PublishedRates) != 0 || len(out.ExtraModels) != 0 {
+			t.Fatalf("deny-all %s: %d %s", mode, w.Code, w.Body)
+		}
+	}
+	if _, e = p.Exec(ctx, `INSERT INTO product_billing_profiles(product_id,version,actor_id,snapshot) SELECT product_id,4,actor_id,jsonb_set(jsonb_set(snapshot,'{usage,funding_modes}','["credits"]'),'{version}','4') FROM product_billing_profiles WHERE product_id='superwagie' AND version=1`); e != nil {
 		t.Fatal(e)
 	}
 	if w := call(h, "GET", path(as[0].ID, "prepaid_cash"), aliceToken, "", ""); w.Code != 403 {
 		t.Fatalf("disabled funding mode: %d %s", w.Code, w.Body)
 	}
-	if _, e = p.Exec(ctx, `INSERT INTO product_billing_profiles(product_id,version,actor_id,snapshot) SELECT product_id,3,actor_id,jsonb_set(jsonb_set(jsonb_set(snapshot,'{usage,require_subscription}','true'),'{subscription}', '{"enabled":true}'),'{version}','3') FROM product_billing_profiles WHERE product_id='superwagie' AND version=2`); e != nil {
+	if _, e = p.Exec(ctx, `INSERT INTO product_billing_profiles(product_id,version,actor_id,snapshot) SELECT product_id,5,actor_id,jsonb_set(jsonb_set(jsonb_set(snapshot,'{usage,require_subscription}','true'),'{subscription}', '{"enabled":true}'),'{version}','5') FROM product_billing_profiles WHERE product_id='superwagie' AND version=4`); e != nil {
 		t.Fatal(e)
 	}
 	if w := call(h, "GET", path(as[0].ID, "credits"), aliceToken, "", ""); w.Code != 403 || strings.Contains(w.Body.String(), "shared") {
