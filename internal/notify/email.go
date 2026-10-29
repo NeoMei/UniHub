@@ -1,16 +1,21 @@
 // Package notify delivers platform-generated account mail through the
 // operator-configured SMTP relay. It exists only for single-purpose account
-// recovery and activation mail: no templating, no marketing, no HTML.
+// recovery, activation and verification mail, with a plain-text fallback.
 package notify
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -53,6 +58,9 @@ func (m *RecoveryMailer) deliverIdentity(ctx context.Context, email, link, reque
 	if email == "" || link == "" || request == "" {
 		return errors.New("recovery email requires recipient, link and request")
 	}
+	if !safeMessageLink(link) {
+		return errors.New("identity email requires a secure action link")
+	}
 	if len(request) > 64 {
 		request = request[:64]
 	}
@@ -65,11 +73,15 @@ func (m *RecoveryMailer) deliverIdentity(ctx context.Context, email, link, reque
 		return errors.New("recovery recipient address is invalid")
 	}
 	subject := "UniHub 密码恢复 / Password recovery · " + request
+	titleZH, titleEN := "重设你的密码", "Reset your password"
+	buttonZH, buttonEN := "设置新密码", "Reset password"
 	introZH := "有人为你的 UniHub 账号发起密码恢复。"
 	actionZH := "请打开链接设置新密码。若非本人操作，请忽略此邮件，账号不会改变。"
 	introEN := "A password recovery was requested for your UniHub account."
 	actionEN := "Open the link to set a new password. If you did not request this, ignore this email; your account stays unchanged."
 	if activation {
+		titleZH, titleEN = "激活你的账户", "Activate your account"
+		buttonZH, buttonEN = "激活账户并设置密码", "Activate account"
 		subject = "UniHub 账户激活 / Account activation · " + request
 		introZH = "你的 UniHub 账户已准备好激活。"
 		actionZH = "请打开链接完成激活并设置密码。若非本人操作，请忽略此邮件，账户将保持未激活状态。"
@@ -99,7 +111,11 @@ func (m *RecoveryMailer) deliverIdentity(ctx context.Context, email, link, reque
 		actionEN,
 		"",
 	}, "\r\n")
-	return m.deliver(ctx, *from, *to, subject, body)
+	rich, err := renderIdentityMail(identityMailView{TitleZH: titleZH, TitleEN: titleEN, IntroZH: introZH, IntroEN: introEN, ActionZH: actionZH, ActionEN: actionEN, ButtonZH: buttonZH, ButtonEN: buttonEN, Link: link, Request: request})
+	if err != nil {
+		return err
+	}
+	return m.deliver(ctx, *from, *to, subject, body, rich)
 }
 
 // DeliverMailboxVerification sends a bilingual operator verification message.
@@ -124,19 +140,48 @@ func (m *RecoveryMailer) DeliverMailboxVerification(ctx context.Context, email, 
 		"你好，",
 		"",
 		"UniHub 邮箱验证校验码：" + code,
-		"请将此校验码回复到本次 UniHub 验收对话，以继续密码恢复验收。",
+		"有效期：20 分钟，仅用于本次测试邮箱验证。",
+		"请将此校验码回复到本次 UniHub 验收的 Codex 对话，以继续密码恢复验收。",
+		"若非本人操作，请忽略此邮件。你的日常账号密码保持不变。",
 		"",
 		"--- English ---",
 		"Hello,",
 		"",
 		"UniHub mailbox verification code: " + code,
-		"Please send this code in the current UniHub acceptance conversation to continue.",
+		"Expires in 20 minutes. This code is only for this test mailbox verification.",
+		"Please send this code in the current UniHub acceptance conversation in Codex to continue.",
+		"If you did not request this test, ignore this email. Your everyday account password is unchanged.",
 		"",
 	}, "\r\n")
-	return m.deliver(ctx, *from, *to, "UniHub 邮箱验证 / Mailbox verification", body)
+	rich, err := renderVerificationMail(verificationMailView{Code: code})
+	if err != nil {
+		return err
+	}
+	return m.deliver(ctx, *from, *to, "UniHub 邮箱验证 / Mailbox verification", body, rich)
 }
 
-func (m *RecoveryMailer) deliver(ctx context.Context, from, to mail.Address, subject, body string) error {
+func (m *RecoveryMailer) deliver(ctx context.Context, from, to mail.Address, subject, body, rich string) error {
+	var message bytes.Buffer
+	parts := multipart.NewWriter(&message)
+	for _, alternative := range []struct{ kind, body string }{{"text/plain", body}, {"text/html", rich}} {
+		header := textproto.MIMEHeader{}
+		header.Set("Content-Type", alternative.kind+"; charset=utf-8")
+		header.Set("Content-Transfer-Encoding", "quoted-printable")
+		part, err := parts.CreatePart(header)
+		if err != nil {
+			return errors.New("identity email MIME creation failed")
+		}
+		encoded := quotedprintable.NewWriter(part)
+		if _, err = encoded.Write([]byte(alternative.body)); err != nil {
+			return errors.New("identity email MIME encoding failed")
+		}
+		if err = encoded.Close(); err != nil {
+			return errors.New("identity email MIME encoding failed")
+		}
+	}
+	if err := parts.Close(); err != nil {
+		return errors.New("identity email MIME creation failed")
+	}
 	host, _, err := net.SplitHostPort(m.options.Addr)
 	if err != nil {
 		return errors.New("configured recovery SMTP address needs host:port")
@@ -187,16 +232,24 @@ func (m *RecoveryMailer) deliver(ctx context.Context, from, to mail.Address, sub
 		"To: " + to.String(),
 		"Subject: " + mime.QEncoding.Encode("UTF-8", subject),
 		"MIME-Version: 1.0",
-		"Content-Type: text/plain; charset=utf-8",
-		"Content-Transfer-Encoding: 8bit",
+		"Date: " + time.Now().UTC().Format(time.RFC1123Z),
+		"Content-Type: multipart/alternative; boundary=" + parts.Boundary(),
 	}
-	if _, err = writer.Write([]byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + body + "\r\n")); err != nil {
+	if _, err = writer.Write([]byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + message.String())); err != nil {
 		return errors.New("recovery email write failed")
 	}
 	if err = writer.Close(); err != nil {
 		return errors.New("recovery email accept failed")
 	}
 	return client.Quit()
+}
+
+func safeMessageLink(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" || u.User != nil || strings.TrimSpace(raw) != raw {
+		return false
+	}
+	return u.Scheme == "https" || u.Scheme == "http" && isLoopback(u.Hostname())
 }
 
 func isLoopback(host string) bool {
