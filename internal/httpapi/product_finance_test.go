@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
+	"unihub/internal/ledger"
 	"unihub/internal/productauth"
 	"unihub/internal/products"
 	"unihub/internal/productusers"
@@ -77,7 +80,7 @@ func TestProductFinanceRoutesRequireBothCredentialsAndStayFinite(t *testing.T) {
 	}
 }
 
-func TestProductFinanceUsesFreshIsolatedActorAndSameAccountAction(t *testing.T) {
+func TestProductFinanceSandboxLedgerReplayAndFreshActorIsolation(t *testing.T) {
 	ctx := context.Background()
 	p := testutil.Database(t)
 	if err := database.Migrate(ctx, p); err != nil {
@@ -98,7 +101,14 @@ func TestProductFinanceUsesFreshIsolatedActorAndSameAccountAction(t *testing.T) 
 	rechargePolicy := products.Client{ClientID: "lr-finance-recharge", ProductID: "llmrouter", InstanceID: "default", Scopes: []string{"accounts:read", "recharges:read", "recharges:write"}}
 	services["lr-wallet"] = RuntimeService{Token: strings.Repeat("w", 40), ProductID: "llmrouter", InstanceID: "default", FinanceClientID: walletPolicy.ClientID, AllowedOps: []string{"finance:read", "finance:write"}}
 	services["lr-recharge"] = RuntimeService{Token: strings.Repeat("q", 40), ProductID: "llmrouter", InstanceID: "default", FinanceClientID: rechargePolicy.ClientID, AllowedOps: []string{"finance:read", "finance:write"}}
-	walletService := wallet.New(p, a, nil)
+	var formance *ledger.Formance
+	if base := os.Getenv("UNIHUB_TEST_LEDGER_URL"); base != "" {
+		formance = ledger.NewFormance(base, fmt.Sprintf("product-finance-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
+		if err := formance.Ensure(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	walletService := wallet.New(p, a, formance)
 	h := New(verifier{}, a, walletService, Options{Sandbox: true, Merchant: "finance-test-sandbox", SigningKey: []byte(strings.Repeat("k", 40)), ProductUsers: users, ProductAuth: pa, ProductAccess: map[string]products.Client{policy.ClientID: policy, otherPolicy.ClientID: otherPolicy, walletPolicy.ClientID: walletPolicy, rechargePolicy.ClientID: rechargePolicy}, ProductRuntime: services})
 	actorFor := func(local string, version int64) productauth.Identity {
 		t.Helper()
@@ -170,6 +180,19 @@ func TestProductFinanceUsesFreshIsolatedActorAndSameAccountAction(t *testing.T) 
 	if err := p.QueryRow(ctx, `SELECT count(*) FROM wallet_operations WHERE account_id=$1 AND kind='recharge'`, first.Binding.PersonalAccountID).Scan(&operations); err != nil || operations != 1 {
 		t.Fatalf("replay duplicated ledger operation count=%d err=%v", operations, err)
 	}
+	if formance != nil {
+		if err := walletService.Process(ctx, op1.ID); err != nil {
+			t.Fatal(err)
+		}
+		applied, err := walletService.GetOperation(ctx, first.Binding.UserID, first.Binding.PersonalAccountID, op1.ID)
+		if err != nil || applied.Status != "APPLIED" {
+			t.Fatalf("sandbox charge status=%+v err=%v", applied, err)
+		}
+		balance, err := formance.Balance(ctx, wallet.Address(first.Binding.PersonalAccountID, ""), wallet.Asset)
+		if err != nil || balance != 1_000_000 {
+			t.Fatalf("sandbox replay balance=%d err=%v, want one 1000000-unit credit", balance, err)
+		}
+	}
 	if w = request(first.ActorToken, true, false); w.Code != http.StatusUnauthorized {
 		t.Fatalf("duplicate actor header status=%d", w.Code)
 	}
@@ -199,10 +222,14 @@ func TestProductFinanceUsesFreshIsolatedActorAndSameAccountAction(t *testing.T) 
 	if w = request(first.ActorToken, false, false); w.Code != http.StatusUnauthorized {
 		t.Fatalf("expired actor status=%d", w.Code)
 	}
+	fresh, err := pa.Authenticate(ctx, "llmrouter", "default", productauth.Authentication{LocalUserID: "native-a", AuthenticationID: "authentication-version-a", Method: "session", AuthenticatedAt: time.Now().Unix(), AuthVersion: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pa.SyncLifecycle(ctx, "llmrouter", "default", productauth.Lifecycle{LocalUserID: "native-a", OperationID: "revoke-auth-a", PreviousAuthVersion: 1, NextAuthVersion: 2}); err != nil {
 		t.Fatal(err)
 	}
-	if w = request(first.ActorToken, false, false); w.Code != http.StatusUnauthorized {
+	if w = request(fresh.ActorToken, false, false); w.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked actor status=%d body=%s", w.Code, w.Body)
 	}
 	w = request(second.ActorToken, false, false)

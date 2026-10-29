@@ -7,7 +7,9 @@
 credential, accepts only fixed finance method/path pairs, and sends a fresh
 `upa_` assertion in `X-UniHub-Actor-Authorization`. Do not use it in browser
 code or expose the service token or assertion to a browser. `Do` returns a
-bounded response and does not retry requests or follow redirects.
+bounded response and does not retry requests or follow redirects. Its private
+transport uses normal certificate verification, disables proxy configuration
+and connection reuse, and accepts no injected dialer or TLS override.
 
 Independent Go module (Go 1.23+):
 `github.com/NeoMei/UniHub/packages/userkit-go`. It imports no UniHub internals and

@@ -17,7 +17,6 @@ import (
 // client in browser code or expose ServiceToken to an end user.
 type ProductFinanceConfig struct {
 	BaseURL, ProductID, InstanceID, ServiceToken string
-	HTTPClient                                   *http.Client
 }
 
 type ProductFinanceClient struct {
@@ -52,27 +51,11 @@ func NewProductFinanceClient(c ProductFinanceConfig) (*ProductFinanceClient, err
 		c.InstanceID = "default"
 	}
 	c.BaseURL = strings.TrimSuffix(c.BaseURL, "/")
-	h := http.Client{Timeout: 10 * time.Second}
-	if c.HTTPClient != nil {
-		h = *c.HTTPClient
-	}
-	if h.Timeout <= 0 || h.Timeout > 30*time.Second {
-		h.Timeout = 10 * time.Second
-	}
-	base, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return nil, ErrInvalid
-	}
-	transport := base.Clone()
-	if h.Transport != nil {
-		configured, ok := h.Transport.(*http.Transport)
-		if !ok {
-			return nil, ErrInvalid
-		}
-		transport = configured.Clone()
-	}
-	transport.DisableKeepAlives = true
-	h.Transport = transport
+	// Use a private transport with default TLS verification, no proxy, no
+	// caller-provided dialer, and no connection reuse. The bearer-bearing
+	// request can only be routed by the validated URL and system resolver.
+	transport := &http.Transport{DisableKeepAlives: true}
+	h := http.Client{Timeout: 10 * time.Second, Transport: transport}
 	h.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("product finance redirect rejected") }
 	return &ProductFinanceClient{config: c, http: &h}, nil
 }
