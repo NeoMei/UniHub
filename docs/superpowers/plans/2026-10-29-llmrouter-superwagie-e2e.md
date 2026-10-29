@@ -81,3 +81,23 @@
 - [ ] Add actual isolated HTTP tests for missing/duplicate/wrong credentials, Origin, wrong product/instance/client/scopes, expired/revoked actors, active-state changes, unrelated account/key/order/call, exact same financial-role enforcement, sandbox credit replay and unchanged original OIDC routes.
 - [ ] Independently review source and tests before publishing frozen contract to peer; root runs real PostgreSQL/Formance tests and preserves all native fund/key/role snapshots.
 - [ ] Peer integrates BFF with fresh actor after current local session/lifecycle validation, server-reported finance readiness, SID/session-version/login-method authority generation, stale response abort and key/CSRF clearing. Explicit sandbox-settle must match current sandbox config. Root verifies actual browser flow after deployment.
+
+
+### Task 1c: Bind broker finance to a live central source session
+
+**Goal:** Preferred product_broker sessions can access the same central finance UI while central-derived logout/revocation stops that access. Independent native sessions retain their existing realm, as explicitly required by the approved administration design lines 112–116.
+
+**Requirements/design evidence:** `.superpowers/sdd/2026-10-29-llmrouter-superwagie-e2e/broker-source-proof-spike.md`. This is the bounded missing source proof in the existing authorized broker integration; no new identity linking or commercial choice. Do not disable the source gate merely to make UI succeed.
+
+**Center contract:** `ProductBrowserGrant` adds backend-only `source_proof_token` and `source_proof_expires_at`. Token is `ubsp_` plus 64 random lowercase hex chars (256 bits), persisted only as SHA256. It binds original central `browser_sessions.id_hash`, central user UUID, exact registered destination client/product/instance and expiry no later than that source session. Initial one-use `ubp_` binding proof remains distinct. Old pending codes without a source hash never gain financial source authority.
+
+**Private verifier:** `POST /internal/v1/product-runtime/identity/browser/source/verify`, single existing runtime service bearer, existing explicit `identity:browser` operation, no Origin, strict bounded body `{source_proof_token,central_user_id}`. Fixed expected client derives from service `finance_client_id`, validated against current registered browser client/product/instance; body user ID is comparison-only against the stored central UUID. Success 204, generic denial otherwise. No source proof in URL, browser, logs, or general bearer exchange. SDK method `(*RuntimeClient).VerifyProductBrowserSource(ctx, proof, centralUserID) error` uses that fixed endpoint, no retries/redirects. Existing service configuration need not gain a new operation solely for source checks.
+
+**Validation:** Issuance, exchange and every verifier re-read source-session existence/expiry, linked same central UUID, global active status, `created_at >= session_not_before`, no pending identity_revocations for source issuer/subject, and existing native-origin source binding/current auth-version/access rules. Destination product:use is also current. Central logout deletes session; FK cascade or fresh join invalidates proof. DB errors fail closed. Existing OIDC bearer and independent native authentication are unchanged. This per-request check does not promise cancellation of writes accepted before a concurrent revocation.
+
+**Files:** New next unused SQL migration (confirm numeric/name order; never renumber existing), focused productauth browser-source file/tests, narrow browser_broker/browser_http integration, exact private route in product_auth, backend-only userkit types/method/tests. Peer owns separate LR AES-GCM sealed source-proof row bound to source SID/local user/central UUID/product/instance/client/expiry and the current-SID→verify-source→mint-fresh-actor order. Keep broker financial denial until this works; missing proof requires explicit re-login.
+
+- [x] Add explicit schema/code propagation and source-proof issuance; preserve legacy native handoff/OIDC paths and one-use bind semantics.
+- [x] Add exact dual-bound service/source verifier and userkit method; test missing/duplicate/Origin/cross-client/product/instance/user/expired/malformed proof and DB failures.
+- [x] Prove positive source verification then central session removal/cutoff/pending-provider-revoke/native-source lifecycle/global/product disable causes denial, including logout between authorization and exchange; preserve independent native cases.
+- [ ] Independently review source and real isolated PostgreSQL migration/HTTP tests, then freeze contract to peer. Root owns production release and actual dedicated browser source-session revocation test.
