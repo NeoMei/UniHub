@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -20,7 +21,10 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		if origin := originProduct(r); origin != "" && product != origin {
 			return accounts.ErrForbidden
 		}
-		query := r.URL.Query()
+		query, e := url.ParseQuery(r.URL.RawQuery)
+		if e != nil {
+			return billing.ErrInvalid
+		}
 		if query.Has("account_id") || query.Has("funding_mode") {
 			if len(query) != 2 || len(query["account_id"]) != 1 || len(query["funding_mode"]) != 1 || strings.TrimSpace(query.Get("account_id")) == "" || (query.Get("funding_mode") != billing.FundingCredits && query.Get("funding_mode") != billing.FundingPrepaidCash) {
 				return billing.ErrInvalid

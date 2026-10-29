@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,41 @@ import (
 	"unihub/internal/testutil"
 	"unihub/internal/wallet"
 )
+
+func TestModelConsistencyRejectsMalformedQueryBeforeServices(t *testing.T) {
+	// Leave services unconfigured: invalid query syntax must be rejected before
+	// consulting either the scoped projection or the legacy billing profile.
+	s := &api{}
+	var handler action
+	s.modelRoutes(http.NewServeMux(), func(pattern string, a action) {
+		if pattern == "GET /v1/products/{product}/model-consistency" {
+			handler = a
+		}
+	})
+	for _, query := range []string{
+		"account_id=payer&funding_mode=credits&account_id=%zz",
+		"account_id=payer&funding_mode=credits&extra=%zz",
+		"account_id=payer&funding_mode=credits&extra=bad;value",
+		"account_id=payer;funding_mode=credits",
+		"account_id=%zz",
+		"funding_mode=%zz",
+		"account_id=payer",
+		"funding_mode=credits",
+	} {
+		t.Run(query, func(t *testing.T) {
+			defer func() {
+				if v := recover(); v != nil {
+					t.Errorf("invalid query reached unconfigured services: %v", v)
+				}
+			}()
+			r := httptest.NewRequest(http.MethodGet, "/v1/products/superwagie/model-consistency?"+query, nil)
+			r.SetPathValue("product", "superwagie")
+			if err := handler(httptest.NewRecorder(), r, accounts.User{}); !errors.Is(err, billing.ErrInvalid) {
+				t.Fatalf("invalid query returned %v; want invalid request", err)
+			}
+		})
+	}
+}
 
 func TestAccountModelConsistencyUsesAuthorizedFundingAndProduct(t *testing.T) {
 	ctx := context.Background()
@@ -167,7 +203,19 @@ func TestAccountModelConsistencyUsesAuthorizedFundingAndProduct(t *testing.T) {
 			t.Fatalf("unauthorized or malformed query accepted: %s %s", raw, w.Body)
 		}
 	}
-	for _, raw := range []string{base + "?account_id=&funding_mode=credits", path(as[0].ID, "credits") + "&account_id=" + as[0].ID, path(as[0].ID, "credits") + "&extra=1"} {
+	for _, raw := range []string{
+		base + "?account_id=&funding_mode=credits",
+		path(as[0].ID, "credits") + "&account_id=" + as[0].ID,
+		path(as[0].ID, "credits") + "&extra=1",
+		path(as[0].ID, "credits") + "&account_id=%zz",
+		path(as[0].ID, "credits") + "&extra=%zz",
+		path(as[0].ID, "credits") + "&extra=bad;value",
+		base + "?account_id=" + as[0].ID + ";funding_mode=credits",
+		base + "?account_id=%zz",
+		base + "?funding_mode=%zz",
+		base + "?account_id=" + as[0].ID,
+		base + "?funding_mode=credits",
+	} {
 		if w := call(h, "GET", raw, aliceToken, "", ""); w.Code != 400 || strings.Contains(w.Body.String(), "shared") {
 			t.Fatalf("malformed scoped query: %s: %d %s", raw, w.Code, w.Body)
 		}
