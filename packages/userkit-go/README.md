@@ -5,8 +5,17 @@ Independent Go module (Go 1.23+):
 contains no billing, password storage or OIDC password implementation. Browser signature/discovery validation uses coreos/go-oidc and x/oauth2 (Go 1.23).
 This task distributes source only; no module release/tag has been published.
 A future repository tag must use `packages/userkit-go/v0.x.y`. Pin an immutable
-commit or verified source snapshot until then. The repository has no declared
-license; do not infer redistribution permission or invent a license.
+commit or verified source snapshot until then. Once tagged:
+
+```sh
+git tag packages/userkit-go/v0.1.0 <commit-sha>
+git push origin packages/userkit-go/v0.1.0
+go get github.com/NeoMei/UniHub/packages/userkit-go@v0.1.0
+```
+
+The tag must sit on the commit that contains this module root. The repository
+is proprietary (see the top-level README): redistribution requires written
+permission, and no open-source license may be inferred.
 
 ```go
 func NewClient(Config) (*Client, error)

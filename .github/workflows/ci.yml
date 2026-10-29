@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        # Database-backed suites need PostgreSQL and Formance; they are opt-in so
+        # the hosted job stays deterministic. The protocol tests still run.
+        run: UNIHUB_ALLOW_SKIP_DATABASE_TESTS=1 go test -count=1 ./...
+
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Version consistency
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re, sys
+          root = pathlib.Path('.')
+          version = (root / 'VERSION').read_text().strip()
+          problems = []
+          web = json.loads((root / 'web/package.json').read_text())['version']
+          sdk = json.loads((root / 'packages/sdk/package.json').read_text())['version']
+          lock = json.loads((root / 'web/package-lock.json').read_text())['version']
+          for name, value in [('web/package.json', web), ('packages/sdk/package.json', sdk), ('web/package-lock.json', lock)]:
+              if value != version:
+                  problems.append(f'{name}: {value} != {version}')
+          api = (root / 'api/openapi.yaml').read_text()
+          match = re.search(r'^\s*"?version"?:\s*"?([0-9][0-9.]*)"?\s*$', api, re.M)
+          if not match or match.group(1) != version:
+              problems.append(f'api/openapi.yaml version mismatch: {match.group(1) if match else "missing"}')
+          if problems:
+              print('\n'.join(problems))
+              sys.exit(1)
+          print(f'release version {version} is consistent')
+          PY
+      - name: OpenAPI parses and every $ref resolves
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import pathlib, yaml, sys
+          spec = yaml.safe_load(pathlib.Path('api/openapi.yaml').read_text())
+          refs = []
+          def walk(node):
+              if isinstance(node, dict):
+                  for key, value in node.items():
+                      if key == '$ref' and isinstance(value, str):
+                          refs.append(value)
+                      else:
+                          walk(value)
+              elif isinstance(node, list):
+                  for item in node:
+                      walk(item)
+          walk(spec)
+          broken = []
+          for ref in refs:
+              if not ref.startswith('#/'):
+                  broken.append(f'external ref not allowed: {ref}')
+                  continue
+              node = spec
+              try:
+                  for part in ref[2:].split('/'):
+                      node = node[part.replace('~1', '/').replace('~0', '~')]
+              except Exception:
+                  broken.append(ref)
+          if broken:
+              print('\n'.join(broken))
+              sys.exit(1)
+          print(f'{len(refs)} refs resolved')
+          PY
