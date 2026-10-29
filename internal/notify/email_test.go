@@ -131,6 +131,30 @@ func TestDeliverMailboxVerificationSendsBilingualCode(t *testing.T) {
 	}
 }
 
+func TestDeliverIdentityActivationSendsBilingualActivation(t *testing.T) {
+	addr, transcript, done := loopbackSMTP(t)
+	defer done()
+	mailer := NewRecoveryMailer(SMTPOptions{Addr: addr, From: "UniHub <recovery@quukk.com>"})
+	if err := mailer.DeliverIdentityActivation(context.Background(), "user@example.test", "https://unihub.quukk.com/auth/recovery#token=secret", "activation_operation_1"); err != nil {
+		t.Fatal(err)
+	}
+	seen := transcript()
+	if got := decodedSubject(t, seen); got != "UniHub 账户激活 / Account activation · activation_operation_1" {
+		t.Fatalf("decoded subject = %q", got)
+	}
+	for _, want := range []string{
+		"你的 UniHub 账户已准备好激活。",
+		"请打开链接完成激活并设置密码。",
+		"Your UniHub account is ready to be activated.",
+		"Open the link to activate the account and set a password.",
+		"activation_operation_1",
+	} {
+		if !strings.Contains(seen, want) {
+			t.Fatalf("transcript missing %q\n%s", want, seen)
+		}
+	}
+}
+
 func decodedSubject(t *testing.T, transcript string) string {
 	t.Helper()
 	for _, line := range strings.Split(transcript, "\n") {

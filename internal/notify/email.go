@@ -39,10 +39,18 @@ func NewRecoveryMailer(options SMTPOptions) *RecoveryMailer {
 }
 
 func (m *RecoveryMailer) DeliverIdentityRecovery(ctx context.Context, email, recoveryURL, request string) error {
+	return m.deliverIdentity(ctx, email, recoveryURL, request, false)
+}
+
+func (m *RecoveryMailer) DeliverIdentityActivation(ctx context.Context, email, activationURL, request string) error {
+	return m.deliverIdentity(ctx, email, activationURL, request, true)
+}
+
+func (m *RecoveryMailer) deliverIdentity(ctx context.Context, email, link, request string, activation bool) error {
 	if m == nil {
 		return errors.New("recovery email delivery is not configured")
 	}
-	if email == "" || recoveryURL == "" || request == "" {
+	if email == "" || link == "" || request == "" {
 		return errors.New("recovery email requires recipient, link and request")
 	}
 	if len(request) > 64 {
@@ -56,31 +64,42 @@ func (m *RecoveryMailer) DeliverIdentityRecovery(ctx context.Context, email, rec
 	if err != nil {
 		return errors.New("recovery recipient address is invalid")
 	}
+	subject := "UniHub 密码恢复 / Password recovery · " + request
+	introZH := "有人为你的 UniHub 账号发起密码恢复。"
+	actionZH := "请打开链接设置新密码。若非本人操作，请忽略此邮件，账号不会改变。"
+	introEN := "A password recovery was requested for your UniHub account."
+	actionEN := "Open the link to set a new password. If you did not request this, ignore this email; your account stays unchanged."
+	if activation {
+		subject = "UniHub 账户激活 / Account activation · " + request
+		introZH = "你的 UniHub 账户已准备好激活。"
+		actionZH = "请打开链接完成激活并设置密码。若非本人操作，请忽略此邮件，账户将保持未激活状态。"
+		introEN = "Your UniHub account is ready to be activated."
+		actionEN = "Open the link to activate the account and set a password. If you did not request this, ignore this email; the account will remain inactive."
+	}
 	body := strings.Join([]string{
 		"你好，",
 		"",
-		"有人为你的 UniHub 账号发起密码恢复。",
+		introZH,
 		"请求编号：" + request,
 		"此链接 20 分钟内有效且只能使用一次：",
 		"",
-		recoveryURL,
+		link,
 		"",
-		"请打开链接设置新密码。若非本人操作，请忽略此邮件，账号不会改变。",
+		actionZH,
 		"",
 		"--- English ---",
 		"Hello,",
 		"",
-		"A password recovery was requested for your UniHub account.",
+		introEN,
 		"Request: " + request,
 		"The link is valid for 20 minutes and can be used once:",
 		"",
-		recoveryURL,
+		link,
 		"",
-		"Open the link to set a new password. If you did not request this,",
-		"ignore this email; your account stays unchanged.",
+		actionEN,
 		"",
 	}, "\r\n")
-	return m.deliver(ctx, *from, *to, "UniHub 密码恢复 / Password recovery · "+request, body)
+	return m.deliver(ctx, *from, *to, subject, body)
 }
 
 // DeliverMailboxVerification sends a bilingual operator verification message.

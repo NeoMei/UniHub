@@ -37,6 +37,70 @@ type adminLocalDelivery struct{}
 func (adminLocalDelivery) DeliverIdentityRecovery(context.Context, string, string, string) error {
 	return nil
 }
+func (adminLocalDelivery) DeliverIdentityActivation(context.Context, string, string, string) error {
+	return nil
+}
+
+type recordingAdminDelivery struct {
+	recovery, activation int
+}
+
+type recoveryOnlyDelivery struct{}
+
+func (recoveryOnlyDelivery) DeliverIdentityRecovery(context.Context, string, string, string) error {
+	return nil
+}
+
+func TestAdminProviderDoesNotFallbackToRecoveryMailForActivation(t *testing.T) {
+	p := &adminProvider{server: &Server{}, options: AdminProviderOptions{PasswordResetVerified: true, SessionRevocationVerified: true, Delivery: recoveryOnlyDelivery{}, PublicOrigin: "https://hub.example.test"}}
+	capabilities := p.Capabilities(context.Background())
+	if !capabilities.Recovery || capabilities.Activation {
+		t.Fatalf("incorrect mail capabilities: %+v", capabilities)
+	}
+	if err := p.DeliverActivation(context.Background(), platformadmin.ProviderIdentity{Pending: true, Disabled: true, Email: "a@example.test"}, "secret", "op"); err != platformadmin.ErrRecoveryUnsupported {
+		t.Fatalf("activation without activation delivery: %v", err)
+	}
+}
+
+func (d *recordingAdminDelivery) DeliverIdentityRecovery(context.Context, string, string, string) error {
+	d.recovery++
+	return nil
+}
+func (d *recordingAdminDelivery) DeliverIdentityActivation(context.Context, string, string, string) error {
+	d.activation++
+	return nil
+}
+
+func TestAdminProviderActivationUsesActivationMail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		answer := func(data any) { json.NewEncoder(w).Encode(map[string]any{"status": "ok", "data": data}) }
+		switch r.URL.Path {
+		case "/api/get-organization":
+			answer(map[string]any{"name": "unihub", "passwordType": "bcrypt", "passwordObfuscatorType": "", "passwordOptions": []string{}, "masterPassword": "", "masterVerificationCode": "", "defaultPassword": ""})
+		case "/api/get-user":
+			answer(map[string]any{"id": "pending-subject", "owner": "unihub", "name": "pending", "type": "normal-user", "email": "a@example.test", "emailVerified": false, "isForbidden": true, "properties": map[string]string{"unihubActivation": "pending"}})
+		default:
+			t.Errorf("unexpected provider endpoint %s", r.URL.Path)
+			http.Error(w, "unexpected", http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+	delivery := &recordingAdminDelivery{}
+	s := &Server{opts: Options{Issuer: srv.URL, AuditRedactionVerified: true}, client: srv.Client()}
+	p, err := s.AdministrationProvider(context.Background(), AdminProviderOptions{PinnedVersion: AdminPinnedVersion, Organization: "unihub", DeploymentVerified: true, PasswordResetVerified: true, SessionRevocationVerified: true, Delivery: delivery, PublicOrigin: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = p.(interface {
+		DeliverActivation(context.Context, platformadmin.ProviderIdentity, string, string) error
+	}).DeliverActivation(context.Background(), platformadmin.ProviderIdentity{Issuer: srv.URL, Subject: "pending-subject", Email: "a@example.test", Pending: true, Disabled: true}, "secret", "activation_operation_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivery.activation != 1 || delivery.recovery != 0 {
+		t.Fatalf("delivery counts recovery=%d activation=%d", delivery.recovery, delivery.activation)
+	}
+}
 func TestAdminProviderRevokesExactSSOAndRefreshWithoutOtherUser(t *testing.T) {
 	sessions, tokens := true, true
 	passwordWrites, sessionDeletes, tokenDeletes := 0, 0, 0

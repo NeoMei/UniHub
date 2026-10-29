@@ -20,6 +20,9 @@ const AdminPinnedVersion = "1b91d9d319a127e9b1af88fa7a20bb35c052b9d8"
 type RecoveryDelivery interface {
 	DeliverIdentityRecovery(context.Context, string, string, string) error
 }
+type ActivationDelivery interface {
+	DeliverIdentityActivation(context.Context, string, string, string) error
+}
 type AdminProviderOptions struct {
 	PinnedVersion      string
 	Organization       string
@@ -46,7 +49,8 @@ func (s *Server) AdministrationProvider(ctx context.Context, o AdminProviderOpti
 }
 func (p *adminProvider) Capabilities(context.Context) platformadmin.IdentityCapabilities {
 	recovery := p.options.PasswordResetVerified && p.options.SessionRevocationVerified && p.options.Delivery != nil && safeURL(p.options.PublicOrigin, p.server.opts.Production)
-	c := platformadmin.IdentityCapabilities{Directory: true, DisplayName: true, CreatePending: true, Activation: recovery, Recovery: recovery, RevokeSessions: p.options.SessionRevocationVerified, ProductionVerified: p.options.DeploymentVerified, Issuer: p.server.opts.Issuer, Organization: p.options.Organization, ProviderVersion: AdminPinnedVersion}
+	_, activationDelivery := p.options.Delivery.(ActivationDelivery)
+	c := platformadmin.IdentityCapabilities{Directory: true, DisplayName: true, CreatePending: true, Activation: recovery && activationDelivery, Recovery: recovery, RevokeSessions: p.options.SessionRevocationVerified, ProductionVerified: p.options.DeploymentVerified, Issuer: p.server.opts.Issuer, Organization: p.options.Organization, ProviderVersion: AdminPinnedVersion}
 	if !recovery {
 		c.Reason = "recovery requires deployment-verified password/session adapter and verified-channel delivery"
 	}
@@ -317,7 +321,11 @@ func (p *adminProvider) DeliverActivation(ctx context.Context, id platformadmin.
 	if e != nil || !read.Pending || !read.Disabled || read.Email != id.Email || read.EmailVerified {
 		return platformadmin.ErrRecoveryUnsupported
 	}
-	return p.options.Delivery.DeliverIdentityRecovery(ctx, id.Email, platformadmin.RecoveryURL(p.options.PublicOrigin, secret), request)
+	delivery, ok := p.options.Delivery.(ActivationDelivery)
+	if !ok {
+		return platformadmin.ErrRecoveryUnsupported
+	}
+	return delivery.DeliverIdentityActivation(ctx, id.Email, platformadmin.RecoveryURL(p.options.PublicOrigin, secret), request)
 }
 func (p *adminProvider) ActivateIdentity(ctx context.Context, id platformadmin.ProviderIdentity, operation string) error {
 	if !p.Capabilities(ctx).Activation {
