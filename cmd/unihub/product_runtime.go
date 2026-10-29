@@ -6,10 +6,15 @@ import (
 	"io"
 	"strings"
 	"unihub/internal/httpapi"
+	"unihub/internal/products"
 	"unihub/internal/productusers"
 )
 
 func parseRuntimeServices(raw string, registry productusers.Registry, legacyToken string) (map[string]httpapi.RuntimeService, error) {
+	return parseRuntimeServicesWithClients(raw, registry, legacyToken, nil)
+}
+
+func parseRuntimeServicesWithClients(raw string, registry productusers.Registry, legacyToken string, clients map[string]products.Client) (map[string]httpapi.RuntimeService, error) {
 	out := map[string]httpapi.RuntimeService{}
 	if raw == "" {
 		return out, nil
@@ -26,7 +31,7 @@ func parseRuntimeServices(raw string, registry productusers.Registry, legacyToke
 	if decoder.Decode(&struct{}{}) != io.EOF || len(out) == 0 || len(out) > 64 {
 		return nil, invalid
 	}
-	known := map[string]bool{"bindings:write": true, "access:read": true, "users:read": true, "users:write": true, "calls:refund": true, "calls:reprice": true, "identity:lifecycle": true, "billing:read": true, "billing:write": true, "credits:adjust": true, "credits:award": true, "credits:payment": true, "migrations:write": true, "budgets:read": true, "budgets:write": true, "identity:browser": true, "identity:register": true, "identity:authenticate": true, "identity:lookup": true, "identity:manage": true, "identity:import": true}
+	known := map[string]bool{"bindings:write": true, "access:read": true, "users:read": true, "users:write": true, "calls:refund": true, "calls:reprice": true, "identity:lifecycle": true, "billing:read": true, "billing:write": true, "credits:adjust": true, "credits:award": true, "credits:payment": true, "migrations:write": true, "budgets:read": true, "budgets:write": true, "identity:browser": true, "identity:register": true, "identity:authenticate": true, "identity:lookup": true, "identity:manage": true, "identity:import": true, "finance:read": true, "finance:write": true}
 	tokens := map[string]bool{}
 	for id, c := range out {
 		if id == "" || len(id) > 64 || strings.TrimSpace(id) != id || len(c.Token) < 32 || len(c.Token) > 512 || c.Token == legacyToken || strings.ContainsAny(c.Token, " \r\n\t") || tokens[c.Token] {
@@ -47,7 +52,28 @@ func parseRuntimeServices(raw string, registry productusers.Registry, legacyToke
 			}
 			seen[op] = true
 		}
+		financeEnabled := seen["finance:read"] || seen["finance:write"]
+		if financeEnabled {
+			if c.FinanceClientID == "" {
+				return nil, invalid
+			}
+			client, ok := clients[c.FinanceClientID]
+			if !ok || client.ClientID != c.FinanceClientID || client.ProductID != c.ProductID || productusers.Instance(client.InstanceID) != c.InstanceID {
+				return nil, invalid
+			}
+			eligible := false
+			for _, scope := range financeRouteScopes {
+				eligible = eligible || client.HasScope(scope)
+			}
+			if !eligible {
+				return nil, invalid
+			}
+		} else if c.FinanceClientID != "" {
+			return nil, invalid
+		}
 		out[id] = c
 	}
 	return out, nil
 }
+
+var financeRouteScopes = []string{"accounts:read", "identity:read", "catalog:read", "subscriptions:read", "orders:read", "wallets:read", "recharges:read", "recharges:write", "operations:read", "model-credentials:write", "usage:read", "settings:write"}

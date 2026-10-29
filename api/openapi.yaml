@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.21"
+  "version": "0.4.26"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. No public GET client configuration, refresh or server logout endpoint currently exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -1019,7 +1019,7 @@
     "get":
       "operationId": "productModelConsistency"
       "summary": "Read product model and rate consistency"
-      "description": "Read-only projection; issues no credentials and changes no billing state. Product tokens require catalog:read and may read only their own product. Uses CNY/6 when the product default funding mode is prepaid_cash, otherwise CREDIT/6. Published rates include all models in that asset; extra_models reports those outside an explicit allowlist. Disabled product usage is forbidden."
+      "description": "Read-only billing consistency projection; issues no credentials, reserves no funds and changes no balances. Configured product clients require catalog:read and may read only their registered product and instance. Omit both account_id and funding_mode for the legacy unscoped response: the asset is CNY/6 when the product default funding mode is prepaid_cash, otherwise CREDIT/6; published_rates includes all published rates for that asset and extra_models reports models outside an explicit allowlist. To select a payer and funding mode, supply both parameters exactly once and no other query parameters. Scoped reads require an active actor, current payer membership, product:use for a registered product instance, an enabled usage policy permitting the selected mode, and an active payer subscription when required by that policy. Console callers use the path product and its default instance; product clients use their registered instance. Scoped rates are limited to the selected asset and product model policy, extra_models is empty, a null/omitted model policy derives allowlist from distinct published models for that asset, and an explicit empty policy returns no models or rates. Disabled usage or denied scope returns no projection. This response describes billing eligibility, not technical operation support, supplier routing or available funds; consumers must intersect it with a trusted technical model catalog."
       "security":
         - "BearerAuth": []
       "x-product-scopes": ["catalog:read"]
@@ -1030,13 +1030,32 @@
           "schema":
             "type": "string"
             "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        - "name": "account_id"
+          "in": "query"
+          "required": false
+          "description": "Payer account selection, not actor identity. Requires funding_mode; each must occur exactly once and no other query parameters are accepted in a scoped request. The authenticated actor must be a current member of this account. Omit both for the legacy unscoped response."
+          "schema":
+            "type": "string"
+            "minLength": 1
+        - "name": "funding_mode"
+          "in": "query"
+          "required": false
+          "description": "Explicit funding selection for account_id. Requires account_id; each must occur exactly once and no other query parameters are accepted in a scoped request. prepaid_cash selects CNY/6; credits selects CREDIT/6. The current product billing policy and any required subscription must authorize the selected mode. Omit both for the legacy default-funding response."
+          "schema":
+            "$ref": "#/components/schemas/FundingMode"
       "responses":
         "200":
-          "description": "Current model and rate consistency"
+          "description": "Current billing consistency for the legacy default asset or the authorized payer/product/funding selection. Uses the same ModelConsistency DTO in both forms; the scoped response filters published_rates to the selected asset and product policy and always returns an empty extra_models array. Missing or duplicate tariffs remain visible in missing_models and duplicate_models. No technical capability or spendable-balance guarantee is implied."
           "content":
             "application/json":
               "schema":
                 "$ref": "#/components/schemas/ModelConsistency"
+        "400":
+          "description": "Invalid scoped query: incomplete pair, repeated parameter, empty account_id, unsupported funding_mode or additional query parameter."
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Error"
         "401":
           "$ref": "#/components/responses/Error"
         "403":
@@ -3988,7 +4007,7 @@
         "allowlist":
           "type": "array"
           "items": {"type": "string"}
-          "description": "Sorted configured models. An empty projection may represent either the legacy null policy or an explicit empty policy; inspect BillingProfile.usage.models to distinguish them."
+          "description": "Sorted configured billing models. For scoped reads, a null/omitted model policy derives distinct models from the selected asset's published rates, while an explicit empty policy permits no models or rates. For legacy unscoped reads, an empty projection may represent either a null policy or an explicit empty policy; inspect BillingProfile.usage.models to distinguish them. Membership does not assert technical operation support."
         "published_rates":
           "type": "array"
           "items": {"$ref": "#/components/schemas/Rate"}

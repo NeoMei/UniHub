@@ -135,8 +135,11 @@ func newTestIssuer(t *testing.T) *testIssuer {
 					t.Error("incorrect mfa continuation protocol")
 				}
 				if body["passcode"] == "654321" && body["mfaType"] == "totp" && body["password"] == nil {
-					i.nonce = q.Get("nonce")
-					i.challenge = q.Get("code_challenge")
+					// The pended provider session retains the original OIDC nonce.
+					// Continuation carries only its cookie and the original PKCE challenge.
+					if q.Get("nonce") != "" || i.nonce == "" || q.Get("code_challenge") != i.challenge {
+						t.Error("mfa continuation must preserve the original nonce and PKCE binding")
+					}
 					ok("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
 					return
 				}

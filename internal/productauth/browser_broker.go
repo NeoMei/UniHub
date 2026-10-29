@@ -2,8 +2,10 @@ package productauth
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"github.com/jackc/pgx/v5"
 	"net/url"
@@ -33,9 +35,11 @@ type BrowserExchange struct {
 	RedirectURI string `json:"redirect_uri"`
 }
 type BrowserGrant struct {
-	Access     productusers.Access `json:"access"`
-	ProofToken string              `json:"proof_token"`
-	ExpiresAt  int64               `json:"expires_at"`
+	Access               productusers.Access `json:"access"`
+	ProofToken           string              `json:"proof_token"`
+	ExpiresAt            int64               `json:"expires_at"`
+	SourceProofToken     string              `json:"source_proof_token,omitempty"`
+	SourceProofExpiresAt int64               `json:"source_proof_expires_at,omitempty"`
 }
 type BrowserCompletion struct {
 	User        accounts.User
@@ -158,6 +162,74 @@ func (s *Service) BrowserSessionAllowed(ctx context.Context, sessionHash string)
 	e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM product_browser_session_origins WHERE session_id_hash=$1),EXISTS(SELECT 1 FROM product_browser_session_origins o JOIN product_auth_subjects p ON p.binding_id=o.binding_id JOIN product_runtime_bindings b ON b.id=p.binding_id JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id JOIN users u ON u.id=b.user_id WHERE o.session_id_hash=$1 AND o.auth_version=p.auth_version AND NOT p.deleted AND a.active AND u.active)`, sessionHash).Scan(&source, &allowed)
 	return e == nil && (!source || allowed)
 }
+
+func currentBrowserSourceSession(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, sessionHash, expectedUser string) (time.Time, error) {
+	var expiry time.Time
+	err := q.QueryRow(ctx, `SELECT s.expires_at
+		FROM browser_sessions s
+		JOIN identities i ON i.issuer=s.issuer AND i.subject=s.subject
+		JOIN users u ON u.id=i.user_id
+		WHERE s.id_hash=$1 AND i.user_id=$2 AND s.expires_at>now() AND u.active
+		  AND s.created_at>=u.session_not_before
+		  AND NOT EXISTS (SELECT 1 FROM identity_revocations r WHERE r.issuer=s.issuer AND r.subject=s.subject AND r.pending)`, sessionHash, expectedUser).Scan(&expiry)
+	return expiry, err
+}
+
+func newBrowserSourceProofToken() string {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return "ubsp_" + hex.EncodeToString(b[:])
+}
+
+func (s *Service) VerifyBrowserSourceProof(ctx context.Context, raw, product, instance, expectedClientID, centralUserID string) error {
+	if len(raw) != len("ubsp_")+64 || !strings.HasPrefix(raw, "ubsp_") || expectedClientID == "" || centralUserID == "" {
+		return accounts.ErrForbidden
+	}
+	if _, err := hex.DecodeString(raw[len("ubsp_"):]); err != nil || strings.ToLower(raw) != raw {
+		return accounts.ErrForbidden
+	}
+	var storedClient, storedUser string
+	var binding *string
+	var version *int64
+	err := s.pool.QueryRow(ctx, `SELECT f.client_id,f.user_id,f.source_binding_id,f.source_auth_version
+		FROM product_browser_source_proofs f
+		JOIN browser_sessions s ON s.id_hash=f.source_session_hash
+		JOIN identities i ON i.issuer=s.issuer AND i.subject=s.subject AND i.user_id=f.user_id
+		JOIN users u ON u.id=i.user_id
+		WHERE f.token_hash=$1 AND f.expires_at>now() AND f.product_id=$2 AND f.instance_id=$3
+		  AND f.user_id=$4 AND s.expires_at>now() AND u.active AND s.created_at>=u.session_not_before
+		  AND NOT EXISTS (SELECT 1 FROM identity_revocations r WHERE r.issuer=s.issuer AND r.subject=s.subject AND r.pending)
+		  AND (f.source_binding_id IS NULL OR EXISTS (
+		    SELECT 1 FROM product_auth_subjects p
+		    JOIN product_runtime_bindings b ON b.id=p.binding_id
+		    JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id
+		    JOIN users source_user ON source_user.id=b.user_id
+		    WHERE p.binding_id=f.source_binding_id AND p.auth_version=f.source_auth_version AND NOT p.deleted
+		      AND source_user.active AND a.active AND b.user_id=f.user_id))`, browserSessionDigest(raw), product, instance, centralUserID).Scan(&storedClient, &storedUser, &binding, &version)
+	if err != nil {
+		return accounts.ErrForbidden
+	}
+	c, err := s.BrowserClient(storedClient, "")
+	if err != nil || storedClient != expectedClientID || storedUser != centralUserID || c.ClientID != expectedClientID || c.ProductID != product || c.InstanceID != instance {
+		return accounts.ErrForbidden
+	}
+	if binding != nil && (version == nil || !s.browserSourceAllowed(ctx, *binding, *version)) {
+		return accounts.ErrForbidden
+	}
+	u, err := s.users.RuntimeUser(ctx, centralUserID)
+	if err != nil {
+		return accounts.ErrForbidden
+	}
+	access, err := s.users.Resolve(ctx, u, product, instance)
+	if err != nil || !slices.Contains(access.Permissions, "product:use") {
+		return accounts.ErrForbidden
+	}
+	return nil
+}
 func (s *Service) AuthorizeBrowser(ctx context.Context, claims auth.Claims, client, redirect, state, nonce, challenge, sessionHash string) (string, error) {
 	c, e := s.BrowserClient(client, redirect)
 	if e != nil || !validBrowserState(state) || !validBrowserState(nonce) || len(challenge) != 43 {
@@ -166,6 +238,9 @@ func (s *Service) AuthorizeBrowser(ctx context.Context, claims auth.Claims, clie
 	u, e := s.accounts.EnsureIdentity(ctx, accounts.Identity{Issuer: claims.Issuer, Subject: claims.Subject, Name: claims.Name, Email: claims.Email})
 	if e != nil {
 		return "", e
+	}
+	if _, e = currentBrowserSourceSession(ctx, s.pool, sessionHash, u.ID); e != nil {
+		return "", accounts.ErrForbidden
 	}
 	access, e := s.users.Resolve(ctx, u, c.ProductID, c.InstanceID)
 	if e != nil || !slices.Contains(access.Permissions, "product:use") {
@@ -181,7 +256,7 @@ func (s *Service) AuthorizeBrowser(ctx context.Context, claims auth.Claims, clie
 		return "", accounts.ErrForbidden
 	}
 	code := randomToken()
-	_, e = s.pool.Exec(ctx, `INSERT INTO product_browser_codes(code_hash,client_id,user_id,pkce_challenge,nonce_hash,source_binding_id,source_auth_version,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,now()+interval '120 seconds')`, digest(code), client, u.ID, challenge, digest(nonce), sourceBinding, sourceVersion)
+	_, e = s.pool.Exec(ctx, `INSERT INTO product_browser_codes(code_hash,client_id,user_id,pkce_challenge,nonce_hash,source_binding_id,source_auth_version,source_session_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '120 seconds')`, digest(code), client, u.ID, challenge, digest(nonce), sourceBinding, sourceVersion, sessionHash)
 	if e != nil {
 		return "", e
 	}
@@ -195,9 +270,21 @@ func (s *Service) ExchangeBrowser(ctx context.Context, product, instance string,
 	sum := sha256.Sum256([]byte(in.Verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
 	var user string
+	var sourceSessionHash *string
 	var sourceBinding *string
 	var sourceVersion *int64
-	e = s.pool.QueryRow(ctx, `UPDATE product_browser_codes SET consumed=true WHERE code_hash=$1 AND client_id=$2 AND pkce_challenge=$3 AND nonce_hash=$4 AND expires_at>now() AND NOT consumed RETURNING user_id,source_binding_id,source_auth_version`, digest(in.Code), in.ClientID, challenge, digest(in.Nonce)).Scan(&user, &sourceBinding, &sourceVersion)
+	var sourceExpires *time.Time
+	e = s.pool.QueryRow(ctx, `UPDATE product_browser_codes c SET consumed=true
+		WHERE c.code_hash=$1 AND c.client_id=$2 AND c.pkce_challenge=$3 AND c.nonce_hash=$4
+		  AND c.expires_at>now() AND NOT c.consumed
+		  AND (c.source_session_hash IS NULL OR EXISTS (
+		    SELECT 1 FROM browser_sessions s JOIN identities i ON i.issuer=s.issuer AND i.subject=s.subject
+		    JOIN users u ON u.id=i.user_id
+		    WHERE s.id_hash=c.source_session_hash AND c.user_id=i.user_id AND s.expires_at>now() AND u.active
+		      AND s.created_at>=u.session_not_before
+		      AND NOT EXISTS (SELECT 1 FROM identity_revocations r WHERE r.issuer=s.issuer AND r.subject=s.subject AND r.pending)))
+		RETURNING c.user_id,c.source_binding_id,c.source_auth_version,c.source_session_hash,
+		  (SELECT s.expires_at FROM browser_sessions s WHERE s.id_hash=c.source_session_hash)`, digest(in.Code), in.ClientID, challenge, digest(in.Nonce)).Scan(&user, &sourceBinding, &sourceVersion, &sourceSessionHash, &sourceExpires)
 	if e != nil {
 		return BrowserGrant{}, accounts.ErrForbidden
 	}
@@ -217,11 +304,30 @@ func (s *Service) ExchangeBrowser(ctx context.Context, product, instance string,
 	}
 	proof := "ubp_" + strings.TrimPrefix(randomToken(), "upa_")
 	expires := time.Now().Add(120 * time.Second)
+	var sourceProof string
+	var sourceProofExpires time.Time
+	if sourceSessionHash != nil && sourceExpires != nil {
+		sourceProof = newBrowserSourceProofToken()
+		sourceProofExpires = time.Now().Add(time.Hour)
+		if sourceExpires.Before(sourceProofExpires) {
+			sourceProofExpires = *sourceExpires
+		}
+	}
 	if _, e = s.pool.Exec(ctx, `INSERT INTO product_browser_proofs(token_hash,client_id,user_id,expires_at,source_binding_id,source_auth_version) VALUES($1,$2,$3,$4,$5,$6)`, digest(proof), in.ClientID, user, expires, sourceBinding, sourceVersion); e != nil {
 		return BrowserGrant{}, e
 	}
+	if sourceProof != "" {
+		if _, e = s.pool.Exec(ctx, `INSERT INTO product_browser_source_proofs(token_hash,client_id,user_id,source_session_hash,source_binding_id,source_auth_version,product_id,instance_id,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, browserSessionDigest(sourceProof), in.ClientID, user, *sourceSessionHash, sourceBinding, sourceVersion, product, productusers.Instance(instance), sourceProofExpires); e != nil {
+			return BrowserGrant{}, e
+		}
+	}
 	access.ExpiresAt = expires.Unix()
-	return BrowserGrant{access, proof, expires.Unix()}, nil
+	grant := BrowserGrant{Access: access, ProofToken: proof, ExpiresAt: expires.Unix()}
+	if sourceProof != "" {
+		grant.SourceProofToken = sourceProof
+		grant.SourceProofExpiresAt = sourceProofExpires.Unix()
+	}
+	return grant, nil
 }
 func (s *Service) VerifyBrowserProof(ctx context.Context, raw, product, instance string) (accounts.User, auth.Claims, error) {
 	if !strings.HasPrefix(raw, "ubp_") {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -38,7 +39,7 @@ func TestNativeBrowserHandoffCreatesCentralSessionAndSecondProductBinding(t *tes
 	pa := productauth.New(p, a, users, "https://hub.test")
 	clients := map[string]products.Client{"router": {ClientID: "router", ProductID: "llmrouter", InstanceID: "default", BrowserSSO: true, RedirectURIs: []string{"https://router.test/api/unihub/callback"}}, "second": {ClientID: "second", ProductID: "second", InstanceID: "default", BrowserSSO: true, RedirectURIs: []string{"https://second.test/api/unihub/callback"}}}
 	pa.ConfigureBrowserClients(clients)
-	services := map[string]RuntimeService{"router": {Token: strings.Repeat("a", 32), ProductID: "llmrouter", InstanceID: "default", AllowedOps: []string{"identity:register", "identity:authenticate", "identity:browser", "identity:lookup", "identity:lifecycle", "bindings:write"}}, "second": {Token: strings.Repeat("b", 32), ProductID: "second", InstanceID: "default", AllowedOps: []string{"identity:browser", "bindings:write", "access:read", "users:write"}}}
+	services := map[string]RuntimeService{"router": {Token: strings.Repeat("a", 32), ProductID: "llmrouter", InstanceID: "default", AllowedOps: []string{"identity:register", "identity:authenticate", "identity:browser", "identity:lookup", "identity:lifecycle", "bindings:write"}}, "second": {Token: strings.Repeat("b", 32), ProductID: "second", InstanceID: "default", FinanceClientID: "second", AllowedOps: []string{"identity:browser", "bindings:write", "access:read", "users:write"}}, "second-wrong-client": {Token: strings.Repeat("c", 32), ProductID: "second", InstanceID: "default", FinanceClientID: "router", AllowedOps: []string{"identity:browser"}}}
 	profileProvider, e := identityapi.New(ctx, p, identityapi.Options{Issuer: "https://provider.test", Clients: clients})
 	if e != nil {
 		t.Fatal(e)
@@ -177,6 +178,38 @@ func TestNativeBrowserHandoffCreatesCentralSessionAndSecondProductBinding(t *tes
 	if grant.Access.Subject != native.Binding.UserID || !strings.HasPrefix(grant.ProofToken, "ubp_") {
 		t.Fatal("cross-product canonical subject lost")
 	}
+	if !strings.HasPrefix(grant.SourceProofToken, "ubsp_") || grant.SourceProofExpiresAt <= grant.ExpiresAt {
+		t.Fatal("grant missing bounded source-session proof")
+	}
+	verifyBody := map[string]string{"source_proof_token": grant.SourceProofToken, "central_user_id": native.Binding.UserID}
+	decode(request("POST", "/internal/v1/product-runtime/identity/browser/source/verify", "second", "", verifyBody), 204, nil)
+	wrongSourceBody := map[string]string{"source_proof_token": grant.SourceProofToken, "central_user_id": "another-user"}
+	decode(request("POST", "/internal/v1/product-runtime/identity/browser/source/verify", "second", "", wrongSourceBody), 403, nil)
+	decode(request("POST", "/internal/v1/product-runtime/identity/browser/source/verify", "second-wrong-client", "", verifyBody), 403, nil)
+	verifyBodyBytes, _ := json.Marshal(verifyBody)
+	originRequest := httptest.NewRequest("POST", "https://hub.test/internal/v1/product-runtime/identity/browser/source/verify", bytes.NewReader(verifyBodyBytes))
+	originRequest.Header.Set("Authorization", "Bearer "+services["second"].Token)
+	originRequest.Header.Set("Origin", "https://router.test")
+	originResponse := httptest.NewRecorder()
+	h.ServeHTTP(originResponse, originRequest)
+	decode(originResponse, 403, nil)
+	for _, body := range []string{
+		`{"source_proof_token":"` + grant.SourceProofToken + `","source_proof_token":"` + grant.SourceProofToken + `","central_user_id":"` + native.Binding.UserID + `"}`,
+		`{"source_proof_token":"` + grant.SourceProofToken + `"}`,
+		`{"source_proof_token":"` + grant.SourceProofToken + `","central_user_id":"` + native.Binding.UserID + `","padding":"` + strings.Repeat("x", 5000) + `"}`,
+	} {
+		invalidRequest := httptest.NewRequest("POST", "https://hub.test/internal/v1/product-runtime/identity/browser/source/verify", strings.NewReader(body))
+		invalidRequest.Header.Set("Authorization", "Bearer "+services["second"].Token)
+		invalidResponse := httptest.NewRecorder()
+		h.ServeHTTP(invalidResponse, invalidRequest)
+		decode(invalidResponse, 403, nil)
+	}
+	duplicateAuthRequest := httptest.NewRequest("POST", "https://hub.test/internal/v1/product-runtime/identity/browser/source/verify", bytes.NewReader(verifyBodyBytes))
+	duplicateAuthRequest.Header.Add("Authorization", "Bearer "+services["second"].Token)
+	duplicateAuthRequest.Header.Add("Authorization", "Bearer "+services["second"].Token)
+	duplicateAuthResponse := httptest.NewRecorder()
+	h.ServeHTTP(duplicateAuthResponse, duplicateAuthRequest)
+	decode(duplicateAuthResponse, 401, nil)
 	decode(request("POST", "/internal/v1/product-runtime/identity/browser/exchange", "second", "", exchange), 403, nil)
 	decode(request("PATCH", "/internal/v1/product-runtime/users/other/access", "second", grant.ProofToken, map[string]any{"user_id": "other", "roles": []string{"member"}, "active": true, "version": 1}), 403, nil)
 	var targetBinding productusers.RuntimeBinding
@@ -186,6 +219,24 @@ func TestNativeBrowserHandoffCreatesCentralSessionAndSecondProductBinding(t *tes
 		t.Fatal("second product binding changed subject")
 	}
 	decode(request("POST", "/internal/v1/product-runtime/bindings", "second", grant.ProofToken, bind), 403, nil)
+	legacyAuthorize := "/auth/product/authorize?" + url.Values{"client_id": {"second"}, "redirect_uri": {clients["second"].RedirectURIs[0]}, "state": {strings.Repeat("l", 43)}, "nonce": {strings.Repeat("m", 43)}, "code_challenge": {challenge}, "code_challenge_method": {"S256"}}.Encode()
+	legacyResult := request("GET", legacyAuthorize, "", "", nil, central)
+	decode(legacyResult, 303, nil)
+	legacyURL, _ := url.Parse(legacyResult.Header().Get("Location"))
+	legacyCode := legacyURL.Query().Get("code")
+	legacyCodeJSON, _ := json.Marshal(legacyCode)
+	legacyCodeHash := sha256.Sum256(legacyCodeJSON)
+	if _, e = p.Exec(ctx, `UPDATE product_browser_codes SET source_session_hash=NULL WHERE code_hash=$1`, hex.EncodeToString(legacyCodeHash[:])); e != nil {
+		t.Fatal(e)
+	}
+	legacyExchange := productauth.BrowserExchange{ClientID: "second", Code: legacyCode, Verifier: verifier, Nonce: strings.Repeat("m", 43), RedirectURI: clients["second"].RedirectURIs[0]}
+	var legacyGrant productauth.BrowserGrant
+	decode(request("POST", "/internal/v1/product-runtime/identity/browser/exchange", "second", "", legacyExchange), 200, &legacyGrant)
+	if legacyGrant.SourceProofToken != "" || legacyGrant.SourceProofExpiresAt != 0 {
+		t.Fatal("legacy pending code incorrectly gained source-session authority")
+	}
+	legacyBind := map[string]string{"local_user_id": "204", "binding_key": "second-jit-204"}
+	decode(request("POST", "/internal/v1/product-runtime/bindings", "second", legacyGrant.ProofToken, legacyBind), 200, nil)
 	var count int
 	if e = p.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&count); e != nil {
 		t.Fatal(e)
@@ -208,6 +259,7 @@ func TestNativeBrowserHandoffCreatesCentralSessionAndSecondProductBinding(t *tes
 	decode(request("POST", "/internal/v1/product-runtime/identity/lifecycle", "router", "", productauth.Lifecycle{LocalUserID: "17", OperationID: "native-password-change", PreviousAuthVersion: 1, NextAuthVersion: 2}), 200, nil)
 	decode(request("POST", "/internal/v1/product-runtime/identity/browser/exchange", "second", "", pendingCode), 403, nil)
 	decode(request("POST", "/internal/v1/product-runtime/bindings", "second", pendingProof.ProofToken, bind), 403, nil)
+	decode(request("POST", "/internal/v1/product-runtime/identity/browser/source/verify", "second", "", verifyBody), 403, nil)
 	decode(request("GET", "/auth/session", "", "", nil, central), 200, &session)
 	if session.Authenticated {
 		t.Fatal("source credential revocation left central browser session")

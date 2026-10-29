@@ -44,9 +44,30 @@ class ProductClientTests(unittest.TestCase):
   for change in [{'browser_sso':'true'},{'instance_id':'../escape'},{'instance_id':''}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
  def test_policy_rejects_secret_wildcards_unknown_scope_and_global_org(self):
-  for change in [{'client_secret':'x'},{'origins':['https://app.test/path']},{'redirect_uris':['https://app.test/%2A']},{'scopes':['admin:all']},{'organization':'built-in'},{'application':'app-built-in'}]:
+  for change in [{'client_secret':'x'},{'unknown_field':'x'},{'origins':['https://app.test/path']},{'redirect_uris':['https://app.test/%2A']},{'scopes':['admin:all']},{'organization':'built-in'},{'application':'app-built-in'}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
   self.m.validate_client(self.client())
+ def test_prepare_preserves_existing_client_account_settings_url(self):
+  existing={'product_id':'llmrouter','client_id':'llmrouter-browser','application':'app-llmrouter-browser','organization':'unihub','redirect_uris':['https://llmrouter.quukk.com/api/unihub/callback'],'origins':['https://llmrouter.quukk.com'],'scopes':['accounts:read','accounts:write','members:read','members:write','catalog:read','subscriptions:read','credits:read','wallets:read','recharges:read','recharges:write','operations:read','orders:read','orders:write','usage:read','usage:all-products','model-credentials:write','access:read','identity:read','settings:write'],'billing_products':['llmrouter'],'password_login':True,'registration':True,'browser_sso':True,'instance_id':'default','account_settings_url':'https://llmrouter.quukk.com/profile'}
+  with tempfile.TemporaryDirectory() as d:
+   registry=Path(d)/'clients.json';registry.write_text(json.dumps([existing]));before=registry.read_bytes()
+   try:plan=self.m.prepare(registry,self.client(),'cert-built-in')
+   except self.m.PolicyError as error:self.fail(str(error))
+   self.assertEqual(registry.read_bytes(),before)
+   self.m.publish_registry(plan)
+   self.assertEqual(json.loads(registry.read_text()),[existing,self.client()])
+ def test_account_settings_url_accepts_exact_registered_origin(self):
+  for value,origins in [('',[]),('https://app.test/settings',['https://app.test']),('https://app.test/profile?tab=credentials',['https://app.test']),('http://127.0.0.1:8080/settings',['http://127.0.0.1:8080'])]:
+   with self.subTest(value=value):
+    client=self.client(account_settings_url=value,origins=origins)
+    try:validated=self.m.validate_client(client)
+    except self.m.PolicyError as error:self.fail(str(error))
+    self.assertEqual(validated['account_settings_url'],value)
+ def test_account_settings_url_rejects_unsafe_or_unregistered_origin(self):
+  values=['https://other.test/settings','https://app.test.evil/settings','https://app.test:443/settings','http://app.test/settings','https://app.test/%2A','https://app.test/profile?tab=%5C','https://app.test/%ZZ','https://user@app.test/settings','https://app.test/settings#credentials','https://app.test/settings with spaces',None,False,[],{}]
+  for value in values:
+   with self.subTest(value=value),self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(account_settings_url=value))
+  with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(account_settings_url='https://app.test/settings',origins=[]))
  def test_all_products_usage_requires_llmrouter(self):
   self.m.validate_client(self.client(product_id='llmrouter',scopes=['usage:all-products']))
   for product in ['agentwiki','superwagie','new-product']:

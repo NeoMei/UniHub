@@ -34,7 +34,7 @@ func (s *Service) currentBrowser(ctx context.Context, raw string) (auth.Claims, 
 		return auth.Claims{}, accounts.ErrForbidden
 	}
 	var claims auth.Claims
-	e := s.pool.QueryRow(ctx, `SELECT s.issuer,s.subject,s.name,s.email,extract(epoch from s.expires_at)::bigint FROM browser_sessions s JOIN identities i ON i.issuer=s.issuer AND i.subject=s.subject JOIN users u ON u.id=i.user_id WHERE s.id_hash=$1 AND s.expires_at>now() AND u.active`, browserSessionDigest(raw)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &claims.ExpiresAt)
+	e := s.pool.QueryRow(ctx, `SELECT s.issuer,s.subject,s.name,s.email,extract(epoch from s.expires_at)::bigint FROM browser_sessions s JOIN identities i ON i.issuer=s.issuer AND i.subject=s.subject JOIN users u ON u.id=i.user_id WHERE s.id_hash=$1 AND s.expires_at>now() AND u.active AND s.created_at>=u.session_not_before AND NOT EXISTS (SELECT 1 FROM identity_revocations v WHERE v.issuer=s.issuer AND v.subject=s.subject AND v.pending)`, browserSessionDigest(raw)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &claims.ExpiresAt)
 	if e != nil {
 		return auth.Claims{}, accounts.ErrForbidden
 	}
