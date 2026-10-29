@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"mime"
 	"net"
 	"net/mail"
 	"net/smtp"
@@ -56,6 +57,17 @@ func (m *RecoveryMailer) DeliverIdentityRecovery(ctx context.Context, email, rec
 		return errors.New("recovery recipient address is invalid")
 	}
 	body := strings.Join([]string{
+		"你好，",
+		"",
+		"有人为你的 UniHub 账号发起密码恢复。",
+		"请求编号：" + request,
+		"此链接 20 分钟内有效且只能使用一次：",
+		"",
+		recoveryURL,
+		"",
+		"请打开链接设置新密码。若非本人操作，请忽略此邮件，账号不会改变。",
+		"",
+		"--- English ---",
 		"Hello,",
 		"",
 		"A password recovery was requested for your UniHub account.",
@@ -68,10 +80,44 @@ func (m *RecoveryMailer) DeliverIdentityRecovery(ctx context.Context, email, rec
 		"ignore this email; your account stays unchanged.",
 		"",
 	}, "\r\n")
-	return m.deliver(ctx, *from, *to, request, body)
+	return m.deliver(ctx, *from, *to, "UniHub 密码恢复 / Password recovery · "+request, body)
 }
 
-func (m *RecoveryMailer) deliver(ctx context.Context, from, to mail.Address, request, body string) error {
+// DeliverMailboxVerification sends a bilingual operator verification message.
+// It is intentionally separate from recovery delivery so a mailbox check cannot
+// be mistaken for a password-reset request.
+func (m *RecoveryMailer) DeliverMailboxVerification(ctx context.Context, email, code string) error {
+	if m == nil {
+		return errors.New("recovery email delivery is not configured")
+	}
+	if email == "" || code == "" {
+		return errors.New("mailbox verification requires recipient and code")
+	}
+	from, err := mail.ParseAddress(m.options.From)
+	if err != nil {
+		return errors.New("configured recovery sender address is invalid")
+	}
+	to, err := mail.ParseAddress(email)
+	if err != nil {
+		return errors.New("verification recipient address is invalid")
+	}
+	body := strings.Join([]string{
+		"你好，",
+		"",
+		"UniHub 邮箱验证校验码：" + code,
+		"请将此校验码回复到本次 UniHub 验收对话，以继续密码恢复验收。",
+		"",
+		"--- English ---",
+		"Hello,",
+		"",
+		"UniHub mailbox verification code: " + code,
+		"Please send this code in the current UniHub acceptance conversation to continue.",
+		"",
+	}, "\r\n")
+	return m.deliver(ctx, *from, *to, "UniHub 邮箱验证 / Mailbox verification", body)
+}
+
+func (m *RecoveryMailer) deliver(ctx context.Context, from, to mail.Address, subject, body string) error {
 	host, _, err := net.SplitHostPort(m.options.Addr)
 	if err != nil {
 		return errors.New("configured recovery SMTP address needs host:port")
@@ -120,7 +166,7 @@ func (m *RecoveryMailer) deliver(ctx context.Context, from, to mail.Address, req
 	headers := []string{
 		"From: " + from.String(),
 		"To: " + to.String(),
-		"Subject: UniHub account recovery " + request,
+		"Subject: " + mime.QEncoding.Encode("UTF-8", subject),
 		"MIME-Version: 1.0",
 		"Content-Type: text/plain; charset=utf-8",
 		"Content-Transfer-Encoding: 8bit",

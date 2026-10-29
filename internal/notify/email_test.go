@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"mime"
 	"net"
 	"net/mail"
 	"strings"
@@ -87,18 +88,62 @@ func TestDeliverIdentityRecoverySendsSingleUseLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	seen := transcript()
+	if got := decodedSubject(t, seen); got != "UniHub 密码恢复 / Password recovery · identity_operation_1" {
+		t.Fatalf("decoded subject = %q", got)
+	}
 	for _, want := range []string{
 		"MAIL FROM:<recovery@quukk.com>",
 		"RCPT TO:<user@example.test>",
-		"Subject: UniHub account recovery identity_operation_1",
 		"Content-Type: text/plain; charset=utf-8",
+		"你好，",
+		"有人为你的 UniHub 账号发起密码恢复。",
+		"请求编号：identity_operation_1",
 		link,
 		"The link is valid for 20 minutes and can be used once:",
+		"请打开链接设置新密码。若非本人操作，请忽略此邮件，账号不会改变。",
 	} {
 		if !strings.Contains(seen, want) {
 			t.Fatalf("transcript missing %q\n%s", want, seen)
 		}
 	}
+}
+
+func TestDeliverMailboxVerificationSendsBilingualCode(t *testing.T) {
+	addr, transcript, done := loopbackSMTP(t)
+	defer done()
+	mailer := NewRecoveryMailer(SMTPOptions{Addr: addr, From: "UniHub <recovery@quukk.com>"})
+	if err := mailer.DeliverMailboxVerification(context.Background(), "user@example.test", "UH-test-code"); err != nil {
+		t.Fatal(err)
+	}
+	seen := transcript()
+	if got := decodedSubject(t, seen); got != "UniHub 邮箱验证 / Mailbox verification" {
+		t.Fatalf("decoded subject = %q", got)
+	}
+	for _, want := range []string{
+		"UniHub 邮箱验证校验码：UH-test-code",
+		"请将此校验码回复到本次 UniHub 验收对话，以继续密码恢复验收。",
+		"UniHub mailbox verification code: UH-test-code",
+		"Please send this code in the current UniHub acceptance conversation to continue.",
+	} {
+		if !strings.Contains(seen, want) {
+			t.Fatalf("transcript missing %q\n%s", want, seen)
+		}
+	}
+}
+
+func decodedSubject(t *testing.T, transcript string) string {
+	t.Helper()
+	for _, line := range strings.Split(transcript, "\n") {
+		if strings.HasPrefix(line, "Subject: ") {
+			decoded, err := (&mime.WordDecoder{}).DecodeHeader(strings.TrimPrefix(line, "Subject: "))
+			if err != nil {
+				t.Fatalf("decode subject: %v", err)
+			}
+			return decoded
+		}
+	}
+	t.Fatal("subject header missing")
+	return ""
 }
 
 func TestDeliverIdentityRecoveryRejectsIncompleteInput(t *testing.T) {
