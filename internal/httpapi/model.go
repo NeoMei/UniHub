@@ -105,6 +105,39 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		if e := decode(w, r, &body); e != nil {
 			return e
 		}
+		// Existing video reservations keep their immutable idempotency contract.
+		// Receipt authority proves the credential scope without authorizing a new
+		// dispatch; ReserveWithWire then checks the stored original request hash.
+		if body.WireOperation == "" || body.WireOperation == "videos.create" {
+			old, oldErr := b.GetCall(r.Context(), "llmrouter", body.CallID)
+			if oldErr == nil && old.Rate.Semantics == "metered_v2" && old.Rate.Metered != nil && old.Rate.Metered.Operation == "video" && old.WireOperation == body.WireOperation {
+				var grant modelaccess.Claims
+				var verifyErr error
+				if body.WireOperation == "" {
+					grant, verifyErr = a.VerifyReceiptForInstance(r.Context(), body.Credential, old.Rate.Model, body.InstanceID)
+				} else {
+					grant, verifyErr = a.VerifyWireForInstance(r.Context(), body.Credential, old.Rate.Model, body.InstanceID, body.WireOperation, true)
+				}
+				if verifyErr != nil {
+					return verifyErr
+				}
+				if grant.ID != old.CredentialID || grant.ActorID != old.ActorID || grant.AccountID != old.AccountID || grant.OriginProductID != old.OriginProductID || old.Rate.ID != body.RateID || (old.InstanceID != "" && old.InstanceID != grant.InstanceID) || (old.TaskID != "" && old.TaskID != body.TaskID) || (grant.CredentialKind != "api_key" && grant.TaskID != body.TaskID) || (grant.CredentialKind == "api_key" && (body.TaskID == "" || len(body.TaskID) > 128)) {
+					return accounts.ErrForbidden
+				}
+				request := billing.ReserveRequest{CredentialID: grant.ID, CallID: body.CallID, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, RequestDigest: body.RequestDigest, RateID: body.RateID, Amount: body.Amount}
+				var result billing.Call
+				var replayErr error
+				if grant.CredentialKind == "api_key" || body.WireOperation != "" {
+					result, replayErr = b.ReserveWithWire(r.Context(), "llmrouter", request, grant.InstanceID, body.TaskID, body.WireOperation)
+				} else {
+					result, replayErr = b.Reserve(r.Context(), "llmrouter", request)
+				}
+				if replayErr != nil {
+					return replayErr
+				}
+				return respond(w, http.StatusOK, result)
+			}
+		}
 		rates, e := b.Rates(r.Context())
 		if e != nil {
 			return e

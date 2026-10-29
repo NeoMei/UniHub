@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 
@@ -99,6 +101,102 @@ func TestPlannedVideoRejectsNewWireAndLegacyReserveButPreservesReceipt(t *testin
 	if got := ledger.balances[wallet.Address(account, "llmrouter")+"/"+billing.CashAsset]; got != 100 {
 		t.Fatalf("denied no-wire call changed cash: %d", got)
 	}
+	// Pre-existing wire calls must be replayable without reauthorizing a new
+	// dispatch, even after the associated historical rate is retired.
+	historyRequest := billing.ReserveRequest{CallID: "wan-history", ActorID: user.ID, AccountID: account, OriginProductID: "superwagie", RequestDigest: "digest", RateID: old.ID, Amount: "10", CredentialID: grant.ID}
+	hashJSON := func(v any) string {
+		bytes, marshalErr := json.Marshal(v)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		sum := sha256.Sum256(bytes)
+		return hex.EncodeToString(sum[:])
+	}
+	baseHash := hashJSON(struct {
+		S                  string
+		R                  billing.ReserveRequest
+		InstanceID, TaskID string
+	}{"llmrouter", historyRequest, "default", "task"})
+	historyHash := hashJSON(struct{ Base, Wire string }{baseHash, "videos.create"})
+	history := billing.Call{ServiceID: "llmrouter", CredentialID: grant.ID, CallID: historyRequest.CallID, ActorID: user.ID, AccountID: account, OriginProductID: "superwagie", RequestDigest: "digest", Rate: old, Held: "10", Charged: "0", PlatformDifference: "0", Status: "RESERVED", WireOperation: "videos.create", InstanceID: "default", TaskID: "task", ChargeAsset: billing.CashAsset, FundingMode: billing.FundingPrepaidCash, FundingProductID: "llmrouter"}
+	historyJSON, marshalErr := json.Marshal(history)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,$3,$4)`, history.CallID, account, historyHash, historyJSON); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO billing_commands(id,account_id,actor_id,kind,request_key,request_digest,command,effect,status) VALUES('old-reserve',$1,$2,'reserve',$3,'hash','{}','{}','APPLIED')`, account, user.ID, history.CallID); err != nil {
+		t.Fatal(err)
+	}
+	replay := map[string]string{"credential": grant.Token, "call_id": history.CallID, "request_digest": "digest", "rate_id": old.ID, "amount": "10", "task_id": "task", "instance_id": "default", "wire_operation": "videos.create"}
+	request("/internal/v1/calls/reserve", replay, 200)
+	replay["amount"] = "11"
+	request("/internal/v1/calls/reserve", replay, 409)
+	replay["amount"] = "10"
+	replay["task_id"] = "other"
+	request("/internal/v1/calls/reserve", replay, 403)
+	replay["task_id"] = "task"
+	replay["request_digest"] = "other-digest"
+	request("/internal/v1/calls/reserve", replay, 409)
+	replay["request_digest"] = "digest"
+	replay["rate_id"] = "chat-model-rate"
+	request("/internal/v1/calls/reserve", replay, 403)
+	replay["rate_id"] = old.ID
+	replay["wire_operation"] = ""
+	request("/internal/v1/calls/reserve", replay, 409)
+	replay["wire_operation"] = "videos.create"
+	replay["call_id"] = "unrecorded-call"
+	request("/internal/v1/calls/reserve", replay, 403)
+	replay["call_id"] = history.CallID
+	other, otherErr := store.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://wan-guard", Subject: "bob"})
+	if otherErr != nil {
+		t.Fatal(otherErr)
+	}
+	otherAccounts, otherErr := store.ListAccounts(ctx, other.ID)
+	if otherErr != nil {
+		t.Fatal(otherErr)
+	}
+	otherGrant, otherErr := access.Issue(ctx, other.ID, otherAccounts[0].ID, modelaccess.Request{OriginProductID: "superwagie", Models: []string{"wan2.6-t2v"}, TaskID: "task"})
+	if otherErr != nil {
+		t.Fatal(otherErr)
+	}
+	replay["credential"] = otherGrant.Token
+	request("/internal/v1/calls/reserve", replay, 403)
+	replay["credential"] = "uh_model_invalid"
+	request("/internal/v1/calls/reserve", replay, 403)
+	replay["credential"] = grant.Token
+	replay["instance_id"] = "other-instance"
+	request("/internal/v1/calls/reserve", replay, 403)
+	replay["instance_id"] = "default"
+	untrustedBody, marshalErr := json.Marshal(replay)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if res := call(h, "POST", "/internal/v1/calls/reserve", "wrong-service-key", string(untrustedBody), ""); res.Code != 401 {
+		t.Fatalf("untrusted service received %d", res.Code)
+	}
+	// Old task-credential calls had no wire or scoped task in the stored hash.
+	legacyRequest := historyRequest
+	legacyRequest.CallID = "wan-history-legacy"
+	legacyHash := hashJSON(struct {
+		S string
+		R billing.ReserveRequest
+	}{"llmrouter", legacyRequest})
+	legacy := history
+	legacy.CallID, legacy.WireOperation, legacy.InstanceID, legacy.TaskID = legacyRequest.CallID, "", "", ""
+	legacyJSON, legacyErr := json.Marshal(legacy)
+	if legacyErr != nil {
+		t.Fatal(legacyErr)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,$3,$4)`, legacy.CallID, account, legacyHash, legacyJSON); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO billing_commands(id,account_id,actor_id,kind,request_key,request_digest,command,effect,status) VALUES('old-legacy-reserve',$1,$2,'reserve',$3,'hash','{}','{}','APPLIED')`, account, user.ID, legacy.CallID); err != nil {
+		t.Fatal(err)
+	}
+	legacyReplay := map[string]string{"credential": grant.Token, "call_id": legacy.CallID, "request_digest": "digest", "rate_id": old.ID, "amount": "10", "task_id": "task", "instance_id": "default"}
+	request("/internal/v1/calls/reserve", legacyReplay, 200)
 	for _, tc := range []struct{ model, wire, op string }{{"chat-model", "chat.completions.create", "chat"}, {"embed-model", "embeddings.create", "embedding"}} {
 		request("/internal/v1/model-credentials/verify", map[string]string{"token": grant.Token, "model": tc.model, "wire_operation": tc.wire, "instance_id": "default"}, 200)
 		request("/internal/v1/calls/reserve", map[string]string{"credential": grant.Token, "call_id": tc.model + "-call", "request_digest": "digest", "rate_id": tc.model + "-rate", "amount": "10", "task_id": "task", "instance_id": "default", "wire_operation": tc.wire}, 200)
@@ -108,4 +206,9 @@ func TestPlannedVideoRejectsNewWireAndLegacyReserveButPreservesReceipt(t *testin
 			t.Fatalf("%s settle: %+v %v", tc.model, settled, settleErr)
 		}
 	}
+	if err := b.RetireRate(ctx, user.ID, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	request("/internal/v1/calls/reserve", replay, 200)
+	request("/internal/v1/calls/reserve", legacyReplay, 200)
 }
