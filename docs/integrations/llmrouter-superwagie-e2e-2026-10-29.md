@@ -85,3 +85,16 @@
 受影响的 metering/billing/modelaccess race 在隔离 PostgreSQL/Formance 通过；修复严格查询解析后，整个 HTTP API 包 race 通过（81.386 秒），启用了实际冻结网关的 HTTP 和跨仓库测试。跨仓库测试首次因网关 race 冷编译超过既有 60 秒上限失败，单独完成编译后重跑通过，没有放宽超时或修改生产逻辑。
 
 实际浏览器默认的 product_broker 会话尚不能调用仅接受 OIDC bearer 的中央财务 BFF。当前实现正在补有限的双凭据授权通道，复用既有短期 actor 证明、登记客户端策略、账户角色与业务处理；不合并身份，也不混用原生 LR_QUOTA 和中央 CNY/CREDIT 账本。这一缺口仍使产品页面及整体链路保持未通过状态。
+
+
+## v0.4.24 中央产品财务通道上线
+
+上海时间 2026-10-30 02:03（UTC 2026-10-29 18:03）中心已上线 `449fd81afc6c7313f5638266664ec298eccdf90a`，实际二进制 SHA256 `42ebf3eea17d18ae81766f8d442813211c50f35a94f8321f4086a62b20170837`。新增私有有限财务通道同时要求固定产品服务凭据和新鲜短期 `upa_` 用户证明，绑定唯一登记客户端，继续使用原业务处理、账户角色、产品范围与幂等规则。SDK 使用独立且验证 TLS 的传输，不接受自定义连接覆盖，不跟随跳转，也不自动重放写入。
+
+`llmrouter` 服务于 18:04 UTC 显式增加 `finance:read`、`finance:write` 和 `finance_client_id=llmrouter-browser`，服务令牌、其他服务、SMTP、身份配置、付款沙盒及验证门禁保留。实际进程环境、二进制、systemd 单元和身份容器核对通过。切换前全量物理备份 `/opt/unihub/backups/e2e-v0424-20261030T0205` 的隔离恢复通过；部署源码和两个操作脚本均经独立审查，回滚与结果记录保护已修正并有离线故障用例。旧版 v0.4.23 保留。
+
+隔离真实 PostgreSQL/Formance 的整个 HTTP API 包及身份/权限/配置 race 测试通过。最终明确命名的 `TestProductFinanceSandboxLedgerReplayAndFreshActorIsolation` 在真实 Formance 中通过：产品钱包恰好增加 1000000 单位、统一钱包不变、重复操作无二次入账；过期和认证版本撤销分别验证。17:xx 的一次定向测试误用了改名前名称，仅显示“no tests to run”，该结果已明确纠正，不作为通过证据；后续已检查新名称的实际 pass 事件且无 skip。
+
+18:05 UTC 受控服务器 actor 探针实际读取到原专用用户/付款账户、钱包 `9999972 CNY/6` 和原验收 Key 的 `used=28`、`held=0`。仅服务凭据或仅 actor 均为 401，携带 Origin 和跨产品查询均为 403。该探针未创建充值或 Key，也未发起模型调用。
+
+受控 actor 只证明中央有限财务通道，不能证明实际产品浏览器源会话撤销。默认 product_broker 登录仍需要可撤销源会话证明及产品侧密封 SID 绑定，当前产品硬门禁保留。独立原生认证域与中央派生域按既有设计区分，不宣称中央退出自动撤销所有独立原生 Key/会话。LLMRouter 产品 UI、知识库、SuperWagie 桌面及 Key 最终撤销验收仍未完成。
