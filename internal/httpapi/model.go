@@ -2,9 +2,14 @@ package httpapi
 
 import (
 	"net/http"
+	"slices"
+	"strings"
+	"time"
 	"unihub/internal/accounts"
+	"unihub/internal/auth"
 	"unihub/internal/billing"
 	"unihub/internal/modelaccess"
+	"unihub/internal/productusers"
 )
 
 func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
@@ -69,6 +74,9 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		var e error
 		if body.Purpose == "result_read" {
 			v, e = a.VerifyResultReadForInstance(r.Context(), body.Token, body.Model, body.InstanceID, body.WireOperation)
+			if e == nil {
+				e = s.authorizeResultReadActor(r, v)
+			}
 		} else if body.Purpose != "" && body.Purpose != "receipt" {
 			return modelaccess.ErrCredential
 		} else if body.WireOperation != "" {
@@ -135,4 +143,41 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		}
 		return respond(w, 200, v)
 	}))
+}
+
+// authorizeResultReadActor is a point-in-time prerequisite, not a substitute
+// for linearizing result delivery with account or login revocation.
+func (s *api) authorizeResultReadActor(r *http.Request, grant modelaccess.Claims) error {
+	raw, ok := runtimeBearer(r, "X-UniHub-Actor-Authorization")
+	if !ok || strings.HasPrefix(raw, "upa_") || strings.HasPrefix(raw, "ubp_") || s.options.Identity == nil || s.options.ProductUsers == nil {
+		return errRuntimeActor
+	}
+	var claims auth.Claims
+	matches := 0
+	for clientID, verifier := range s.options.ProductVerifiers {
+		policy, ok := s.options.ProductAccess[clientID]
+		if !ok || policy.ClientID != clientID || policy.ProductID != grant.OriginProductID || productusers.Instance(policy.InstanceID) != grant.InstanceID || !slices.Contains(policy.Scopes, "access:read") || verifier == nil {
+			continue
+		}
+		candidate, err := verifier.Verify(r.Context(), raw)
+		if err == nil && candidate.ExpiresAt > time.Now().Unix() && candidate.Issuer != "" && candidate.Subject != "" {
+			claims = candidate
+			matches++
+		}
+	}
+	if matches != 1 || !s.options.Identity.SessionAllowed(r.Context(), raw) {
+		return errRuntimeActor
+	}
+	if s.options.PlatformAdmin != nil {
+		if err := s.options.PlatformAdmin.CredentialAllowed(r.Context(), grant.ActorID, claims.IssuedAt); err != nil {
+			return accounts.ErrForbidden
+		}
+	}
+	if err := s.options.ModelAccess.RequireResultReadIdentity(r.Context(), grant, claims.Issuer, claims.Subject); err != nil {
+		return err
+	}
+	if r.Context().Err() != nil || claims.ExpiresAt <= time.Now().Unix() {
+		return errRuntimeActor
+	}
+	return nil
 }

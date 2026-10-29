@@ -325,6 +325,32 @@ func (s *Service) VerifyResultReadForInstance(ctx context.Context, token, model,
 	return c, nil
 }
 
+// RequireResultReadIdentity checks the verified product login against the task
+// holder and present membership; it does not serialize a later result read
+// against revocation, which must be established separately by the caller.
+func (s *Service) RequireResultReadIdentity(ctx context.Context, c Claims, issuer, subject string) error {
+	if issuer == "" || subject == "" || s.productUsers == nil || !s.productUsers.Managed(c.OriginProductID, c.InstanceID) {
+		return ErrCredential
+	}
+	var allowed bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (
+        SELECT 1 FROM model_credentials mc
+        JOIN users u ON u.id=mc.actor_id AND u.active=true
+        JOIN identities i ON i.user_id=u.id AND i.issuer=$3 AND i.subject=$4
+        JOIN account_members m ON m.user_id=mc.actor_id AND m.account_id=mc.account_id
+        WHERE mc.id=$1 AND mc.actor_id=$2 AND mc.account_id=$5 AND mc.credential_kind='task'
+          AND mc.origin_product_id=$6 AND COALESCE(NULLIF(mc.instance_id,''),'default')=$7
+          AND mc.task_id=$8 AND mc.revoked_at IS NULL AND mc.expires_at>now()
+    )`, c.ID, c.ActorID, issuer, subject, c.AccountID, c.OriginProductID, c.InstanceID, c.TaskID).Scan(&allowed)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return accounts.ErrForbidden
+	}
+	return s.productUsers.RequirePermissionOn(ctx, s.pool, c.ActorID, c.OriginProductID, c.InstanceID, "product:use")
+}
+
 func (s *Service) verify(ctx context.Context, token, model, instance string, enforceRate bool) (Claims, error) {
 	if !(len(token) == 73 && strings.HasPrefix(token, "uh_model_")) && !(len(token) == 71 && strings.HasPrefix(token, "uh_key_")) {
 		return Claims{}, ErrCredential

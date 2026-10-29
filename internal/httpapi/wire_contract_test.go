@@ -160,7 +160,8 @@ func TestWireOperationHTTPContract(t *testing.T) {
 	// Access to a private result has stricter authority than internal
 	// reconciliation and must not depend on a currently published tariff.
 	verify["purpose"] = "result_read"
-	request("/internal/v1/model-credentials/verify", verify, 200)
+	// Result reads require current user identity even after rate retirement.
+	request("/internal/v1/model-credentials/verify", verify, 401)
 	verify["purpose"] = "unexpected"
 	request("/internal/v1/model-credentials/verify", verify, 403)
 	verify["purpose"] = "result_read"
