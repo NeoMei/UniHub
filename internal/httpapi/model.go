@@ -67,7 +67,11 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		}
 		var v modelaccess.Claims
 		var e error
-		if body.WireOperation != "" {
+		if body.Purpose == "result_read" {
+			v, e = a.VerifyResultReadForInstance(r.Context(), body.Token, body.Model, body.InstanceID, body.WireOperation)
+		} else if body.Purpose != "" && body.Purpose != "receipt" {
+			return modelaccess.ErrCredential
+		} else if body.WireOperation != "" {
 			v, e = a.VerifyWireForInstance(r.Context(), body.Token, body.Model, body.InstanceID, body.WireOperation, body.Purpose == "receipt")
 		} else if body.Purpose == "receipt" {
 			v, e = a.VerifyReceiptForInstance(r.Context(), body.Token, body.Model, body.InstanceID)

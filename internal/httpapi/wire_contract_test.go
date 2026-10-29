@@ -157,6 +157,35 @@ func TestWireOperationHTTPContract(t *testing.T) {
 	if operations, ok := out["operations"].(map[string]any); !ok || len(operations["image"].([]any)) == 0 || operations["image"].([]any)[0] != "images.generations.create" {
 		t.Fatalf("missing receipt authorization: %v", out)
 	}
+	// Access to a private result has stricter authority than internal
+	// reconciliation and must not depend on a currently published tariff.
+	verify["purpose"] = "result_read"
+	request("/internal/v1/model-credentials/verify", verify, 200)
+	verify["purpose"] = "unexpected"
+	request("/internal/v1/model-credentials/verify", verify, 403)
+	verify["purpose"] = "result_read"
+	encoded, err := json.Marshal(verify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthenticated := call(h, "POST", "/internal/v1/model-credentials/verify", "wrong-service-key", string(encoded), "")
+	if unauthenticated.Code != 401 && unauthenticated.Code != 403 {
+		t.Fatalf("result authority accepted an unauthenticated caller: %d", unauthenticated.Code)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE users SET active=false WHERE id=$1`, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	request("/internal/v1/model-credentials/verify", verify, 403)
+	verify["purpose"] = "receipt"
+	request("/internal/v1/model-credentials/verify", verify, 200)
+	if _, err := pool.Exec(ctx, `UPDATE users SET active=true WHERE id=$1`, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	verify["purpose"] = "result_read"
+	if err := access.Revoke(ctx, user.ID, account, grant.ID); err != nil {
+		t.Fatal(err)
+	}
+	request("/internal/v1/model-credentials/verify", verify, 403)
 	verify["token"] = "invalid"
 	request("/internal/v1/model-credentials/verify", verify, 403)
 }

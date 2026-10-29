@@ -187,3 +187,78 @@ func TestGlobalDisableBlocksOldModelCapabilityButKeepsReceiptReconciliation(t *t
 		t.Fatalf("historical receipt stranded: %v", e)
 	}
 }
+
+func TestResultReadRequiresCurrentMembershipAndLiveCredential(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if err := database.Migrate(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	a := accounts.New(p)
+	owner, err := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://result-read", Subject: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://result-read", Subject: "member"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	team, err := a.CreateTeam(ctx, owner.ID, "Team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := a.Invite(ctx, owner.ID, team.ID, member.ID, "member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.AcceptInvitation(ctx, member.ID, invite.ID); err != nil {
+		t.Fatal(err)
+	}
+	s := New(p, a, &catalog{time.Now().Add(time.Hour)})
+	grant, err := s.Issue(ctx, member.ID, team.ID, Request{OriginProductID: "superwagie", Models: []string{"test-model"}, TaskID: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := func() error {
+		_, err := s.VerifyResultReadForInstance(ctx, grant.Token, "test-model", "default", "embeddings.create")
+		return err
+	}
+	if err = verify(); err != nil {
+		t.Fatalf("member denied result authority: %v", err)
+	}
+	key, err := s.issue(ctx, member.ID, team.ID, Request{OriginProductID: "superwagie", Models: []string{"test-model"}}, &APIKeyRequest{Name: "key", InstanceID: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.VerifyResultReadForInstance(ctx, key.Token, "test-model", "default", "embeddings.create"); err == nil {
+		t.Fatal("durable API key accepted for task result authority")
+	}
+	for _, tc := range []struct{ model, instance, wire string }{
+		{"test-model", "", "embeddings.create"},
+		{"test-model", "other", "embeddings.create"},
+		{"other-model", "default", "embeddings.create"},
+		{"test-model", "default", "unknown.operation"},
+	} {
+		if _, err = s.VerifyResultReadForInstance(ctx, grant.Token, tc.model, tc.instance, tc.wire); err == nil {
+			t.Fatalf("unexpected authority for model=%q instance=%q wire=%q", tc.model, tc.instance, tc.wire)
+		}
+	}
+	if _, err = p.Exec(ctx, `UPDATE model_credentials SET expires_at=now()-interval '1 second' WHERE id=$1`, grant.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = verify(); err == nil {
+		t.Fatal("expired task credential retained result authority")
+	}
+	if _, err = p.Exec(ctx, `UPDATE model_credentials SET expires_at=$2 WHERE id=$1`, grant.ID, grant.ExpiresAt); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.RemoveMember(ctx, owner.ID, team.ID, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = verify(); err == nil {
+		t.Fatal("departed member retained result authority")
+	}
+	if _, err = s.VerifyReceipt(ctx, grant.Token, "test-model"); err != nil {
+		t.Fatalf("internal receipt reconciliation denied: %v", err)
+	}
+}

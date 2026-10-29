@@ -293,6 +293,38 @@ func (s *Service) VerifyReceiptForInstance(ctx context.Context, token, model, in
 	return s.verify(ctx, token, model, instance, false)
 }
 
+// VerifyResultReadForInstance additionally checks that the credential holder
+// is currently active and remains an account member. This point-in-time check
+// does not authenticate a login session or prevent later revocation; callers
+// must not use it alone as authority to return private result data.
+func (s *Service) VerifyResultReadForInstance(ctx context.Context, token, model, instance, wire string) (Claims, error) {
+	if instance == "" || !strings.HasPrefix(token, "uh_model_") {
+		return Claims{}, ErrCredential
+	}
+	c, err := s.VerifyWireForInstance(ctx, token, model, instance, wire, true)
+	if err != nil {
+		return Claims{}, err
+	}
+	if c.CredentialKind != "task" {
+		return Claims{}, ErrCredential
+	}
+	var authorized bool
+	err = s.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM model_credentials mc
+		JOIN users u ON u.id=mc.actor_id AND u.active=true
+		JOIN account_members m ON m.user_id=mc.actor_id AND m.account_id=mc.account_id
+		WHERE mc.id=$1 AND mc.token_hash=$2 AND mc.actor_id=$3 AND mc.account_id=$4
+		AND mc.credential_kind='task' AND mc.revoked_at IS NULL AND mc.expires_at>now()
+	)`, c.ID, digest(token), c.ActorID, c.AccountID).Scan(&authorized)
+	if err != nil {
+		return Claims{}, err
+	}
+	if !authorized {
+		return Claims{}, ErrCredential
+	}
+	return c, nil
+}
+
 func (s *Service) verify(ctx context.Context, token, model, instance string, enforceRate bool) (Claims, error) {
 	if !(len(token) == 73 && strings.HasPrefix(token, "uh_model_")) && !(len(token) == 71 && strings.HasPrefix(token, "uh_key_")) {
 		return Claims{}, ErrCredential
