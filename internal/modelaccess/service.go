@@ -50,19 +50,20 @@ type Request struct {
 	TaskID          string   `json:"task_id"`
 }
 type Claims struct {
-	CredentialKind        string    `json:"credential_kind,omitempty"`
-	InstanceID            string    `json:"instance_id,omitempty"`
-	FundingMode           string    `json:"funding_mode"`
-	Asset                 string    `json:"asset"`
-	BillingProfileVersion int64     `json:"billing_profile_version"`
-	ID                    string    `json:"id"`
-	Audience              string    `json:"audience"`
-	ActorID               string    `json:"actor_id"`
-	AccountID             string    `json:"account_id"`
-	OriginProductID       string    `json:"origin_product_id"`
-	Models                []string  `json:"models"`
-	TaskID                string    `json:"task_id"`
-	ExpiresAt             time.Time `json:"expires_at"`
+	Operations            map[string][]string `json:"operations,omitempty"`
+	CredentialKind        string              `json:"credential_kind,omitempty"`
+	InstanceID            string              `json:"instance_id,omitempty"`
+	FundingMode           string              `json:"funding_mode"`
+	Asset                 string              `json:"asset"`
+	BillingProfileVersion int64               `json:"billing_profile_version"`
+	ID                    string              `json:"id"`
+	Audience              string              `json:"audience"`
+	ActorID               string              `json:"actor_id"`
+	AccountID             string              `json:"account_id"`
+	OriginProductID       string              `json:"origin_product_id"`
+	Models                []string            `json:"models"`
+	TaskID                string              `json:"task_id"`
+	ExpiresAt             time.Time           `json:"expires_at"`
 }
 type Grant struct {
 	Claims
@@ -201,6 +202,9 @@ func (s *Service) issue(ctx context.Context, actor, account string, r Request, k
 	// Real billing rates are re-read inside the transaction, so retirement cannot
 	// leave a newly issued capability using stale catalog state.
 	if _, ok := s.eligibility.(*billing.Service); ok {
+		if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('unihub:billing-rate-catalog',0))`); e != nil {
+			return Grant{}, e
+		}
 		var ratesData []byte
 		if e = tx.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(snapshot),'[]'::jsonb) FROM billing_rates WHERE status='published'`).Scan(&ratesData); e != nil {
 			return Grant{}, e
@@ -243,6 +247,41 @@ func (s *Service) VerifyForInstance(ctx context.Context, token, model, instance 
 	return s.verify(ctx, token, model, instance, true)
 }
 
+// VerifyWireForInstance authorizes a fixed gateway route for the requested model.
+// Historical receipt reads retain credential authentication but do not depend on
+// the current tariff catalog.
+func (s *Service) VerifyWireForInstance(ctx context.Context, token, model, instance, wire string, receipt bool) (Claims, error) {
+	if wire == "" || model == "" || billing.WireBillingOperation(wire) == "" {
+		return Claims{}, ErrCredential
+	}
+	c, err := s.verify(ctx, token, model, instance, !receipt)
+	if err != nil {
+		return Claims{}, err
+	}
+	if !receipt {
+		rates, err := s.eligibility.Rates(ctx)
+		if err != nil {
+			return Claims{}, err
+		}
+		found := false
+		for _, rate := range rates {
+			asset := rate.Asset
+			if asset == "" {
+				asset = billing.CreditAsset
+			}
+			if rate.Status == "published" && rate.Model == model && asset == c.Asset && billing.RateMatchesWire(rate, wire) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return Claims{}, ErrCredential
+		}
+	}
+	c.Operations = map[string][]string{model: {wire}}
+	return c, nil
+}
+
 // VerifyReceipt authenticates the immutable credential scope for a historical
 // call. It deliberately does not require a currently published rate: rate
 // retirement must not make durable receipts unreconcilable.
@@ -252,6 +291,64 @@ func (s *Service) VerifyReceipt(ctx context.Context, token, model string) (Claim
 
 func (s *Service) VerifyReceiptForInstance(ctx context.Context, token, model, instance string) (Claims, error) {
 	return s.verify(ctx, token, model, instance, false)
+}
+
+// VerifyResultReadForInstance additionally checks that the credential holder
+// is currently active and remains an account member. This point-in-time check
+// does not authenticate a login session or prevent later revocation; callers
+// must not use it alone as authority to return private result data.
+func (s *Service) VerifyResultReadForInstance(ctx context.Context, token, model, instance, wire string) (Claims, error) {
+	if instance == "" || !strings.HasPrefix(token, "uh_model_") {
+		return Claims{}, ErrCredential
+	}
+	c, err := s.VerifyWireForInstance(ctx, token, model, instance, wire, true)
+	if err != nil {
+		return Claims{}, err
+	}
+	if c.CredentialKind != "task" {
+		return Claims{}, ErrCredential
+	}
+	var authorized bool
+	err = s.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM model_credentials mc
+		JOIN users u ON u.id=mc.actor_id AND u.active=true
+		JOIN account_members m ON m.user_id=mc.actor_id AND m.account_id=mc.account_id
+		WHERE mc.id=$1 AND mc.token_hash=$2 AND mc.actor_id=$3 AND mc.account_id=$4
+		AND mc.credential_kind='task' AND mc.revoked_at IS NULL AND mc.expires_at>now()
+	)`, c.ID, digest(token), c.ActorID, c.AccountID).Scan(&authorized)
+	if err != nil {
+		return Claims{}, err
+	}
+	if !authorized {
+		return Claims{}, ErrCredential
+	}
+	return c, nil
+}
+
+// RequireResultReadIdentity checks the verified product login against the task
+// holder and present membership; it does not serialize a later result read
+// against revocation, which must be established separately by the caller.
+func (s *Service) RequireResultReadIdentity(ctx context.Context, c Claims, issuer, subject string) error {
+	if issuer == "" || subject == "" || s.productUsers == nil || !s.productUsers.Managed(c.OriginProductID, c.InstanceID) {
+		return ErrCredential
+	}
+	var allowed bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (
+        SELECT 1 FROM model_credentials mc
+        JOIN users u ON u.id=mc.actor_id AND u.active=true
+        JOIN identities i ON i.user_id=u.id AND i.issuer=$3 AND i.subject=$4
+        JOIN account_members m ON m.user_id=mc.actor_id AND m.account_id=mc.account_id
+        WHERE mc.id=$1 AND mc.actor_id=$2 AND mc.account_id=$5 AND mc.credential_kind='task'
+          AND mc.origin_product_id=$6 AND COALESCE(NULLIF(mc.instance_id,''),'default')=$7
+          AND mc.task_id=$8 AND mc.revoked_at IS NULL AND mc.expires_at>now()
+    )`, c.ID, c.ActorID, issuer, subject, c.AccountID, c.OriginProductID, c.InstanceID, c.TaskID).Scan(&allowed)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return accounts.ErrForbidden
+	}
+	return s.productUsers.RequirePermissionOn(ctx, s.pool, c.ActorID, c.OriginProductID, c.InstanceID, "product:use")
 }
 
 func (s *Service) verify(ctx context.Context, token, model, instance string, enforceRate bool) (Claims, error) {
@@ -273,6 +370,14 @@ func (s *Service) verify(ctx context.Context, token, model, instance string, enf
 	c.ExpiresAt = c.ExpiresAt.UTC()
 	if c.CredentialKind == "api_key" && (instance == "" || instance != c.InstanceID) {
 		return Claims{}, ErrCredential
+	}
+	if c.CredentialKind != "api_key" {
+		if c.InstanceID == "" {
+			c.InstanceID = "default"
+		}
+		if instance != "" && instance != c.InstanceID {
+			return Claims{}, ErrCredential
+		}
 	}
 	if e = json.Unmarshal(data, &c.Models); e != nil {
 		return c, e
@@ -415,18 +520,8 @@ func (s *Service) productModels(ctx context.Context, q accounts.Querier, product
 	return profile.Usage.Models, nil
 }
 func checkModelRates(models, allowlist []string, rates []billing.Rate, asset string) error {
-	counts := map[string]int{}
-	for _, r := range rates {
-		a := r.Asset
-		if a == "" {
-			a = billing.CreditAsset
-		}
-		if r.Status == "published" && a == asset {
-			counts[r.Model]++
-		}
-	}
-	for _, m := range models {
-		if m == "" || (allowlist != nil && !slices.Contains(allowlist, m)) || counts[m] != 1 {
+	for _, model := range models {
+		if model == "" || (allowlist != nil && !slices.Contains(allowlist, model)) || !billing.ModelRatesUnambiguous(rates, model, asset) {
 			return accounts.ErrForbidden
 		}
 	}
@@ -474,7 +569,7 @@ func (s *Service) Consistency(ctx context.Context, product, asset string) (Consi
 		if models != nil && !slices.Contains(models, m) {
 			out.ExtraModels = append(out.ExtraModels, m)
 		}
-		if n > 1 {
+		if n > 1 && !billing.ModelRatesUnambiguous(rates, m, asset) {
 			out.DuplicateModels = append(out.DuplicateModels, m)
 		}
 	}

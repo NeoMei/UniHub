@@ -126,6 +126,39 @@ func TestPlatformFinanceScopedWritesAndOriginalAllowlist(t *testing.T) {
 		t.Fatal("mutation survived failed audit", e)
 	}
 }
+
+func TestAdminRateMutationsWaitForActiveReservation(t *testing.T) {
+	s, authority, pool, ids, _ := adminFixture(t)
+	ctx := context.Background()
+	rate := billing.Rate{ID: "admin-lock-rate", Model: "model", Asset: billing.CashAsset, Semantics: "exclusive_v1", Input: billing.Rational{Numerator: "1", Denominator: "1"}, Output: billing.Rational{Numerator: "1", Denominator: "1"}, CacheRead: billing.Rational{Numerator: "0", Denominator: "1"}, CacheWrite: billing.Rational{Numerator: "0", Denominator: "1"}, Reasoning: billing.Rational{Numerator: "0", Denominator: "1"}}
+	publish := billing.AdminOperation{Action: "rate.publish", ID: rate.ID, Rate: rate, Version: "0", Reason: "test"}
+	if _, err := s.Administer(ctx, authority, ids["finance_admin"], publish); err != nil {
+		t.Fatal(err)
+	}
+	retire := billing.AdminOperation{Action: "rate.retire", ID: rate.ID, Version: revision(t, pool, "billing_rates", rate.ID), Reason: "test"}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Rollback(tx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('unihub:billing-rate-catalog',0))`); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []billing.AdminOperation{retire, func() billing.AdminOperation { r := publish; r.ID = "admin-lock-next"; r.Rate.ID = r.ID; return r }()} {
+		blocked, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		_, err := s.Administer(blocked, authority, ids["finance_admin"], action)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s crossed active reservation: %v", action.Action, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Administer(ctx, authority, ids["finance_admin"], retire); err != nil {
+		t.Fatal(err)
+	}
+}
 func TestPlatformFinanceLedgerAuthoritativeAndOutage(t *testing.T) {
 	s, authority, pool, ids, account := adminFixture(t)
 	ctx := context.Background()

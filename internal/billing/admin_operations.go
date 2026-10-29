@@ -125,6 +125,9 @@ func (s *Service) Administer(ctx context.Context, authority AdminAuthority, acto
 		}
 		out = o
 	case "rate.publish":
+		if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('unihub:billing-rate-catalog',0))`); e != nil {
+			return nil, e
+		}
 		rate := r.Rate
 		if r.Version != "" && r.Version != "0" {
 			return nil, ErrConflict
@@ -144,6 +147,9 @@ func (s *Service) Administer(ctx context.Context, authority AdminAuthority, acto
 		}
 		out = rate
 	case "rate.retire":
+		if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('unihub:billing-rate-catalog',0))`); e != nil {
+			return nil, e
+		}
 		var raw []byte
 		var version, status string
 		if e = tx.QueryRow(ctx, `SELECT snapshot,md5(snapshot::text),status FROM billing_rates WHERE id=$1 FOR UPDATE`, r.ID).Scan(&raw, &version, &status); e != nil {

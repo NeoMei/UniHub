@@ -177,6 +177,7 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type Call struct {
+	WireOperation         string       `json:"wire_operation,omitempty"`
 	InstanceID            string       `json:"instance_id,omitempty"`
 	TaskID                string       `json:"task_id,omitempty"`
 	CashHoldAddress       string       `json:"cash_hold_address,omitempty"`
