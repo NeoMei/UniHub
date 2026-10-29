@@ -1,7 +1,10 @@
 package httpapi
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"unihub/internal/accounts"
 	"unihub/internal/productauth"
 )
@@ -88,6 +91,49 @@ func (s *api) productAuthRoutes(m *http.ServeMux) {
 			return e
 		}
 		return respond(w, 200, out)
+	})
+	add("POST /internal/v1/product-runtime/identity/browser/source/verify", "identity:browser", func(w http.ResponseWriter, r *http.Request, c RuntimeService) error {
+		if c.FinanceClientID == "" || r.ContentLength > 4096 || len(r.Header.Values("Origin")) != 0 {
+			return accounts.ErrForbidden
+		}
+		var in struct {
+			SourceProofToken string `json:"source_proof_token"`
+			CentralUserID    string `json:"central_user_id"`
+		}
+		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		start, err := d.Token()
+		if err != nil || start != json.Delim('{') {
+			return accounts.ErrForbidden
+		}
+		seen := map[string]bool{}
+		for d.More() {
+			keyToken, tokenErr := d.Token()
+			key, ok := keyToken.(string)
+			if tokenErr != nil || !ok || seen[key] {
+				return accounts.ErrForbidden
+			}
+			seen[key] = true
+			switch key {
+			case "source_proof_token":
+				err = d.Decode(&in.SourceProofToken)
+			case "central_user_id":
+				err = d.Decode(&in.CentralUserID)
+			default:
+				return accounts.ErrForbidden
+			}
+			if err != nil {
+				return accounts.ErrForbidden
+			}
+		}
+		end, endErr := d.Token()
+		if endErr != nil || end != json.Delim('}') || len(seen) != 2 || d.Decode(&struct{}{}) != io.EOF || len(in.SourceProofToken) != len("ubsp_")+64 || len(in.CentralUserID) == 0 || len(in.CentralUserID) > 256 || strings.ContainsAny(in.CentralUserID, "\r\n\x00") {
+			return accounts.ErrForbidden
+		}
+		if err := s.options.ProductAuth.VerifyBrowserSourceProof(r.Context(), in.SourceProofToken, c.ProductID, c.InstanceID, c.FinanceClientID, in.CentralUserID); err != nil {
+			return accounts.ErrForbidden
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
 	})
 
 	add("GET /internal/v1/product-runtime/identity/{local}", "identity:lookup", func(w http.ResponseWriter, r *http.Request, c RuntimeService) error {
