@@ -45,6 +45,12 @@ func TestNativeMeteredUnitsAndAssetsHTTPAcceptance(t *testing.T) {
 					f.request("POST", "/ops/v1/rates", "alice", rate, "", 201, nil)
 					grant := f.credential(mode)
 					id := "native-" + tc.name
+					if tc.operation == "video" {
+						f.request("POST", "/internal/v1/calls/reserve", billingModesServiceToken, billingModesReserve(grant, id, rate.ID, "100"), "", 403, nil)
+						f.request("GET", "/internal/v1/calls/"+id, billingModesServiceToken, nil, "", 404, nil)
+						f.request("POST", "/ops/v1/rates/"+rate.ID+"/retire", "alice", nil, "", 204, nil)
+						return
+					}
 					f.reserve(grant, id, rate.ID, "100")
 					usage := billing.Usage{Metered: &metering.Usage{Version: "metered_v2", Operation: tc.operation, State: "confirmed", Source: "supplier_fixture", Measurements: []metering.Measurement{{Key: tc.key, Unit: tc.unit, ProviderUnit: tc.namespace, Quantity: metering.Quantity{Value: tc.value, Scale: tc.scale}}}}}
 					body := map[string]any{"usage": usage, "provider_cost": "0"}
@@ -64,11 +70,11 @@ func TestNativeMeteredUnitsAndAssetsHTTPAcceptance(t *testing.T) {
 				})
 			}
 			if asset == billing.CashAsset {
-				f.balance("llmrouter", 999959)
+				f.balance("llmrouter", 999971)
 			} else {
 				var batches []billing.Batch
 				f.request("GET", "/v1/accounts/"+f.account+"/credits", "alice", nil, "", 200, &batches)
-				if len(batches) != 1 || batches[0].Available != "959" || batches[0].Consumed != "41" || batches[0].Reserved != "0" {
+				if len(batches) != 1 || batches[0].Available != "971" || batches[0].Consumed != "29" || batches[0].Reserved != "0" {
 					t.Fatalf("native credit balance/replay: %+v", batches)
 				}
 			}

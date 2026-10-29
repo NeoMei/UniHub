@@ -44,7 +44,7 @@ type Usage struct {
 }
 
 var units = map[string]bool{"token": true, "character": true, "audio_second": true, "image": true, "request": true, "video_second": true, "provider_unit": true}
-var ops = map[string]bool{"chat": true, "responses": true, "embedding": true, "speech": true, "transcription": true, "image_generation": true, "image_edit": true, "ocr": true, "video": true}
+var ops = map[string]bool{"chat": true, "responses": true, "embedding": true, "rerank": true, "speech": true, "transcription": true, "image_generation": true, "image_edit": true, "ocr": true, "video": true}
 
 func parseQuantity(v Quantity) (*big.Rat, error) {
 	if v.Scale < 0 || v.Scale > 9 || v.Value == "" || (len(v.Value) > 1 && v.Value[0] == '0') || strings.Trim(v.Value, "0123456789") != "" || len(v.Value) > 38 {
@@ -57,6 +57,9 @@ func parseQuantity(v Quantity) (*big.Rat, error) {
 func ValidatePrice(p Price) error {
 	if p.Version != "metered_v2" || strings.TrimSpace(p.Policy) == "" || len(p.Policy) > 128 || !ops[p.Operation] || len(p.Terms) == 0 || len(p.Terms) > 64 {
 		return errors.New("invalid price")
+	}
+	if p.Operation == "rerank" && (len(p.Terms) != 1 || p.Terms[0].Key != "input") {
+		return errors.New("rerank requires one input token term")
 	}
 	seen := map[string]bool{}
 	for _, t := range p.Terms {
@@ -73,7 +76,7 @@ func ValidatePrice(p Price) error {
 			// Chat supports ordinary token tariffs and bounded per-request
 			// tariffs for providers that expose a flat call price.
 			compatible = t.Unit == "token" || t.Unit == "request"
-		case "responses", "embedding":
+		case "responses", "embedding", "rerank":
 			compatible = t.Unit == "token"
 		case "speech":
 			compatible = t.Unit == "character"
