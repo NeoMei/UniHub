@@ -107,6 +107,6 @@
 
 **Requirements:** Existing knowledge result authorization already validates the original product access token, identity and current task/account/product permissions. The gateway also needs that verified token expiry to reject expiry during result decryption/settlement checks, immediately before delivery. Return optional `actor_expires_at` Unix seconds only on a successful `purpose=result_read` response from `/internal/v1/model-credentials/verify`, taken from verified `auth.Claims.ExpiresAt`. Keep model credential `expires_at` unchanged and omit the actor field for ordinary verify/receipt/denied responses. No new realm or authority is introduced.
 
-- [ ] Extend the endpoint response and existing signed-access-token HTTP/DB acceptance to distinguish actor expiry from model credential expiry and preserve all current denials.
-- [ ] Observe regression failure, run real isolated PostgreSQL race tests, independently review, freeze the peer contract and publish the server increment.
+- [x] Extend the endpoint response and existing signed-access-token HTTP/DB acceptance to distinguish actor expiry from model credential expiry and preserve all current denials.
+- [x] Observe regression failure, run real isolated PostgreSQL race tests, independently review, freeze the peer contract and publish the server increment.
 - [ ] Peer rechecks both verified actor and credential expiry immediately before result delivery; knowledge production gate remains closed until the paired deployment and actual acceptance.
