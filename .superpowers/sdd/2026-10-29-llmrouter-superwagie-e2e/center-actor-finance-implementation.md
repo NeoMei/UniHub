@@ -38,6 +38,7 @@ Date: 2026-10-30 (Asia/Shanghai)
 - Round 1 identified that an injected SDK transport could override DNS dialing, proxy selection, or TLS verification while receiving the fixed-origin credentials. Removed the configurable HTTP client entirely. The finance client now builds a private transport with no proxy, injected dialer, custom TLS configuration, or keep-alive reuse; default certificate verification remains enabled.
 - Added tests that replace the process default transport with a malicious dialer and prove the request still reaches only the configured server, inspect that the private transport has no dial/TLS/proxy overrides, and reject a self-signed HTTPS endpoint before it receives the credentialed request.
 - Strengthened the PostgreSQL HTTP test to use Formance when `UNIHUB_TEST_LEDGER_URL` is configured, process a repeated sandbox settlement, and verify the operation is `APPLIED` with exactly one 1,000,000-unit cash credit. It also issues a fresh assertion before the separate auth-version revocation check so expiry does not mask version invalidation. This extended database/Formance test remains unrun locally because the database environment is unavailable.
+- Before freeze, corrected the Formance assertion to target the `llmrouter` product wallet for the product-scoped recharge, assert the unified wallet remains at zero, and process the already-applied operation again to verify the product balance does not change after the replay.
 
 ## Contract addendum
 

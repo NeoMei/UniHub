@@ -188,9 +188,21 @@ func TestProductFinanceSandboxLedgerReplayAndFreshActorIsolation(t *testing.T) {
 		if err != nil || applied.Status != "APPLIED" {
 			t.Fatalf("sandbox charge status=%+v err=%v", applied, err)
 		}
-		balance, err := formance.Balance(ctx, wallet.Address(first.Binding.PersonalAccountID, ""), wallet.Asset)
-		if err != nil || balance != 1_000_000 {
-			t.Fatalf("sandbox replay balance=%d err=%v, want one 1000000-unit credit", balance, err)
+		productAddress := wallet.Address(first.Binding.PersonalAccountID, "llmrouter")
+		productBalance, err := formance.Balance(ctx, productAddress, wallet.Asset)
+		if err != nil || productBalance != 1_000_000 {
+			t.Fatalf("sandbox replay product balance=%d err=%v, want one 1000000-unit credit", productBalance, err)
+		}
+		unifiedBalance, err := formance.Balance(ctx, wallet.Address(first.Binding.PersonalAccountID, ""), wallet.Asset)
+		if err != nil || unifiedBalance != 0 {
+			t.Fatalf("product recharge changed unified wallet balance=%d err=%v, want 0", unifiedBalance, err)
+		}
+		if err = walletService.Process(ctx, op1.ID); err != nil {
+			t.Fatal(err)
+		}
+		replayedBalance, err := formance.Balance(ctx, productAddress, wallet.Asset)
+		if err != nil || replayedBalance != productBalance {
+			t.Fatalf("post-apply replay changed product balance from %d to %d: %v", productBalance, replayedBalance, err)
 		}
 	}
 	if w = request(first.ActorToken, true, false); w.Code != http.StatusUnauthorized {
