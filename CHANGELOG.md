@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.17 - 2026-10-29
+
+启用平台身份管理：部署与撤销开关经真实验收后打开，补齐恢复邮件投递。
+
+- `ADMIN_IDENTITY_DEPLOYMENT_VERIFIED` 与 `ADMIN_SESSION_REVOCATION_VERIFIED` 在生产打开：钉住审计构建核验、当日受控探针复跑、探针用户真实撤销（会话删除、关联令牌置为已过期、原 bearer 被拒）
+- 平台后台身份能力生效：目录、显示名称修改、创建待激活用户、撤销中央会话/令牌
+- 新增 `internal/notify`：恢复/激活邮件经运维配置的 SMTP 中继发送， loopback 外强制 STARTTLS，secret 不落日志
+- `ADMIN_PASSWORD_RESET_VERIFIED` 保持关闭：需配置 `RECOVERY_SMTP_*` 并完成真实邮箱验收；缺少中继时该开关拒绝启动
+
 ## 0.4.16 - 2026-10-29
 
 补齐安全、运营与接入准备四块缺口，资金保持沙盒。
