@@ -104,7 +104,9 @@ func TestOperationTimeseriesAggregatesWindows(t *testing.T) {
 	}
 	insertCall("ts-c1", "m1", "SETTLED", today.Add(-time.Hour))
 	insertCall("ts-c2", "m1", "REJECTED", today.Add(-2*time.Hour))
-	insertCall("ts-c3", "m2", "SETTLED", today.Add(-3*time.Hour))
+	// This success belongs to the 14-day trend but is outside the 7-day
+	// model-risk window, where m2 has only its rejected call.
+	insertCall("ts-c3", "m2", "SETTLED", today.AddDate(0, 0, -8))
 	insertCall("ts-c4", "m2", "REJECTED", yesterday.Add(-time.Hour))
 	insertCall("ts-c5", "m1", "SETTLED", yesterday.Add(-2*time.Hour))
 	insertOrder := func(id, refundStatus string) {
@@ -127,8 +129,9 @@ func TestOperationTimeseriesAggregatesWindows(t *testing.T) {
 	}
 	last := v.Days[trendDays-1]
 	prev := v.Days[trendDays-2]
-	if last.Calls != 3 || last.FailedCalls != 1 || prev.Calls != 2 || prev.FailedCalls != 1 {
-		t.Fatalf("day buckets %+v / %+v", prev, last)
+	older := v.Days[trendDays-1-8]
+	if last.Calls != 2 || last.FailedCalls != 1 || prev.Calls != 2 || prev.FailedCalls != 1 || older.Calls != 1 || older.FailedCalls != 0 {
+		t.Fatalf("day buckets %+v / %+v / %+v", older, prev, last)
 	}
 	totalNew := int64(0)
 	for _, d := range v.Days {
@@ -140,7 +143,7 @@ func TestOperationTimeseriesAggregatesWindows(t *testing.T) {
 	if !v.FinanceScope || v.PendingRefunds != 2 {
 		t.Fatalf("finance scope %v refunds %d", v.FinanceScope, v.PendingRefunds)
 	}
-	if len(v.TopFailedModels) != 2 || v.TopFailedModels[0].Model != "m2" || v.TopFailedModels[0].FailureRate != 1 || v.TopFailedModels[1].Model != "m1" || v.TopFailedModels[1].FailureRate != 0.3333 {
+	if len(v.TopFailedModels) != 2 || v.TopFailedModels[0].Model != "m2" || v.TopFailedModels[0].Calls != 1 || v.TopFailedModels[0].FailedCalls != 1 || v.TopFailedModels[0].FailureRate != 1 || v.TopFailedModels[1].Model != "m1" || v.TopFailedModels[1].Calls != 3 || v.TopFailedModels[1].FailedCalls != 1 || v.TopFailedModels[1].FailureRate != 0.3333 {
 		t.Fatalf("models %+v", v.TopFailedModels)
 	}
 	if _, e = s.OperationTimeseries(ctx, plain.ID); !errors.Is(e, accounts.ErrForbidden) {
