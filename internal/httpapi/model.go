@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"slices"
@@ -97,7 +98,12 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		var v modelaccess.Claims
 		var actorExpiresAt int64
 		var e error
-		if body.Purpose == "result_read" {
+		if body.Purpose == "knowledge_dispatch" {
+			v, e = a.VerifyKnowledgeDispatchForInstance(r.Context(), body.Token, body.Model, body.InstanceID, body.WireOperation)
+			if e == nil {
+				actorExpiresAt, e = s.authorizeTaskActor(r, v, true)
+			}
+		} else if body.Purpose == "result_read" {
 			v, e = a.VerifyResultReadForInstance(r.Context(), body.Token, body.Model, body.InstanceID, body.WireOperation)
 			if e == nil {
 				actorExpiresAt, e = s.authorizeResultReadActor(r, v)
@@ -206,6 +212,10 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 // authorizeResultReadActor is a point-in-time prerequisite, not a substitute
 // for linearizing result delivery with account or login revocation.
 func (s *api) authorizeResultReadActor(r *http.Request, grant modelaccess.Claims) (int64, error) {
+	return s.authorizeTaskActor(r, grant, false)
+}
+
+func (s *api) authorizeTaskActor(r *http.Request, grant modelaccess.Claims, knowledgeDispatch bool) (int64, error) {
 	raw, ok := runtimeBearer(r, "X-UniHub-Actor-Authorization")
 	if !ok || strings.HasPrefix(raw, "upa_") || strings.HasPrefix(raw, "ubp_") || s.options.Identity == nil || s.options.ProductUsers == nil {
 		return 0, errRuntimeActor
@@ -228,6 +238,9 @@ func (s *api) authorizeResultReadActor(r *http.Request, grant modelaccess.Claims
 	}
 	if s.options.PlatformAdmin != nil {
 		if err := s.options.PlatformAdmin.CredentialAllowed(r.Context(), grant.ActorID, claims.IssuedAt); err != nil {
+			if knowledgeDispatch && !errors.Is(err, accounts.ErrForbidden) {
+				return 0, err
+			}
 			return 0, accounts.ErrForbidden
 		}
 	}
