@@ -202,7 +202,8 @@ func (s *api) capabilities(w http.ResponseWriter, r *http.Request, u accounts.Us
 	} else if originProduct(r) != "" {
 		kind = "legacy_product"
 	}
-	return respond(w, 200, map[string]any{"kind": kind, "product_id": originProduct(r), "instance_id": instance, "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": false, "unified_wallet_recharge": originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox, "refresh_token": false, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
+	financeWrite, _ := r.Context().Value(productFinanceWriteKey{}).(bool)
+	return respond(w, 200, map[string]any{"finance_write": financeWrite, "kind": kind, "product_id": originProduct(r), "instance_id": instance, "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": false, "unified_wallet_recharge": originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox, "refresh_token": false, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
 }
 
 // Keep verified expiry in request context rather than accepting any client field.
