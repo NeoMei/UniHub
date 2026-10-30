@@ -251,10 +251,25 @@ func (s *Service) VerifyForInstance(ctx context.Context, token, model, instance 
 // Historical receipt reads retain credential authentication but do not depend on
 // the current tariff catalog.
 func (s *Service) VerifyWireForInstance(ctx context.Context, token, model, instance, wire string, receipt bool) (Claims, error) {
+	return s.verifyWireForInstance(ctx, token, model, instance, wire, receipt, false)
+}
+
+// VerifyKnowledgeDispatchForInstance admits only the two paid knowledge routes
+// on an existing task credential. It does not issue or reserve anything.
+func (s *Service) VerifyKnowledgeDispatchForInstance(ctx context.Context, token, model, instance, wire string) (Claims, error) {
+	if instance == "" || !strings.HasPrefix(token, "uh_model_") ||
+		!((model == "unihub-text-embedding-v4" && wire == "embeddings.create") ||
+			(model == "qwen3-rerank" && wire == "rerank.create")) {
+		return Claims{}, ErrCredential
+	}
+	return s.verifyWireForInstance(ctx, token, model, instance, wire, false, true)
+}
+
+func (s *Service) verifyWireForInstance(ctx context.Context, token, model, instance, wire string, receipt, knowledgeDispatch bool) (Claims, error) {
 	if wire == "" || model == "" || billing.WireBillingOperation(wire) == "" {
 		return Claims{}, ErrCredential
 	}
-	c, err := s.verify(ctx, token, model, instance, !receipt)
+	c, err := s.verifyScoped(ctx, token, model, instance, !receipt, knowledgeDispatch)
 	if err != nil {
 		return Claims{}, err
 	}
@@ -352,6 +367,12 @@ func (s *Service) RequireResultReadIdentity(ctx context.Context, c Claims, issue
 }
 
 func (s *Service) verify(ctx context.Context, token, model, instance string, enforceRate bool) (Claims, error) {
+	return s.verifyScoped(ctx, token, model, instance, enforceRate, false)
+}
+
+// Only knowledge dispatch preserves authority faults; existing credential and
+// historical-read error contracts remain unchanged.
+func (s *Service) verifyScoped(ctx context.Context, token, model, instance string, enforceRate, knowledgeDispatch bool) (Claims, error) {
 	if !(len(token) == 73 && strings.HasPrefix(token, "uh_model_")) && !(len(token) == 71 && strings.HasPrefix(token, "uh_key_")) {
 		return Claims{}, ErrCredential
 	}
@@ -368,6 +389,9 @@ func (s *Service) verify(ctx context.Context, token, model, instance string, enf
 	// no-expiry sentinel must stay UTC so a positive offset cannot render year
 	// 10000 and break JSON serialization after a success status was written.
 	c.ExpiresAt = c.ExpiresAt.UTC()
+	if knowledgeDispatch && c.CredentialKind != "task" {
+		return Claims{}, ErrCredential
+	}
 	if c.CredentialKind == "api_key" && (instance == "" || instance != c.InstanceID) {
 		return Claims{}, ErrCredential
 	}
@@ -422,15 +446,27 @@ func (s *Service) verify(ctx context.Context, token, model, instance string, enf
 	}
 	if enforceRate {
 		if e = s.activeOn(ctx, s.pool, c.ActorID); e != nil {
+			if knowledgeDispatch && !errors.Is(e, accounts.ErrForbidden) && !errors.Is(e, billing.ErrInvalid) && !errors.Is(e, pgx.ErrNoRows) {
+				return Claims{}, e
+			}
 			return Claims{}, ErrCredential
 		}
 	}
 	auth, e := s.authorize(ctx, c.ActorID, c.AccountID, c.OriginProductID, c.FundingMode)
-	if e != nil || auth.Asset != c.Asset {
+	if e != nil {
+		if knowledgeDispatch && !errors.Is(e, accounts.ErrForbidden) && !errors.Is(e, billing.ErrInvalid) && !errors.Is(e, pgx.ErrNoRows) {
+			return Claims{}, e
+		}
 		return Claims{}, ErrCredential
 	}
-	models, e := s.productModels(ctx, s.pool, c.OriginProductID)
+	if auth.Asset != c.Asset {
+		return Claims{}, ErrCredential
+	}
+	models, e := s.productModelsScoped(ctx, s.pool, c.OriginProductID, knowledgeDispatch)
 	if e != nil {
+		if knowledgeDispatch {
+			return Claims{}, e
+		}
 		return Claims{}, ErrCredential
 	}
 	for _, m := range c.Models {
@@ -498,8 +534,15 @@ func (s *Service) revoke(ctx context.Context, actor, account, id, product, insta
 }
 
 func (s *Service) productModels(ctx context.Context, q accounts.Querier, product string) ([]string, error) {
+	return s.productModelsScoped(ctx, q, product, false)
+}
+
+func (s *Service) productModelsScoped(ctx context.Context, q accounts.Querier, product string, knowledgeDispatch bool) ([]string, error) {
 	var enabled bool
 	if e := q.QueryRow(ctx, `SELECT enabled FROM products WHERE id=$1`, product).Scan(&enabled); e != nil || !enabled {
+		if knowledgeDispatch && e != nil && !errors.Is(e, pgx.ErrNoRows) {
+			return nil, e
+		}
 		return nil, accounts.ErrForbidden
 	}
 	var data []byte
