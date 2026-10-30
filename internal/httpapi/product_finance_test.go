@@ -99,6 +99,7 @@ func TestProductFinanceSandboxLedgerReplayAndFreshActorIsolation(t *testing.T) {
 	otherPolicy := products.Client{ClientID: "other-client", ProductID: "other", InstanceID: "default", Scopes: []string{"accounts:read"}}
 	walletPolicy := products.Client{ClientID: "lr-finance-wallet", ProductID: "llmrouter", InstanceID: "default", Scopes: []string{"accounts:read", "wallets:read"}}
 	rechargePolicy := products.Client{ClientID: "lr-finance-recharge", ProductID: "llmrouter", InstanceID: "default", Scopes: []string{"accounts:read", "recharges:read", "recharges:write"}}
+	services["lr-readonly"] = RuntimeService{Token: strings.Repeat("r", 40), ProductID: "llmrouter", InstanceID: "default", FinanceClientID: rechargePolicy.ClientID, AllowedOps: []string{"finance:read"}}
 	services["lr-wallet"] = RuntimeService{Token: strings.Repeat("w", 40), ProductID: "llmrouter", InstanceID: "default", FinanceClientID: walletPolicy.ClientID, AllowedOps: []string{"finance:read", "finance:write"}}
 	services["lr-recharge"] = RuntimeService{Token: strings.Repeat("q", 40), ProductID: "llmrouter", InstanceID: "default", FinanceClientID: rechargePolicy.ClientID, AllowedOps: []string{"finance:read", "finance:write"}}
 	var formance *ledger.Formance
@@ -124,6 +125,27 @@ func TestProductFinanceSandboxLedgerReplayAndFreshActorIsolation(t *testing.T) {
 	}
 	first := actorFor("native-a", 1)
 	second := actorFor("native-b", 1)
+	for _, tc := range []struct {
+		name  string
+		write bool
+	}{{"lr-recharge", true}, {"lr-readonly", false}} {
+		t.Run("capabilities-"+tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/internal/v1/product-finance/capabilities", nil)
+			r.Header.Set("Authorization", "Bearer "+services[tc.name].Token)
+			r.Header.Set("X-UniHub-Actor-Authorization", "Bearer "+first.ActorToken)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			var caps struct {
+				FinanceWrite *bool    `json:"finance_write"`
+				Scopes       []string `json:"scopes"`
+				ClientID     string   `json:"client_id"`
+			}
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &caps) != nil || caps.FinanceWrite == nil || *caps.FinanceWrite != tc.write || caps.ClientID != rechargePolicy.ClientID || !strings.Contains(strings.Join(caps.Scopes, " "), "recharges:write") {
+				t.Fatalf("current service capability mismatch: status=%d body=%s", w.Code, w.Body)
+			}
+		})
+	}
+
 	if first.Binding.UserID == second.Binding.UserID {
 		t.Fatal("same-email users were merged")
 	}

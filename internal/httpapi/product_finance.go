@@ -26,6 +26,9 @@ var productFinanceRoutes = []string{
 	"POST /v1/accounts/{account}/api-keys", "DELETE /v1/accounts/{account}/api-keys/{key}", "PUT /v1/accounts/{account}/usage-budget",
 }
 
+// productFinanceWriteKey is set only by the verified runtime-service lane.
+type productFinanceWriteKey struct{}
+
 var financeIdempotencyKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 func financeOperation(method string) string {
@@ -99,7 +102,8 @@ func (s *api) financeAuthenticated(original, op string, next action) http.Handle
 			if !access.Active || !slices.Contains(access.Permissions, "product:use") {
 				return accounts.ErrForbidden
 			}
-			ctx := context.WithValue(r.Context(), productPolicyKey{}, policy)
+			ctx := context.WithValue(r.Context(), productFinanceWriteKey{}, slices.Contains(service.AllowedOps, "finance:write"))
+			ctx = context.WithValue(ctx, productPolicyKey{}, policy)
 			ctx = context.WithValue(ctx, productIdentityKey{}, policy.ProductID)
 			business := r.Clone(ctx)
 			business.Pattern = original
