@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.27 - 2026-10-30
+
+- 私有模型授权新增 `knowledge_dispatch` 任务用途，仅面向已批准的 `embeddings.create` 与 `rerank.create` 两种知识调用，重新校验当前用户身份、产品权限及付款账户资格。
+- 保留原有结果读取授权与令牌有效期边界；资金继续使用沙盒，LLMRouter、SuperWagie 实际调用全链路验收仍待完成。
+
 ## 0.4.26 - 2026-10-30
 
 - 私有模型授权接口在成功的 `result_read` 校验后返回已验证用户 access token 的 `actor_expires_at`，供服务端限制结果读取会话有效期。
