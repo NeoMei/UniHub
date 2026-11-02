@@ -376,6 +376,13 @@ def prepare(root, release, inventory):
             raise DeploymentError(f'Release is missing required artifact {expected}.')
     billing_path = staged_billing_path(root)
     shared = root / 'shared'
+    previous_runtime = {}
+    runtime_path = shared / 'runtime.env'
+    if runtime_path.exists():
+        try:
+            previous_runtime = read_env(runtime_path)
+        except (OSError, ValueError):
+            raise DeploymentError('Existing runtime configuration is invalid; refusing to rewrite it.') from None
     credential_path = shared / 'credentials.json'
     no_symlink(credential_path)
     if not credential_path.exists():
@@ -412,6 +419,11 @@ def prepare(root, release, inventory):
         'BILLING_OPERATOR_IDS': '', 'OPS_OIDC_AUDIENCE': '', 'PAYMENT_MODE': 'sandbox',
         'PAYMENT_MERCHANT': 'unihub-sandbox', 'PAYMENT_SIGNING_KEY': credentials['payment_signing_key'],
         'HEADLESS_TRUST_LOOPBACK_PROXY': 'true', 'HEADLESS_AUDIT_REDACTION_VERIFIED': 'false'}
+    for key in ['ADMIN_IDENTITY_DEPLOYMENT_VERIFIED', 'ADMIN_PASSWORD_RESET_VERIFIED',
+                'ADMIN_SESSION_REVOCATION_VERIFIED', 'RECOVERY_SMTP_ADDR',
+                'RECOVERY_SMTP_FROM', 'RECOVERY_SMTP_USERNAME', 'RECOVERY_SMTP_PASSWORD']:
+        if key in previous_runtime:
+            runtime[key] = previous_runtime[key]
     configure_headless_runtime(root, credentials, runtime)
     if billing_path is not None:
         runtime['PRODUCT_BILLING_FILE'] = str(billing_path)

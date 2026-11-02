@@ -55,6 +55,20 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(runtime['SANDBOX_CATALOG'], 'true')
         self.assertEqual(runtime['PAYMENT_MODE'], 'sandbox')
 
+    def test_prepare_preserves_accepted_admin_identity_flags(self):
+        runtime_path = self.root / 'shared/runtime.env'
+        runtime_path.write_text(runtime_path.read_text() +
+                                 'ADMIN_IDENTITY_DEPLOYMENT_VERIFIED=true\n'
+                                 'ADMIN_SESSION_REVOCATION_VERIFIED=true\n'
+                                 'RECOVERY_SMTP_ADDR=smtp.example.test:587\n'
+                                 'RECOVERY_SMTP_FROM=ops@example.test\n')
+        bundle.prepare(self.root, self.release, {})
+        runtime = bundle.read_env(runtime_path)
+        self.assertEqual(runtime['ADMIN_IDENTITY_DEPLOYMENT_VERIFIED'], 'true')
+        self.assertEqual(runtime['ADMIN_SESSION_REVOCATION_VERIFIED'], 'true')
+        self.assertEqual(runtime['RECOVERY_SMTP_ADDR'], 'smtp.example.test:587')
+        self.assertEqual(runtime['RECOVERY_SMTP_FROM'], 'ops@example.test')
+
     def test_explicit_staging_survives_prepare_without_credentials_or_identity_changes(self):
         credentials = (self.root / 'shared/credentials.json').read_bytes()
         seed = (self.root / 'shared/casdoor/conf/init_data.json').read_bytes()
