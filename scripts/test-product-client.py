@@ -43,6 +43,13 @@ class ProductClientTests(unittest.TestCase):
   self.assertTrue(headless['enablePassword']);self.assertFalse(headless['enableSigninSession'])
   for change in [{'browser_sso':'true'},{'instance_id':'../escape'},{'instance_id':''}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
+ def test_refresh_tokens_is_explicit_and_adds_only_refresh_grant(self):
+  client=self.client(refresh_tokens=True)
+  self.m.validate_client(client)
+  app=self.m.application(client,'cert-built-in')
+  self.assertEqual(app['grantTypes'],['authorization_code','refresh_token'])
+  for change in [{'refresh_tokens':'true'},{'refresh_tokens':1}]:
+   with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
  def test_policy_rejects_secret_wildcards_unknown_scope_and_global_org(self):
   for change in [{'client_secret':'x'},{'unknown_field':'x'},{'origins':['https://app.test/path']},{'redirect_uris':['https://app.test/%2A']},{'scopes':['admin:all']},{'organization':'built-in'},{'application':'app-built-in'}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))

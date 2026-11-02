@@ -29,7 +29,7 @@ type testIssuer struct {
 	key                                       *rsa.PrivateKey
 	mu                                        sync.Mutex
 	mode, nonce, challenge                    string
-	creates, logins, exchanges                int
+	creates, logins, exchanges, refreshes     int
 	user                                      map[string]any
 	orgPolicy                                 []string
 	captcha, requiredEmail                    bool
@@ -189,6 +189,16 @@ func newTestIssuer(t *testing.T) *testIssuer {
 			}
 			var body map[string]string
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			if body["grant_type"] == "refresh_token" {
+				i.refreshes++
+				if body["client_id"] != "native" || body["refresh_token"] != "private-refresh" || body["code"] != "" {
+					t.Error("unsafe refresh exchange")
+				}
+				access := i.jwt(t, map[string]any{"tokenType": "access-token", "scope": "openid profile email"})
+				id := i.jwt(t, map[string]any{"tokenType": "id-token"})
+				_ = json.NewEncoder(w).Encode(map[string]any{"access_token": access, "id_token": id, "refresh_token": "private-refresh", "token_type": "Bearer", "expires_in": 600, "scope": "openid profile email"})
+				return
+			}
 			h := sha256.Sum256([]byte(body["code_verifier"]))
 			if body["grant_type"] != "authorization_code" || body["client_id"] != "native" || body["code"] != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" || base64.RawURLEncoding.EncodeToString(h[:]) != i.challenge || body["client_secret"] != "" || body["password"] != "" {
 				t.Error("unsafe token exchange")
@@ -363,6 +373,89 @@ func TestPublicPKCEUsesCasdoorTokensAndRejectsReplay(t *testing.T) {
 	for _, v := range []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", strings.Repeat("n", 32), verifier, "access_token", "private-refresh"} {
 		if strings.Contains(raw, v) {
 			t.Fatalf("sensitive transaction persisted: %s", v)
+		}
+	}
+}
+
+func TestRefreshTokenRotatesAcrossReplaysAndServerRestarts(t *testing.T) {
+	p := testutil.Database(t)
+	if e := database.Migrate(context.Background(), p); e != nil {
+		t.Fatal(e)
+	}
+	i := newTestIssuer(t)
+	opts := options(i)
+	client := opts.Clients["native"]
+	client.RefreshTokens = true
+	opts.Clients["native"] = client
+	s, e := New(context.Background(), p, opts)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w := request(t, s, "/v1/identity/authorize/password", authorize(), "")
+	if w.Code != 200 {
+		t.Fatalf("authorize=%d body=%s", w.Code, w.Body)
+	}
+	b := tokenBody(t, w)
+	w = request(t, s, "/v1/identity/token", b, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "refresh_token") || strings.Contains(w.Body.String(), "private-refresh") {
+		t.Fatalf("token=%d body=%s", w.Code, w.Body)
+	}
+	first := map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	firstRefresh, _ := first["refresh_token"].(string)
+	if len(firstRefresh) < 32 {
+		t.Fatalf("refresh token too short: %q", firstRefresh)
+	}
+	w = request(t, s, "/v1/identity/token", map[string]any{"grant_type": "refresh_token", "client_id": "native", "refresh_token": firstRefresh}, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "refresh_token") {
+		t.Fatalf("refresh=%d body=%s", w.Code, w.Body)
+	}
+	second := map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	secondRefresh, _ := second["refresh_token"].(string)
+	if secondRefresh == firstRefresh || i.exchanges != 1 || i.refreshes != 1 {
+		t.Fatalf("rotation refresh=%q first=%q exchanges=%d refreshes=%d", secondRefresh, firstRefresh, i.exchanges, i.refreshes)
+	}
+	s2, e := New(context.Background(), p, opts)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w = request(t, s2, "/v1/identity/token", map[string]any{"grant_type": "refresh_token", "client_id": "native", "refresh_token": secondRefresh}, "")
+	if w.Code != 200 {
+		t.Fatalf("restart refresh=%d body=%s", w.Code, w.Body)
+	}
+	third := map[string]any{}
+	if err := json.Unmarshal(w.Body.Bytes(), &third); err != nil {
+		t.Fatal(err)
+	}
+	thirdRefresh, _ := third["refresh_token"].(string)
+	if thirdRefresh == secondRefresh || i.refreshes != 2 {
+		t.Fatalf("restart rotation refresh=%q previous=%q refreshes=%d", thirdRefresh, secondRefresh, i.refreshes)
+	}
+	// Reusing a rotated token revokes the whole family, including the newest token.
+	w = request(t, s2, "/v1/identity/token", map[string]any{"grant_type": "refresh_token", "client_id": "native", "refresh_token": firstRefresh}, "")
+	if w.Code != 400 {
+		t.Fatalf("replay=%d body=%s", w.Code, w.Body)
+	}
+	w = request(t, s2, "/v1/identity/token", map[string]any{"grant_type": "refresh_token", "client_id": "native", "refresh_token": secondRefresh}, "")
+	if w.Code != 400 {
+		t.Fatalf("family revoke=%d body=%s", w.Code, w.Body)
+	}
+	w = request(t, s2, "/v1/identity/token", map[string]any{"grant_type": "refresh_token", "client_id": "native", "refresh_token": thirdRefresh}, "")
+	if w.Code != 400 {
+		t.Fatalf("latest family revoke=%d body=%s", w.Code, w.Body)
+	}
+	for _, secret := range []string{"private-refresh", firstRefresh, secondRefresh, thirdRefresh} {
+		var raw string
+		if err := p.QueryRow(context.Background(), `SELECT row_to_json(t)::text FROM identity_refresh_tokens t LIMIT 1`).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(raw, secret) {
+			t.Fatalf("refresh secret persisted: %s", secret)
 		}
 	}
 }

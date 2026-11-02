@@ -353,7 +353,7 @@ def headless_product_application(c, secret):
             {'name':'Password','visible':True,'required':True,'rule':'None'},
             {'name':'Display name','visible':True,'required':False,'rule':'All'},
             {'name':'Email','visible':True,'required':False,'rule':'No verification'}],
-        'grantTypes':['authorization_code'],'redirectUris':c['redirect_uris'],'tokenFormat':'JWT-Standard','tokenSigningMethod':'RS256',
+        'grantTypes':['authorization_code'] + (['refresh_token'] if c.get('refresh_tokens',False) else []),'redirectUris':c['redirect_uris'],'tokenFormat':'JWT-Standard','tokenSigningMethod':'RS256',
         'expireInHours':1,'cookieExpireInHours':1,'failedSigninLimit':5,'failedSigninFrozenTime':15}
 
 
@@ -543,7 +543,7 @@ def register_identity_image(root, artifacts, image, inventory):
 def validate_registry(clients):
     if not isinstance(clients, list) or not clients or len(clients) > 100:
         raise DeploymentError('Headless registry must be a bounded nonempty client array.')
-    allowed = {'product_id','client_id','application','organization','redirect_uris','origins','scopes','billing_products','password_login','registration'}
+    allowed = {'product_id','client_id','application','organization','redirect_uris','origins','scopes','billing_products','password_login','registration','refresh_tokens'}
     reserved_clients = {'unihub-console','superwagie-unihub',PROVISIONER_CLIENT}
     reserved_apps = {'app-unihub','app-superwagie','app-built-in',PROVISIONER_APPLICATION}
     seen_clients, seen_apps = set(), set()
@@ -554,7 +554,7 @@ def validate_registry(clients):
                 or not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', c.get('application',''))
                 or '-org-' in c['client_id'] or c.get('organization') != 'unihub'
                 or c['client_id'] in reserved_clients | seen_clients or c['application'] in reserved_apps | seen_apps
-                or not isinstance(c.get('password_login',False),bool) or not isinstance(c.get('registration',False),bool)):
+                or not isinstance(c.get('password_login',False),bool) or not isinstance(c.get('registration',False),bool) or not isinstance(c.get('refresh_tokens',False),bool)):
             raise DeploymentError('Headless client identity conflicts with a reserved or invalid policy.')
         for key in ['scopes','billing_products','redirect_uris','origins']:
             values = c.get(key, [])

@@ -67,8 +67,14 @@ class Client:
         body = {'grant_type':'authorization_code','client_id':self.client,'redirect_uri':self.redirect,
                 'authorization_id':auth['authorization_id'],'code':auth['code'],'code_verifier':verifier}
         tokens = self.request('POST','/v1/identity/token',body,token='')
-        if tokens['token_type'] != 'Bearer' or 'refresh_token' in tokens: raise RuntimeError('invalid token contract')
+        expect_refresh = os.environ.get('UNIHUB_E2E_EXPECT_REFRESH_TOKENS','').lower() == 'true'
+        if tokens['token_type'] != 'Bearer' or (expect_refresh != ('refresh_token' in tokens)): raise RuntimeError('invalid token contract')
         self.token = tokens['access_token']
+        if expect_refresh:
+            rotated = self.request('POST','/v1/identity/token',{'grant_type':'refresh_token','client_id':self.client,'refresh_token':tokens['refresh_token']},token='')
+            if rotated['token_type'] != 'Bearer' or not rotated.get('refresh_token') or rotated['refresh_token'] == tokens['refresh_token']:
+                raise RuntimeError('refresh token did not rotate')
+            self.token = rotated['access_token']
         self.request('POST','/v1/identity/token',body,token='',expected=(400,))
         self.bindings += [state, nonce, verifier, challenge, auth['code'], password]
         return tokens

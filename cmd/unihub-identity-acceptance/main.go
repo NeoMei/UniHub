@@ -154,13 +154,28 @@ func main() {
 		result["has_id_token"] = tok["id_token"] != "" && tok["id_token"] != nil
 		_, result["has_refresh_token"] = tok["refresh_token"]
 		result["replay_status"] = replay
+		if c.RefreshTokens {
+			refresh, ok := tok["refresh_token"].(string)
+			if !ok || refresh == "" {
+				panic("approved refresh-token client did not receive a refresh token")
+			}
+			markers = append(markers, refresh)
+			refreshStatus, rotated := call("/v1/identity/token", c.Origins[0], map[string]any{"grant_type": "refresh_token", "client_id": c.ClientID, "refresh_token": refresh}, "")
+			result["refresh_status"] = refreshStatus
+			result["refresh_rotated"] = rotated["refresh_token"] != refresh && rotated["refresh_token"] != nil
+			if next, ok := rotated["refresh_token"].(string); ok {
+				markers = append(markers, next)
+			}
+			replayRefresh, _ := call("/v1/identity/token", c.Origins[0], map[string]any{"grant_type": "refresh_token", "client_id": c.ClientID, "refresh_token": refresh}, "")
+			result["refresh_replay_status"] = replayRefresh
+		}
 	}
 	encoded, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(encoded))
 	check(privateOutput(os.Getenv("IDENTITY_ACCEPTANCE_RESULT"), append(encoded, '\n')))
 	private, _ := json.Marshal(map[string]any{"audit_markers": markers})
 	check(privateOutput(os.Getenv("IDENTITY_ACCEPTANCE_PRIVATE_MARKERS"), private))
-	if registrationStatus != 201 || status != 200 || result["token_status"] != 200 || result["replay_status"] != 400 || foreign != 403 || bad != 401 {
+	if registrationStatus != 201 || status != 200 || result["token_status"] != 200 || result["replay_status"] != 400 || foreign != 403 || bad != 401 || c.RefreshTokens && (result["refresh_status"] != 200 || result["refresh_replay_status"] != 400 || result["refresh_rotated"] != true) {
 		panic("controlled identity acceptance failed")
 	}
 }

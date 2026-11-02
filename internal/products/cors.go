@@ -43,7 +43,7 @@ func CORS(next http.Handler, clients map[string]Client) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		publicIdentity := r.Method == "POST" && (r.URL.Path == "/v1/identity/registrations" || r.URL.Path == "/v1/identity/authorize/password" || r.URL.Path == "/v1/identity/token")
+		publicIdentity := r.Method == "POST" && (r.URL.Path == "/v1/identity/registrations" || r.URL.Path == "/v1/identity/authorize/password" || r.URL.Path == "/v1/identity/token" || r.URL.Path == "/v1/identity/revoke")
 		if origins[origin] && len(r.Header.Values("Origin")) == 1 && (r.Header.Get("Authorization") != "" || publicIdentity) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 		}

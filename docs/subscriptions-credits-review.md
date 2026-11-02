@@ -44,7 +44,7 @@ UniHub 初次审查基于 `9ff93f8`，覆盖商业领域、HTTP/BFF、配置、�
 | 独立任务允许并行 | 商业领域、前端、身份、网关和 transport 按目录/契约拆分；共享 API 与 index 由协调者集成，独立审查单独复核，不把不同任务的测试结果合并成整体验收 |
 | llmrouter 使用手工隔离 worktree | 应用 worktree 工具绑定当前 UniHub 仓库，不能选择另一仓库；因此通过 Git worktree 在 `.local/integrations/llmrouter` 建立 `codex/unihub-firstloop`，保留原仓库分支及无关文件 |
 | SuperWagie 在原工作区编辑 | 其 AGENTS 禁止未获明确授权的 Git/GitHub 操作；本轮遵守禁令，不执行 Git/GitHub、提交、依赖安装或 changelog 修改，保留无关改动 |
-| 产品会话不保存 refresh token | SuperWagie access token 仅在后端内存，返回的 refresh token 丢弃；会话有界且重启需重新登录。该裁定针对产品 BFF；UniHub 控制台可保存不含原始令牌的服务端会话，不应混为一谈 |
+| 产品会话不暴露 refresh token | 旧裁定已由 UniHub 受控 `refresh_tokens` 协议取代：SuperWagie 后端在加密会话中保存轮换后的 opaque refresh token，渲染器仍不接触 token；refresh family 失效或撤销后重新登录。UniHub 控制台会话仍是独立边界。 |
 | 产品身份不能进入财务权限 | 独立 public PKCE client 使用独立 audience。产品 API 仅开放明确的身份、账户、会员、额度读取及本产品 origin 的模型凭证签发；不授予钱包、购买、转账或结算权限。财务操作仍进入独立认证的 UniHub 控制台，运营另需独立 audience 和 allowlist |
 | 模型凭证与登录/服务凭据隔离 | 模型凭证绑定 actor、account、origin、task、model 和期限，UniHub 仅保存摘要；不能替代登录或结算服务身份。网关服务凭据留在受信任后端 |
 | 原任务付款方不可随设置切换 | 产品提交前记录经验证的 actor/account/runtime/model/task；后续账户切换只影响新任务。产品跳转控制台携带公开账户提示，无法访问该账户时明确拒绝，不静默改用个人账户 |
