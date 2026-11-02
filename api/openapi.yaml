@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.30"
+  "version": "0.4.31"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -2611,6 +2611,47 @@
                     - "published-cash-model"
                   "task_id": "product-task-123"
                   "funding_mode": "prepaid_cash"
+  "/v1/models":
+    "get":
+      "operationId": "listScopedModels"
+      "summary": "listScopedModels"
+      "description": "OpenAI-compatible model discovery for a durable UniHub API key. The key's immutable product, instance, account, model allowlist and current published rates are revalidated. The bearer is never returned; account scope is exposed only through non-secret response headers. Optional X-UniHub-Product and X-UniHub-Instance headers must exactly match the key.
+"
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "200":
+          "description": "Scoped public model metadata"
+          "headers":
+            "X-UniHub-Account-ID": {"schema": {"type": "string"}}
+            "X-UniHub-Instance-ID": {"schema": {"type": "string"}}
+            "X-UniHub-Origin-Product-ID": {"schema": {"type": "string"}}
+            "X-UniHub-Expires-At": {"schema": {"type": "string", "format": "date-time"}}
+          "content":
+            "application/json":
+              "schema": {"$ref": "#/components/schemas/ScopedModelList"}
+        "401": {"$ref": "#/components/responses/Error"}
+  "/v1/accounts/{account}/model-discovery":
+    "post":
+      "operationId": "discoverAccountModels"
+      "summary": "discoverAccountModels"
+      "description": "Signed-in SuperWagie product-client discovery. Product and instance derive from the verified client registry; the selected account's role, active access, usage policy and published rates are checked. No bearer or provider secret is returned."
+      "security":
+        -
+          "BearerAuth": []
+      "x-product-scopes": ["catalog:read"]
+      "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}}]
+      "responses":
+        "200":
+          "description": "Scoped account model metadata"
+          "content":
+            "application/json":
+              "schema": {"$ref": "#/components/schemas/ModelDiscovery"}
+        "400": {"$ref": "#/components/responses/Error"}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
   "/v1/accounts/{account}/model-credentials/{credential}":
     "delete":
       "operationId": "revokeModelCredential"
@@ -2730,6 +2771,37 @@
           "schema":
             "$ref": "#/components/schemas/Error"
   "schemas":
+    "ScopedModel":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["id", "name", "operations", "input_modalities", "output_modalities", "context", "max_output", "probe", "rate_id"]
+      "properties":
+        "id": {"type": "string"}
+        "name": {"type": "string"}
+        "operations": {"type": "array", "items": {"type": "string"}}
+        "input_modalities": {"type": "array", "items": {"type": "string"}}
+        "output_modalities": {"type": "array", "items": {"type": "string"}}
+        "context": {"type": "integer", "minimum": 0}
+        "max_output": {"type": "integer", "minimum": 0}
+        "probe": {"type": "boolean"}
+        "rate_id": {"type": "string"}
+    "ScopedModelList":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["object", "data"]
+      "properties":
+        "object": {"const": "list"}
+        "data": {"type": "array", "items": {"$ref": "#/components/schemas/ScopedModel"}}
+    "ModelDiscovery":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["account_id", "instance_id", "origin_product_id", "expires_at", "models"]
+      "properties":
+        "account_id": {"type": "string"}
+        "instance_id": {"type": "string"}
+        "origin_product_id": {"type": "string"}
+        "expires_at": {"type": "string", "format": "date-time"}
+        "models": {"type": "array", "items": {"$ref": "#/components/schemas/ScopedModel"}}
     "ManagedAPIKeyRequest":
       "type": "object"
       "additionalProperties": false
