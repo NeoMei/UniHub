@@ -135,8 +135,14 @@ def validate_billing_profiles(items):
             exact(item[name], {'enabled'})
             require(type(item[name]['enabled']) is bool)
         usage = item['usage']
-        exact(usage, {'enabled', 'require_subscription', 'funding_modes', 'default_funding_mode'})
+        usage_fields = {'enabled', 'require_subscription', 'funding_modes', 'default_funding_mode'}
+        require(isinstance(usage, dict) and set(usage) in (usage_fields, usage_fields | {'models'}))
         require(type(usage['enabled']) is bool and type(usage['require_subscription']) is bool)
+        if 'models' in usage:
+            models = usage['models']
+            require(models is None or (isinstance(models, list) and len(models) <= 32
+                                       and all(isinstance(model, str) and 0 < len(model) <= 128 for model in models)
+                                       and len(set(models)) == len(models)))
         modes = usage['funding_modes']
         require(isinstance(modes, list) and all(isinstance(mode, str) and mode in {'credits', 'prepaid_cash'} for mode in modes))
         require(len(set(modes)) == len(modes) and isinstance(usage['default_funding_mode'], str))

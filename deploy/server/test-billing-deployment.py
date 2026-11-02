@@ -124,6 +124,18 @@ class BillingDeploymentTests(unittest.TestCase):
             with self.subTest(example=example.name):
                 bundle.stage_billing(self.root, example)
                 bundle.prepare(self.root, self.release, {})
+        model_scoped = [{
+            'product_id': 'model-product', 'version': 1,
+            'subscription': {'enabled': True},
+            'included_credits': {'enabled': True},
+            'addons': {'enabled': True},
+            'usage': {
+                'enabled': True, 'require_subscription': True,
+                'funding_modes': ['credits'], 'default_funding_mode': 'credits',
+                'models': ['model-a', 'model-b'],
+            },
+        }]
+        self.stage(model_scoped)
 
     def test_strict_public_schema_rejects_unknown_private_and_incomplete_fields(self):
         custom = {'product_id': 'my-product', 'version': 1, 'subscription': {'enabled': True},
