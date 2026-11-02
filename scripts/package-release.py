@@ -138,6 +138,12 @@ def identity_context(source):
         raise ReleaseError('Identity backend must be a Linux amd64 ELF binary')
     return manifest
 
+
+def validate_release_inputs(casdoor_web, identity_artifacts):
+    if identity_artifacts and not casdoor_web:
+        raise ReleaseError('A release containing the Casdoor identity backend must also include --casdoor-web.')
+
+
 def build(args):
     version = args.version or (ROOT/'VERSION').read_text().strip()
     package_versions = versions(version)
@@ -151,6 +157,7 @@ def build(args):
     for path in (ROOT/'web').glob('.env*'):
         if path.name != '.env.example':
             raise ReleaseError('Web dotenv input is forbidden in reproducible release builds')
+    validate_release_inputs(args.casdoor_web, args.identity_artifacts)
     context_manifest = identity_context(args.identity_artifacts) if args.identity_artifacts else None
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.unihub-release-', dir=output.parent) as temporary:

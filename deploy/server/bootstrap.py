@@ -76,6 +76,26 @@ def no_symlink(path):
         raise DeploymentError('Refusing symlink in managed configuration/release path.')
 
 
+def normalize_casdoor_frontend_permissions(release):
+    """Make the public Casdoor bind mount readable by its uid-1000 container."""
+    release = Path(release)
+    frontend = release / 'casdoor-web'
+    no_symlink(release)
+    no_symlink(frontend)
+    if not frontend.is_dir():
+        raise DeploymentError('Casdoor frontend directory is missing.')
+    release.chmod(0o755)
+    for path in [frontend, *frontend.rglob('*')]:
+        if path.is_symlink():
+            raise DeploymentError('Casdoor frontend tree contains a symlink.')
+        if path.is_dir():
+            path.chmod(0o755)
+        elif path.is_file():
+            path.chmod(0o644)
+        else:
+            raise DeploymentError('Casdoor frontend tree contains a non-regular entry.')
+
+
 def private_directory(path, mode=0o700, gid=None):
     no_symlink(path)
     path.mkdir(parents=True, exist_ok=True, mode=mode)
@@ -373,6 +393,7 @@ def prepare(root, release, inventory):
                      'casdoor-web/assets/unihub/unihub-icon-v1.png']:
         if not (release / expected).is_file():
             raise DeploymentError(f'Release is missing required artifact {expected}.')
+    normalize_casdoor_frontend_permissions(release)
     billing_path = staged_billing_path(root)
     shared = root / 'shared'
     credential_path = shared / 'credentials.json'
@@ -773,6 +794,15 @@ def wait_url(url, seconds=180):
     raise DeploymentError('Dependency health timed out; inspect private service state.')
 
 
+def validate_identity_frontend_response(status, body):
+    """Reject a healthy Casdoor process whose static frontend is not mounted."""
+    sample = bytes(body[:2 * 1024 * 1024]).lower()
+    if status != 200 or b'<html' not in sample:
+        raise DeploymentError('Casdoor frontend is unavailable; release casdoor-web/index.html is not mounted.')
+    if b'frontend html file' in sample and b'/web/build/index.html' in sample:
+        raise DeploymentError('Casdoor frontend is unavailable; release casdoor-web/index.html is not mounted.')
+
+
 def up(root, release, credentials, inventory):
     compose = ['docker', 'compose', '--project-name', 'unihub-server', '--env-file',
                str(root / 'shared/compose.env'), '-f', str(release / 'deploy/server/compose.yaml')]
@@ -801,6 +831,8 @@ def up(root, release, credentials, inventory):
     psql(branding_sql(), 'casdoor')
     if credentials.get('headless_clients'):
         psql(headless_applications_sql(credentials), 'casdoor')
+    with urllib.request.urlopen('http://127.0.0.1:58000/login/unihub', timeout=10) as response:
+        validate_identity_frontend_response(response.status, response.read(2 * 1024 * 1024))
     with urllib.request.urlopen('http://127.0.0.1:58000/.well-known/openid-configuration', timeout=10) as response:
         discovery = json.load(response)
     if (discovery.get('issuer') != PUBLIC_URL or 'RS256' not in discovery.get('id_token_signing_alg_values_supported', [])

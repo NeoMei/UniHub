@@ -125,6 +125,30 @@ class DeploymentTests(unittest.TestCase):
         with self.assertRaises(self.bundle.DeploymentError):
             self.bundle.prepare(self.root, self.release.parent, {})
 
+    def test_identity_frontend_probe_rejects_casdoor_missing_frontend_error(self):
+        with self.assertRaises(self.bundle.DeploymentError):
+            self.bundle.validate_identity_frontend_response(
+                200,
+                b'The Casdoor frontend HTML file: "index.html" was not found, '
+                b'it should be placed at: "//web/build/index.html".',
+            )
+
+    def test_identity_frontend_probe_accepts_html_login_page(self):
+        self.bundle.validate_identity_frontend_response(
+            200,
+            b'<!doctype html><html><head><title>UniHub</title></head></html>',
+        )
+
+    def test_prepare_makes_casdoor_frontend_traversable_and_readable(self):
+        frontend = self.release / 'casdoor-web'
+        self.release.chmod(0o700)
+        frontend.chmod(0o700)
+        (frontend / 'index.html').chmod(0o600)
+        self.prepare()
+        self.assertEqual(stat.S_IMODE(self.release.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(frontend.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE((frontend / 'index.html').stat().st_mode), 0o644)
+
     def test_docker_missing_resources_accept_case_variants_but_not_daemon_errors(self):
         cases = [
             ('volume', 'unihub-server-postgres', 'Error response from daemon: get unihub-server-postgres: no such volume', True),

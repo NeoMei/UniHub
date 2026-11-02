@@ -18,6 +18,10 @@ spec.loader.exec_module(release)
 
 
 class ReleaseAssetsTests(unittest.TestCase):
+    def test_identity_backend_requires_the_casdoor_frontend_asset(self):
+        with self.assertRaises(release.ReleaseError):
+            release.validate_release_inputs(None, '/tmp/identity-artifacts')
+
     def test_release_supplies_buildable_userkit_and_starter_without_private_inputs(self):
         # Omitting the Go source asset or its starter/module dependencies breaks
         # this consumer contract; untracked local inputs must never enter it.
