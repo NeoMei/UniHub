@@ -23,6 +23,7 @@ import type {
   Account,
   Authorization,
   Batch,
+  Capabilities,
   Invitation,
   Member,
   Offer,
@@ -58,6 +59,7 @@ import {
   Table,
 } from "./ui";
 import { Catalog, Members, SettingsPage, Wallets } from "./forms";
+import { BillingHub } from "./BillingHub";
 import {ProductApplications,ProductUserManagement} from "./ProductUsers";
 import QRCode from "qrcode";
 import type { AdminPrincipal } from "./admin/types";
@@ -66,6 +68,7 @@ export type Page =
  | "applications"
  | "user-management"
   | "overview"
+  | "billing"
   | "memberships"
   | "credits"
   | "addons"
@@ -91,6 +94,7 @@ export type Shared = {
 };
 const navigation = [
   { id: "overview", label: "账户概览", icon: House },
+  { id: "billing", label: "套餐与用量", icon: CreditCard },
   { id: "memberships", label: "产品会员", icon: Crown },
   { id: "credits", label: "模型额度", icon: Database },
   { id: "addons", label: "加量包", icon: Box },
@@ -603,6 +607,7 @@ function AccountConsole({
   const [message, setMessage] = useState("");
   const finance = financeRole(account.role);
   const products = useResource<Product[]>("/v1/products");
+  const capabilities = useResource<Capabilities>("/v1/capabilities");
   const offers = useResource<Offer[]>("/v1/catalog");
   const subscriptions = useResource<Subscription[]>(
     accountPath(account.id, "subscriptions"),
@@ -707,6 +712,7 @@ function AccountConsole({
   const descriptions: Record<Page, string> = {
  applications:"打开你的产品应用。", "user-management":"管理统一用户状态与产品角色。",
     overview: "查看当前账户的会员、额度与资金。",
+    billing: "集中查看当前方案、用量、钱包与账单。",
     memberships: "管理产品会员，查看已付期限与方案权益。",
     credits: "模型额度仅用于模型服务，不是可退款现金。",
     addons: "按需补充模型额度，独立有效期以商品规则为准。",
@@ -772,6 +778,7 @@ function AccountConsole({
           </button>
         </Notice>
       )}
+      {finance && <OrderRecovery resource={orders} refresh={refresh} onBills={() => setPage("bills")} />}
       {page === "overview" && (
         <>
           <section className="metrics">
@@ -815,7 +822,7 @@ function AccountConsole({
               action={
                 <button
                   className="text-button"
-                  onClick={() => setPage("memberships")}
+                  onClick={() => setPage("billing")}
                 >
                   查看全部 <ArrowRight size={14} />
                 </button>
@@ -834,8 +841,8 @@ function AccountConsole({
                 !subscriptions.error &&
                 !subscriptions.data?.length && (
                   <div className="empty-action">
-                    <button onClick={() => setPage("memberships")}>
-                      浏览会员方案
+                    <button onClick={() => setPage("billing")}>
+                      查看套餐与用量
                     </button>
                   </div>
                 )}
@@ -876,6 +883,20 @@ function AccountConsole({
           )}
         </>
       )}
+      {page === "billing" && (
+        <BillingHub
+          account={account}
+          session={session}
+          products={products.data || []}
+          offers={offers}
+          subscriptions={subscriptions}
+          credits={credits}
+          wallets={wallets}
+          orders={orders}
+          capabilities={capabilities}
+          onNavigate={setPage}
+        />
+      )}
       {page === "memberships" && (
         <>
           <Panel title="当前会员">
@@ -888,6 +909,7 @@ function AccountConsole({
             kind="membership"
             offers={offers}
             subscriptions={subscriptions.data || []}
+            capabilities={capabilities}
           />
         </>
       )}
@@ -897,6 +919,7 @@ function AccountConsole({
           kind="addon"
           offers={offers}
           subscriptions={subscriptions.data || []}
+          capabilities={capabilities}
         />
       )}
       {page === "credits" && (
@@ -941,7 +964,7 @@ function AccountConsole({
       )}
       {page === "wallets" &&
         (finance ? (
-          <Wallets {...shared} wallets={wallets} operations={operations} />
+          <Wallets {...shared} wallets={wallets} operations={operations} capabilities={capabilities} />
         ) : (
           <Notice>只有所有者和财务管理员可查看钱包与充值。</Notice>
         ))}
@@ -1201,6 +1224,37 @@ function OrderTable({
         </Table>
       )}
     </ResourceState>
+  );
+}
+function OrderRecovery({
+  resource,
+  refresh,
+  onBills,
+}: {
+  resource: Resource<Order[]>;
+  refresh: () => void;
+  onBills: () => void;
+}) {
+  const pending = (resource.data || []).filter((order) =>
+    ["PENDING", "UNKNOWN", "CREATED", "SUBMITTING", "MANUAL_REVIEW"].includes(order.payment_status) ||
+    ["PENDING", "UNKNOWN", "CREATED", "SUBMITTING", "MANUAL_REVIEW"].includes(order.fulfillment_status),
+  );
+  if (resource.loading || !pending.length) return null;
+  return (
+    <Panel title="订单状态" className="order-recovery" action={<button className="text-button" onClick={refresh}><RefreshCw size={14} />刷新状态</button>}>
+      <Notice>
+        付款和权益发放是两个独立状态。待核实订单请先刷新并查看账单，确认结果前不要重复提交。
+      </Notice>
+      <div className="order-recovery-list">
+        {pending.slice(0, 4).map((order) => (
+          <div key={order.id} className="order-recovery-row">
+            <div><strong>{order.offer.name}</strong><small className="mono">{order.id}</small></div>
+            <div><span>付款 </span><Status value={order.payment_status} /><span>权益 </span><Status value={order.fulfillment_status} /></div>
+          </div>
+        ))}
+      </div>
+      <button className="secondary" onClick={onBills}>查看账单与处理记录 <ArrowRight size={15} /></button>
+    </Panel>
   );
 }
 export function OperationTable({

@@ -7,6 +7,12 @@ export type Session = {
   csrf_token?: string;
   sandbox: boolean;
 };
+export type Capabilities = {
+  sandbox?: boolean;
+  real_payments_configured?: boolean;
+  unified_wallet_recharge?: boolean;
+  product_wallet_recharge?: boolean;
+};
 export type Account = { id: string; kind: string; name: string; role: string };
 export type BillingProfile = {
   product_id: string;
@@ -19,6 +25,7 @@ export type BillingProfile = {
     require_subscription: boolean;
     funding_modes: string[];
     default_funding_mode: string;
+    models?: string[] | null;
   };
 };
 export type Product = {
@@ -67,6 +74,7 @@ export type Offer = {
   rank: number;
   validity_months: number;
   refund_rule?: string;
+  upgrade_rule?: string;
   status: string;
   sandbox: boolean;
 };
