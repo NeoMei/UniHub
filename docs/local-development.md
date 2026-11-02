@@ -55,7 +55,7 @@ set +a
 
 不要删除 `.local` 后继续复用原数据卷：数据库原密码和 Casdoor 原应用密钥不会随配置文件重新生成而同步更换。遗失配置时应先从本地备份恢复。`.env.example` 只说明字段，不包含可用秘密。
 
-Casdoor 应用配置为非共享应用、`JWT-Standard`、`RS256` 证书、client ID `unihub-local`、一小时 token，有且仅有 `authorization_code` grant。登录表单明确包含可见的 `Username`、`Password`、`Login button` 三项；Casdoor 只会在 `signinItems` 整体为空时补默认项，部分配置不会自动补提交按钮。全局 issuer 为 `http://localhost:58000`，发现端点为 `http://localhost:58000/.well-known/openid-configuration`。`initDataNewOnly=true` 保留数据库里已有对象，重启不会覆盖管理员控制台修改；seed 修改需要在控制台明确应用或另行迁移。新空库的 `cert-built-in` 由 Casdoor 生成新密钥。
+Casdoor 应用配置为非共享应用、`JWT-Standard`、`RS256` 证书、client ID `unihub-local`、一小时 access token，有且仅有 `authorization_code` grant；需要测试 refresh 的产品 client 通过受控 headless registry 额外启用 `refresh_token` grant。登录表单明确包含可见的 `Username`、`Password`、`Login button` 三项；Casdoor 只会在 `signinItems` 整体为空时补默认项，部分配置不会自动补提交按钮。全局 issuer 为 `http://localhost:58000`，发现端点为 `http://localhost:58000/.well-known/openid-configuration`。`initDataNewOnly=true` 保留数据库里已有对象，重启不会覆盖管理员控制台修改；seed 修改需要在控制台明确应用或另行迁移。新空库的 `cert-built-in` 由 Casdoor 生成新密钥。
 
 初始化脚本包含一次窄范围兼容修复：原始 `app-unihub` 的非空登录项列表缺少 `Login button` 时追加可见按钮，同时修复本地 seed；已有该行时不操作，不覆盖显式隐藏按钮的设置，不变更账号、密码或密钥。
 
@@ -142,4 +142,4 @@ Compose 新空卷全栈启动及历史容器迁移尚未执行；当前验证复
 
 本地初始化另外创建 `app-superwagie`，仅登记 `http://127.0.0.1:57991/api/platform-account/callback` 与 `http://localhost:57991/api/platform-account/callback`。随机 client secret 仅存 Casdoor/本地私有配置，绝不交给 SuperWagie。固定 Casdoor v4.23.0 支持带有效 S256 challenge/verifier 的无 secret code 换取；保留随机 secret 可避免无 PKCE 的空 secret 匹配。见[对应源码](https://github.com/casdoor/casdoor/blob/v4.23.0/object/token_oauth.go#L159-L277)。现有 client 配置不会被重复初始化覆盖。
 
-SuperWagie 使用独立的 `OPENCHAMBER_UNIHUB_*` 配置；登录令牌保存在后端最多一小时的内存会话，浏览器/桌面渲染器不持有平台 access token。重启后重新登录，当前没有长期 refresh token 或隐式自动登录。
+SuperWagie 使用独立的 `OPENCHAMBER_UNIHUB_*` 配置；access token 保存在后端加密会话，浏览器/桌面渲染器不持有平台 token。生产的 `superwagie-headless` client 开启 refresh token 后，UniHub 在服务端轮换不透明 refresh token，SuperWagie 在 access token 到期前自动续期；refresh family 最长 30 天，过期或撤销后才需要重新登录。未开启该开关的本地 client 仍按一小时会话运行。

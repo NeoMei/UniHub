@@ -5,6 +5,8 @@ package identityapi
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -37,7 +39,9 @@ const registrationPath = "/v1/identity/registrations"
 const authorizePath = "/v1/identity/authorize/password"
 const mfaPath = "/v1/identity/authorize/mfa"
 const tokenPath = "/v1/identity/token"
+const revokePath = "/v1/identity/revoke"
 const scopes = "openid profile email"
+const refreshTokenTTL = 30 * 24 * time.Hour
 
 // Options is private server configuration. AuditRedactionVerified may be enabled
 // only after deployment readback verifies Casdoor/proxy/tracing redaction; it is
@@ -154,6 +158,44 @@ func (s *Server) mac(parts ...string) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
+
+func (s *Server) refreshCipher() (cipher.AEAD, error) {
+	key := sha256.Sum256(append([]byte("unihub:identity-refresh:v1:"), s.opts.SigningKey...))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+func (s *Server) sealRefreshSecret(secret string) (string, error) {
+	aead, err := s.refreshCipher()
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err = rand.Read(nonce); err != nil {
+		return "", err
+	}
+	sealed := aead.Seal(nil, nonce, []byte(secret), nil)
+	return base64.RawURLEncoding.EncodeToString(append(nonce, sealed...)), nil
+}
+
+func (s *Server) openRefreshSecret(value string) (string, error) {
+	aead, err := s.refreshCipher()
+	if err != nil {
+		return "", err
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(raw) < aead.NonceSize() {
+		return "", errors.New("invalid sealed refresh token")
+	}
+	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], nil)
+	if err != nil {
+		return "", errors.New("invalid sealed refresh token")
+	}
+	return string(plain), nil
+}
 func randomUUID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -188,7 +230,7 @@ func interaction(w http.ResponseWriter, kind string) {
 func (s *Server) Handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if p != registrationPath && p != authorizePath && p != mfaPath && p != tokenPath {
+		if p != registrationPath && p != authorizePath && p != mfaPath && p != tokenPath && p != revokePath {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -218,6 +260,8 @@ func (s *Server) Handler(next http.Handler) http.Handler {
 			s.authorizeMfa(w, r)
 		case tokenPath:
 			s.token(w, r)
+		case revokePath:
+			s.revoke(w, r)
 		}
 	})
 }
@@ -340,6 +384,8 @@ func (s *Server) limitInTx(ctx context.Context, tx pgx.Tx, r *http.Request, c pr
 		dims = []dimension{{"register-ip", host, time.Hour, 3}, {"register-global-ip", host, time.Hour, 12}}
 	} else if kind == "token" {
 		dims = []dimension{{"token-ip", host, time.Minute, 30}}
+	} else if kind == "refresh" {
+		dims = []dimension{{"refresh-ip", host, time.Minute, 60}, {"refresh-global-ip", host, time.Minute, 300}}
 	} else {
 		dims = append(dims, dimension{"username", strings.ToLower(user), 15 * time.Minute, 5})
 	}
@@ -765,13 +811,20 @@ type tokenRequest struct {
 	RedirectURI     string `json:"redirect_uri"`
 	Code            string `json:"code"`
 	Verifier        string `json:"code_verifier"`
+	RefreshToken    string `json:"refresh_token"`
 }
 type tokenSet struct {
 	Access  string `json:"access_token"`
 	ID      string `json:"id_token"`
+	Refresh string `json:"refresh_token,omitempty"`
 	Type    string `json:"token_type"`
 	Scope   string `json:"scope"`
 	Expires int64  `json:"expires_in"`
+}
+
+type revokeRequest struct {
+	ClientID     string `json:"client_id"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 func (s *Server) token(w http.ResponseWriter, r *http.Request) {
@@ -781,6 +834,10 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	}
 	c, ok := s.clientFor(w, r, req.ClientID, false)
 	if !ok {
+		return
+	}
+	if req.Grant == "refresh_token" {
+		s.refresh(w, r, req, c)
 		return
 	}
 	if req.Grant != "authorization_code" || len(req.AuthorizationID) != 43 || req.Code == "" || len(req.Code) > 512 || !slices.Contains(c.RedirectURIs, req.RedirectURI) || !verifierPattern.MatchString(req.Verifier) {
@@ -808,21 +865,36 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "authorization_result_unknown")
 		return
 	}
-	if tokens.Access == "" || tokens.ID == "" || tokens.Type != "Bearer" || tokens.Expires <= 0 || tokens.Scope != scopes || s.verifyTokens(r.Context(), c.ClientID, tokens, nonceHash) != nil {
+	subject, verifyErr := s.verifyTokens(r.Context(), c.ClientID, tokens, nonceHash)
+	if tokens.Access == "" || tokens.ID == "" || tokens.Type != "Bearer" || tokens.Expires <= 0 || tokens.Scope != scopes || verifyErr != nil {
 		fail(w, 502, "invalid_identity_response")
 		return
 	}
+	if c.RefreshTokens {
+		if tokens.Refresh == "" {
+			fail(w, 502, "invalid_identity_response")
+			return
+		}
+		refreshToken, err := s.createRefreshToken(r.Context(), c, tokens.Refresh, subject)
+		if err != nil {
+			fail(w, 503, "service_unavailable")
+			return
+		}
+		tokens.Refresh = refreshToken
+	} else {
+		tokens.Refresh = ""
+	}
 	jsonResponse(w, 200, tokens)
 }
-func (s *Server) verifyTokens(ctx context.Context, client string, tokens tokenSet, nonceHash string) error {
+func (s *Server) verifyTokens(ctx context.Context, client string, tokens tokenSet, nonceHash string) (string, error) {
 	v := s.verifiers[client]
 	access, e := v.Verify(ctx, tokens.Access)
 	if e != nil {
-		return errors.New("invalid identity")
+		return "", errors.New("invalid identity")
 	}
 	id, e := v.Verify(ctx, tokens.ID)
 	if e != nil {
-		return errors.New("invalid identity")
+		return "", errors.New("invalid identity")
 	}
 	var a struct {
 		Type   string   `json:"tokenType"`
@@ -836,12 +908,158 @@ func (s *Server) verifyTokens(ctx context.Context, client string, tokens tokenSe
 		Expiry *float64 `json:"exp"`
 	}
 	if access.Claims(&a) != nil || id.Claims(&i) != nil || a.Type != "access-token" || i.Type != "id-token" || a.Scope != scopes || a.Expiry == nil || *a.Expiry <= 0 || i.Expiry == nil || *i.Expiry <= 0 || len(access.Audience) != 1 || access.Audience[0] != client || len(id.Audience) != 1 || id.Audience[0] != client || a.Azp != "" && a.Azp != client || i.Azp != "" && i.Azp != client || access.Subject == "" || access.Subject != id.Subject || access.Issuer != id.Issuer || !equal(s.mac("nonce", id.Nonce), nonceHash) {
-		return errors.New("invalid identity")
+		return "", errors.New("invalid identity")
 	}
 	if id.AccessTokenHash != "" && id.VerifyAccessToken(tokens.Access) != nil {
-		return errors.New("invalid identity")
+		return "", errors.New("invalid identity")
 	}
-	return nil
+	return access.Subject, nil
+}
+
+func (s *Server) verifyRefreshedTokens(ctx context.Context, client string, tokens tokenSet, expectedSubject string) (string, error) {
+	v := s.verifiers[client]
+	access, err := v.Verify(ctx, tokens.Access)
+	if err != nil {
+		return "", errors.New("invalid identity")
+	}
+	id, err := v.Verify(ctx, tokens.ID)
+	if err != nil {
+		return "", errors.New("invalid identity")
+	}
+	var a struct {
+		Type   string   `json:"tokenType"`
+		Scope  string   `json:"scope"`
+		Azp    string   `json:"azp"`
+		Expiry *float64 `json:"exp"`
+	}
+	var i struct {
+		Type   string   `json:"tokenType"`
+		Azp    string   `json:"azp"`
+		Expiry *float64 `json:"exp"`
+	}
+	if access.Claims(&a) != nil || id.Claims(&i) != nil || a.Type != "access-token" || i.Type != "id-token" || a.Scope != scopes || a.Expiry == nil || i.Expiry == nil || *a.Expiry <= 0 || *i.Expiry <= 0 || len(access.Audience) != 1 || access.Audience[0] != client || len(id.Audience) != 1 || id.Audience[0] != client || (a.Azp != "" && a.Azp != client) || (i.Azp != "" && i.Azp != client) || access.Subject == "" || access.Subject != expectedSubject || access.Subject != id.Subject {
+		return "", errors.New("invalid identity")
+	}
+	if id.AccessTokenHash != "" && id.VerifyAccessToken(tokens.Access) != nil {
+		return "", errors.New("invalid identity")
+	}
+	return access.Subject, nil
+}
+
+func (s *Server) createRefreshToken(ctx context.Context, c products.Client, upstream, subject string) (string, error) {
+	if !c.RefreshTokens || upstream == "" || subject == "" {
+		return "", errors.New("refresh token unavailable")
+	}
+	raw := randomID()
+	family := randomID()
+	sealed, err := s.sealRefreshSecret(upstream)
+	if err != nil {
+		return "", err
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO identity_refresh_tokens(token_hash,family_hash,client_id,subject,upstream_refresh_ciphertext,expires_at) VALUES($1,$2,$3,$4,$5,$6)`, s.mac("refresh-token", raw), s.mac("refresh-family", family), c.ClientID, subject, sealed, time.Now().UTC().Add(refreshTokenTTL))
+	if err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
+func (s *Server) refresh(w http.ResponseWriter, r *http.Request, req tokenRequest, c products.Client) {
+	if !c.RefreshTokens || len(req.RefreshToken) < 32 || len(req.RefreshToken) > 128 || req.ClientID == "" {
+		fail(w, 400, "invalid_grant")
+		return
+	}
+	if !s.limit(r.Context(), r, c, "", "refresh") {
+		fail(w, 429, "rate_limited")
+		return
+	}
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	defer database.Rollback(tx)
+	var familyHash, clientID, subject, sealed string
+	var expiresAt time.Time
+	var usedAt, revokedAt *time.Time
+	err = tx.QueryRow(r.Context(), `SELECT family_hash,client_id,subject,upstream_refresh_ciphertext,expires_at,used_at,revoked_at FROM identity_refresh_tokens WHERE token_hash=$1 FOR UPDATE`, s.mac("refresh-token", req.RefreshToken)).Scan(&familyHash, &clientID, &subject, &sealed, &expiresAt, &usedAt, &revokedAt)
+	if err == pgx.ErrNoRows {
+		fail(w, 400, "invalid_grant")
+		return
+	}
+	if err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	if clientID != c.ClientID || revokedAt != nil || expiresAt.Before(time.Now().UTC()) {
+		fail(w, 400, "invalid_grant")
+		return
+	}
+	if usedAt != nil {
+		_, _ = tx.Exec(r.Context(), `UPDATE identity_refresh_tokens SET revoked_at=COALESCE(revoked_at,now()) WHERE family_hash=$1`, familyHash)
+		_ = tx.Commit(r.Context())
+		fail(w, 400, "invalid_grant")
+		return
+	}
+	upstream, err := s.openRefreshSecret(sealed)
+	if err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	var tokens tokenSet
+	if err = s.providerJSON(r.Context(), "POST", "/api/login/oauth/access_token", map[string]string{"grant_type": "refresh_token", "client_id": c.ClientID, "refresh_token": upstream}, false, &tokens); err != nil {
+		fail(w, 502, "authorization_result_unknown")
+		return
+	}
+	if tokens.Access == "" || tokens.ID == "" || tokens.Type != "Bearer" || tokens.Expires <= 0 || tokens.Scope != scopes {
+		fail(w, 502, "invalid_identity_response")
+		return
+	}
+	if _, err = s.verifyRefreshedTokens(r.Context(), c.ClientID, tokens, subject); err != nil {
+		fail(w, 502, "invalid_identity_response")
+		return
+	}
+	nextUpstream := tokens.Refresh
+	if nextUpstream == "" {
+		nextUpstream = upstream
+	}
+	nextRaw := randomID()
+	nextHash := s.mac("refresh-token", nextRaw)
+	nextSealed, err := s.sealRefreshSecret(nextUpstream)
+	if err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `UPDATE identity_refresh_tokens SET used_at=now(),replaced_by=$2 WHERE token_hash=$1`, s.mac("refresh-token", req.RefreshToken), nextHash); err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	if _, err = tx.Exec(r.Context(), `INSERT INTO identity_refresh_tokens(token_hash,family_hash,client_id,subject,upstream_refresh_ciphertext,expires_at) VALUES($1,$2,$3,$4,$5,$6)`, nextHash, familyHash, c.ClientID, subject, nextSealed, expiresAt); err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		fail(w, 503, "service_unavailable")
+		return
+	}
+	tokens.Refresh = nextRaw
+	jsonResponse(w, 200, tokens)
+}
+
+func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
+	var req revokeRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	c, ok := s.clientFor(w, r, req.ClientID, false)
+	if !ok {
+		return
+	}
+	if !c.RefreshTokens || len(req.RefreshToken) < 32 || len(req.RefreshToken) > 128 {
+		jsonResponse(w, 200, map[string]any{})
+		return
+	}
+	_, _ = s.pool.Exec(r.Context(), `UPDATE identity_refresh_tokens SET revoked_at=COALESCE(revoked_at,now()) WHERE family_hash=(SELECT family_hash FROM identity_refresh_tokens WHERE token_hash=$1 AND client_id=$2)`, s.mac("refresh-token", req.RefreshToken), c.ClientID)
+	jsonResponse(w, 200, map[string]any{})
 }
 
 type envelope struct {

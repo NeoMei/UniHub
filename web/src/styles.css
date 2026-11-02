@@ -628,11 +628,216 @@ td strong {
 .offer-price small {
   display: block;
 }
+.billing-hub {
+  max-width: 1180px;
+}
+.billing-summary-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 20px;
+}
+.billing-summary-grid .panel {
+  margin-bottom: 20px;
+}
+.billing-current-plan {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.billing-current-plan:last-child {
+  border-bottom: 0;
+}
+.billing-current-plan strong,
+.billing-current-plan small {
+  display: block;
+}
+.billing-current-plan small {
+  margin-top: 5px;
+}
+.billing-metrics {
+  display: grid;
+  gap: 12px;
+}
+.billing-metrics > div {
+  display: grid;
+  grid-template-columns: 22px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.billing-metrics > div:last-child {
+  border-bottom: 0;
+}
+.billing-metrics svg {
+  color: var(--teal);
+}
+.billing-metrics strong {
+  font-variant-numeric: tabular-nums;
+}
+.billing-summary-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.billing-plan-sections {
+  display: grid;
+  gap: 22px;
+}
+.billing-plan-sections section > h3 {
+  margin-bottom: 12px;
+  color: #47626e;
+}
+.billing-offer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
+}
+.billing-offer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 230px;
+  padding: 17px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdfd;
+}
+.billing-offer-card.current {
+  border-color: #83c8c1;
+  background: #f2fbfa;
+}
+.billing-offer-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.billing-offer-period {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.billing-offer-card h3 {
+  margin-top: 3px;
+  font-size: 16px;
+}
+.billing-current-tag {
+  color: #237c70;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.billing-offer-price {
+  margin-top: 7px;
+  font-size: 24px;
+  font-variant-numeric: tabular-nums;
+}
+.billing-offer-unit {
+  color: var(--muted);
+  font-size: 11px;
+}
+.billing-offer-card p {
+  min-height: 42px;
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.billing-offer-card small {
+  display: block;
+}
+.billing-offer-card button {
+  width: 100%;
+  margin-top: auto;
+}
+.billing-next-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.billing-next-actions > button {
+  justify-content: flex-start;
+  gap: 12px;
+  padding: 15px 17px;
+  color: #155e68;
+  background: #edf8f8;
+  border: 1px solid #d4eceb;
+  text-align: left;
+}
+.billing-next-actions > button:hover {
+  background: #e2f3f2;
+}
+.billing-next-actions > button > span {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+}
+.billing-next-actions small {
+  color: #587681;
+}
+.billing-account-note {
+  margin: 14px 2px 0;
+  font-size: 11px;
+}
+.order-recovery {
+  border-color: #eadfbe;
+  background: #fffdf7;
+}
+.order-recovery .notice {
+  margin-bottom: 12px;
+}
+.order-recovery-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.order-recovery-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #f0e7d3;
+  border-radius: 6px;
+  background: #fff;
+}
+.order-recovery-row strong,
+.order-recovery-row small {
+  display: block;
+}
+.order-recovery-row small {
+  margin-top: 3px;
+}
+.order-recovery-row > div:last-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
 .inline-form {
   display: flex;
   align-items: flex-end;
   gap: 18px;
   padding: 10px 0;
+}
+.wallet-presets {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-bottom: 1px;
+}
+.wallet-presets span {
+  color: var(--muted);
+  font-size: 11px;
+}
+.wallet-presets button {
+  min-height: 34px;
+  padding: 7px 11px;
+  font-size: 12px;
 }
 .inline-form label {
   min-width: 170px;
@@ -889,6 +1094,10 @@ td strong {
   .overview-split {
     grid-template-columns: minmax(0, 1.5fr) minmax(235px, 1fr);
   }
+  .billing-summary-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
   .related {
     padding: 22px 18px;
   }
@@ -1054,6 +1263,12 @@ td strong {
   .overview-split {
     grid-template-columns: 1fr;
     gap: 0;
+  }
+  .billing-next-actions {
+    grid-template-columns: 1fr;
+  }
+  .billing-offer-grid {
+    grid-template-columns: 1fr;
   }
   .panel {
     padding: 17px 14px;

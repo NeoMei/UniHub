@@ -216,6 +216,37 @@ it("shows product-owned prepaid guidance and zero-credit memberships from existi
   expect(screen.queryByText(/每月包含额度/)).toBeNull();
   expect(calls.some((path) => /billing-profile|\/(wallets|orders|settings|operations)$/.test(path))).toBe(false);
 });
+it("blocks formal purchase actions when real payments are unavailable", async () => {
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    const data = path === "/auth/session"
+      ? { authenticated: true, sandbox: false, user: { id: "owner", name: "Owner" }, csrf_token: "csrf" }
+      : path === "/v1/accounts"
+        ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }]
+        : path === "/admin/v1/me"
+          ? { enabled: false, user_id: "owner", roles: [], permissions: [], version: 0 }
+          : path === "/v1/capabilities"
+            ? { real_payments_configured: false, product_wallet_recharge: false, unified_wallet_recharge: false }
+            : path === "/v1/catalog"
+              ? [{ id: "plan-basic", product_id: "notes", name: "基础方案", account_kind: "both", kind: "membership", period: "month", price: "1000000", monthly_credit: "1000000", entitlements: {}, rank: 1, validity_months: 1, refund_rule: "unused_only_v1", status: "published", sandbox: false }]
+              : path === "/v1/products"
+                ? [{ id: "notes", name: "Notes" }]
+                : path === "/v1/accounts/personal/subscriptions"
+                  ? []
+                  : path === "/v1/accounts/personal/credits"
+                    ? []
+                    : [];
+    return new Response(JSON.stringify(data), { status: 200 });
+  }));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "产品会员" }));
+  const purchase = await screen.findByRole("button", { name: "购买" });
+  expect(
+    (await screen.findAllByRole("status")).some((node) =>
+      node.textContent?.includes("真实支付尚未开通"),
+    ),
+  ).toBe(true);
+  expect((purchase as HTMLButtonElement).disabled).toBe(true);
+});
 it("loads the user profile and shows avatar plus account settings menu", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     const data = path === "/auth/session"

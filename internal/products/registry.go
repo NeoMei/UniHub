@@ -28,6 +28,7 @@ type Client struct {
 	BrowserSSO         bool     `json:"browser_sso,omitempty"`
 	PasswordLogin      bool     `json:"password_login,omitempty"`
 	Registration       bool     `json:"registration,omitempty"`
+	RefreshTokens      bool     `json:"refresh_tokens,omitempty"`
 }
 
 var productID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)

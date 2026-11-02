@@ -127,7 +127,7 @@ SuperWagie 平台账户模块（`packages/web/server/lib/platform-account/`）�
 | `OPENCHAMBER_UNIHUB_REDIRECT_URI` | `http://127.0.0.1:57991/api/platform-account/callback`（路径必须为 `/api/platform-account/callback`） |
 | `OPENCHAMBER_UNIHUB_CONSOLE_URL` | 可选，`https://unihub.quukk.com` |
 
-桌面端通过系统浏览器完成 PKCE 登录后回调本地后端；HTTP 仅允许回环地址。禁止设置 `OPENCHAMBER_UNIHUB_DISABLED=1` 或 `OPENCHAMBER_UNIHUB_MODE=off`。会话 token 上限 1 小时且无刷新令牌，过期需重新登录。
+桌面端通过系统浏览器完成 PKCE 登录后回调本地后端；HTTP 仅允许回环地址。禁止设置 `OPENCHAMBER_UNIHUB_DISABLED=1` 或 `OPENCHAMBER_UNIHUB_MODE=off`。access token 仍上限 1 小时；生产 `superwagie-headless` client 必须开启 UniHub refresh token policy，SuperWagie 会在到期前自动轮换。refresh family 最长 30 天，只有 refresh 被撤销、失效或拒绝后才需重新登录。
 
 ## 第四步：验收清单
 

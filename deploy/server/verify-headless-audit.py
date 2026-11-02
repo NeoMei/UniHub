@@ -91,9 +91,10 @@ def no_markers(text,markers):
   candidates=[value,json.dumps(value,ensure_ascii=False)[1:-1],urllib.parse.quote(value,safe=''),urllib.parse.quote_plus(value,safe='')]
   if any(candidate in item for candidate in candidates for item in variants):raise AuditError('Private acceptance marker found in a real audit/log sink; activation refused')
 
-def identity_proof(result,since,now):
- expected={'controlled_loopback_only':True,'audit_privacy_verified':False,'registration_status':201,'foreign_origin_status':403,'invalid_password_status':401,'authorization_status':200,'token_status':200,'token_type':'Bearer','scope':'openid profile email','has_access_token':True,'has_id_token':True,'has_refresh_token':False,'replay_status':400}
+def identity_proof(result,since,now,expect_refresh=False):
+ expected={'controlled_loopback_only':True,'audit_privacy_verified':False,'registration_status':201,'foreign_origin_status':403,'invalid_password_status':401,'authorization_status':200,'token_status':200,'token_type':'Bearer','scope':'openid profile email','has_access_token':True,'has_id_token':True,'has_refresh_token':expect_refresh,'replay_status':400}
  if not isinstance(result,dict) or any(type(result.get(k)) is not type(v) or result.get(k)!=v for k,v in expected.items()):raise AuditError('Controlled identity registration/login/PKCE/replay results are incomplete or failed')
+ if expect_refresh and (result.get('refresh_status') != 200 or result.get('refresh_replay_status') != 400 or result.get('refresh_rotated') is not True):raise AuditError('Refresh-token rotation evidence is incomplete or failed')
  started=stamp(result.get('started_at'))
  if not since<=started<=now or now-started>timedelta(hours=24):raise AuditError('Identity probe is outside the inspected fresh time window')
  if not isinstance(result.get('client_id'),str) or not result['client_id'] or len(result['client_id'])>256:raise AuditError('Identity probe client binding is absent')
@@ -178,9 +179,12 @@ def verify(root,release,markers_path,result_path,since,output):
  if not isinstance(markers,list) or len(markers)<7 or len(markers)>100 or any(not isinstance(x,str) or len(x)<8 or len(x)>16384 for x in markers):raise AuditError('Private synthetic password/token/PKCE audit markers are incomplete')
  markers=list(set(markers))
  if len(markers)<7:raise AuditError('Distinct private acceptance markers are incomplete')
- identity=identity_proof(bounded_json(result_path),since,now)
  policy=root/'headless-config/products.draft.json';bundle.no_symlink(policy);clients=bounded_json(policy)
- if not isinstance(clients,list) or not any(isinstance(c,dict) and c.get('client_id')==identity['client_id'] and c.get('registration') is True and c.get('password_login') is True for c in clients):raise AuditError('Controlled probe client is not enabled in the reviewed draft policy')
+ if not isinstance(clients,list):raise AuditError('Reviewed draft policy is invalid')
+ result=bounded_json(result_path)
+ client=next((c for c in clients if isinstance(c,dict) and c.get('client_id')==result.get('client_id')),None)
+ if not isinstance(client,dict) or client.get('registration') is not True or client.get('password_login') is not True:raise AuditError('Controlled probe client is not enabled in the reviewed draft policy')
+ identity=identity_proof(result,since,now,bool(client.get('refresh_tokens',False)))
  source=source_proof(release,pin,bundle);audit=audit_proof(sql_snapshot(since,bundle),markers)
  config=command(['nginx','-T']);no_markers(config,markers)
  format_match=re.search(r'log_format\s+unihub_server\s+([^;]+);',config)

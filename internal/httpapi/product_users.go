@@ -194,16 +194,18 @@ func (s *api) accessTarget(r *http.Request) (string, string, error) {
 func (s *api) capabilities(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 	scopes := []string{}
 	clientID, instance, kind := "", "", "console"
+	refreshToken := false
 	if c, ok := productPolicy(r); ok {
 		scopes = c.Scopes
 		clientID = c.ClientID
 		instance = productusers.Instance(c.InstanceID)
+		refreshToken = c.RefreshTokens
 		kind = "product"
 	} else if originProduct(r) != "" {
 		kind = "legacy_product"
 	}
 	financeWrite, _ := r.Context().Value(productFinanceWriteKey{}).(bool)
-	return respond(w, 200, map[string]any{"finance_write": financeWrite, "kind": kind, "product_id": originProduct(r), "instance_id": instance, "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": false, "unified_wallet_recharge": originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox, "refresh_token": false, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
+	return respond(w, 200, map[string]any{"finance_write": financeWrite, "kind": kind, "product_id": originProduct(r), "instance_id": instance, "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": false, "unified_wallet_recharge": originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox, "refresh_token": refreshToken, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
 }
 
 // Keep verified expiry in request context rather than accepting any client field.

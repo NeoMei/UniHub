@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { Catalog, Members, SettingsPage } from "./forms";
+import { Catalog, Members, SettingsPage, Wallets } from "./forms";
 import type { ActionSpec, Shared } from "./App";
 import type { Invitation, Offer, Quote, Subscription } from "./types";
 // jsdom does not implement native dialog methods used by the real Modal.
@@ -102,6 +102,33 @@ it("keeps zero-credit upgrade quotes and confirmations free of monthly grant pro
   render(<>{act.mock.calls[0][0].content}</>);
   expect(screen.getByText(/升级保持原服务期限，不发放模型额度/)).toBeDefined();
   expect(screen.queryByText(/立即增加额度|后续每月额度|当前额度账期/)).toBeNull();
+});
+it("shows an account-bound checkout summary before a purchase mutation", () => {
+  const act = vi.fn<(spec: ActionSpec) => void>();
+  render(
+    <Catalog {...shared} act={act} kind="membership" offers={{ data: [{ ...membership, monthly_credit: "12000000" }], loading: false }} subscriptions={[]} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "购买" }));
+  render(<>{act.mock.calls[0][0].content}</>);
+  expect(screen.getByText("付费账户")).toBeDefined();
+  expect(screen.getByText("资金来源")).toBeDefined();
+  expect(screen.getByText(/产品钱包优先/)).toBeDefined();
+});
+it("offers wallet recharge presets and explains uncertain operations", () => {
+  render(
+    <Wallets
+      {...shared}
+      session={{ ...shared.session, sandbox: true }}
+      wallets={{ data: [{ product_id: "", asset: "CNY", amount: "123000000" }], loading: false }}
+      operations={{ data: [{ id: "op-1", account_id: "A", kind: "recharge", status: "UNKNOWN", created_at: "2026-11-03T00:00:00Z" }], loading: false }}
+      capabilities={{ data: { product_wallet_recharge: true }, loading: false }}
+    />,
+  );
+  expect(screen.getByText(/测试充值仅用于验证流程/)).toBeDefined();
+  expect(screen.getByRole("button", { name: "¥ 100" })).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "¥ 100" }));
+  expect((screen.getByLabelText("充值金额（元）") as HTMLInputElement).value).toBe("100");
+  expect(screen.getByText("结果待核实，请勿重复操作")).toBeDefined();
 });
 it("requires explicit unchecked authorization opt-in and does not auto-enable funding when a product changes", () => {
   const act = vi.fn();

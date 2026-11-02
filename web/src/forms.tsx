@@ -9,6 +9,7 @@ import {
 import { accountPath, idempotencyKey, request } from "./api";
 import type {
   Authorization,
+  Capabilities,
   Invitation,
   Member,
   Offer,
@@ -39,10 +40,12 @@ export function Catalog({
   kind,
   offers,
   subscriptions,
+  capabilities = { loading: false },
 }: Shared & {
   kind: "membership" | "addon";
   offers: Resource<Offer[]>;
   subscriptions: Subscription[];
+  capabilities?: Resource<Capabilities>;
 }) {
   const [quote, setQuote] = useState<{
     value: Quote;
@@ -58,6 +61,10 @@ export function Catalog({
       (!o.sandbox || session.sandbox),
   );
   const canBuy = financeRole(account.role);
+  const commerceReady =
+    session.sandbox ||
+    capabilities.loading ||
+    capabilities.data?.real_payments_configured !== false;
   const name = (id: string) => products.find((p) => p.id === id)?.name || id;
   async function choose(offer: Offer) {
     setError("");
@@ -90,7 +97,7 @@ export function Catalog({
       confirm: "确认购买",
       content: (
         <>
-          <OfferDetails offer={offer} name={name(offer.product_id)} />
+          <OfferDetails offer={offer} name={name(offer.product_id)} accountName={account.name} />
           <Notice>
             优先使用该产品钱包；统一钱包补足须有独立授权。请先核对钱包与自动设置。
           </Notice>
@@ -218,8 +225,11 @@ export function Catalog({
                   </small>
                 </div>
                 <button
+                  title={!commerceReady ? "真实支付尚未开通，暂不能购买" : undefined}
+                  aria-disabled={!commerceReady || undefined}
                   disabled={
                     !canBuy ||
+                    !commerceReady ||
                     same ||
                     Boolean(loading) ||
                     Boolean(
@@ -246,6 +256,9 @@ export function Catalog({
         </div>
       )}
       {!canBuy && <Notice>请联系账户所有者或财务管理员购买。</Notice>}
+      {!session.sandbox && !commerceReady && (
+        <Notice>真实支付尚未开通。当前可查看商品，支付能力启用后才能购买。</Notice>
+      )}
       {quote && (
         <Modal title="会员升级报价" onClose={() => setQuote(undefined)}>
           <div className="modal-body">
@@ -290,11 +303,12 @@ export function Catalog({
     </Panel>
   );
 }
-function OfferDetails({ offer, name }: { offer: Offer; name: string }) {
+function OfferDetails({ offer, name, accountName }: { offer: Offer; name: string; accountName?: string }) {
   const featureSubscription =
     offer.kind === "membership" && offer.monthly_credit === "0";
   return (
     <dl>
+      {accountName && <Detail label="付费账户">{accountName}</Detail>}
       <Detail label="产品 / 方案">
         {name} / {offer.name}
       </Detail>
@@ -327,6 +341,11 @@ function OfferDetails({ offer, name }: { offer: Offer; name: string }) {
           按月发放，每月批次独立到期；年付不提前发放全年额度。
         </Detail>
       )}
+      {accountName && (
+        <Detail label="资金来源">
+          产品钱包优先；统一钱包补足须有独立授权。
+        </Detail>
+      )}
     </dl>
   );
 }
@@ -338,14 +357,17 @@ export function Wallets({
   wallets,
   operations,
   refresh,
+  capabilities = { loading: false },
 }: Shared & {
   wallets: Resource<Wallet[]>;
   operations: Resource<Operation[]>;
+  capabilities?: Resource<Capabilities>;
 }) {
   const [amount, setAmount] = useState("");
   const [product, setProduct] = useState("");
   const [error, setError] = useState("");
   const [recharge, setRecharge] = useState<Recharge>();
+  const rechargePresets = [100, 500, 1000];
   function prepare(kind: "recharge" | "transfer") {
     setError("");
     try {
@@ -399,7 +421,7 @@ export function Wallets({
                           w.product_id
                         : "统一钱包"}
                     </h3>
-                    <small>人民币</small>
+                    <small>人民币 · 余额单位为元</small>
                   </div>
                   <strong>¥ {fixed(w.amount)}</strong>
                 </div>
@@ -409,10 +431,16 @@ export function Wallets({
         </ResourceState>
       </Panel>
       <Panel title={session.sandbox ? "测试充值与资金划拨" : "资金划拨"}>
+        {session.sandbox && capabilities.data?.product_wallet_recharge !== false && (
+          <Notice>测试充值仅用于验证流程，不涉及真实支付；充值单需要手动确认测试入账。</Notice>
+        )}
         {!session.sandbox && (
           <Notice>
             真实支付渠道尚未开通。可将已有统一钱包余额划拨至产品钱包。
           </Notice>
+        )}
+        {session.sandbox && capabilities.data?.product_wallet_recharge === false && (
+          <Notice>当前部署未开放产品钱包充值，请联系平台管理员。</Notice>
         )}
         <div className="inline-form">
           <label>
@@ -432,14 +460,25 @@ export function Wallets({
           <label>
             金额（元）
             <input
+              aria-label="充值金额（元）"
               inputMode="decimal"
               placeholder="0.00"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
             />
           </label>
+          {session.sandbox && capabilities.data?.product_wallet_recharge !== false && (
+            <div className="wallet-presets" aria-label="充值金额快捷选择">
+              <span>快捷金额</span>
+              {rechargePresets.map((preset) => (
+                <button key={preset} className="secondary" onClick={() => setAmount(String(preset))}>
+                  ¥ {preset}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="form-buttons">
-            {session.sandbox && (
+            {session.sandbox && capabilities.data?.product_wallet_recharge !== false && (
               <button onClick={() => prepare("recharge")}>
                 创建测试充值单
               </button>

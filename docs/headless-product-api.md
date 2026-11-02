@@ -6,10 +6,10 @@ UniHub 提供身份、账户/团队、产品钱包、商业订单、共享模型
 
 ## 每个客户端独立登记
 
-受控部署配置 `PRODUCT_CLIENTS_FILE` 指向包含严格 JSON Client 数组的受控文件，每个 client_id 是独立且精确的 OIDC audience，不可复用控制台、运营或其他产品 audience。一个产品可有多个 client。新产品 ID 为 `^[a-z][a-z0-9_-]{0,63}$`，不受最初种子产品列表限制。产品不能自行申请 scope；运营审批后发布配置。
+受控部署配置 `PRODUCT_CLIENTS_FILE` 指向包含严格 JSON Client 数组的受控文件，每个 client_id 是独立且精确的 OIDC audience，不可复用控制台、运营或其他产品 audience。一个产品可有多个 client。新产品 ID 为 `^[a-z][a-z0-9_-]{0,63}$`，不受最初种子产品列表限制。产品不能自行申请 scope；运营审批后发布配置。`refresh_tokens` 是独立的受控开关，仅给已完成持久化密钥保护、轮换和重放撤销验收的客户端。
 
 ```json
-[{"product_id":"my-product","client_id":"my-product-web","application":"my-product-web","organization":"unihub","redirect_uris":["https://app.example.com/login/callback"],"origins":["https://app.example.com"],"scopes":["accounts:read","accounts:write","members:read","members:write","catalog:read","subscriptions:read","credits:read","wallets:read","recharges:read","recharges:write","transfers:write","operations:read","orders:read","orders:write","settings:read","settings:write","refunds:write","usage:read","model-credentials:write"],"billing_products":["my-product","llmrouter"],"password_login":false,"registration":false}]
+[{"product_id":"my-product","client_id":"my-product-web","application":"my-product-web","organization":"unihub","redirect_uris":["https://app.example.com/login/callback"],"origins":["https://app.example.com"],"scopes":["accounts:read","accounts:write","members:read","members:write","catalog:read","subscriptions:read","credits:read","wallets:read","recharges:read","recharges:write","transfers:write","operations:read","orders:read","orders:write","settings:read","settings:write","refunds:write","usage:read","model-credentials:write"],"billing_products":["my-product","llmrouter"],"password_login":false,"registration":false,"refresh_tokens":false}]
 ```
 
 上例能力清单只是审批示意。两个身份开关默认 false，开启还要求服务端私有 IdP 配置、已核验的审计脱敏、适配器支持的组织/应用策略和 IdP 能力；将 JSON 开关设 true 不表示部署验收已完成。配置不得含密码、client secret、支付密钥或模型服务密钥。未知字段和 scope、重复 audience、通配 URI 均拒绝。redirect 必须精确匹配，使用 HTTPS 或本机 loopback HTTP；Origin 使用精确 scheme/host/port，不带路径。
@@ -28,7 +28,7 @@ UniHub 提供身份、账户/团队、产品钱包、商业订单、共享模型
 
 注册密码须符合当前组织策略；适配器至少要求 12–128 字符，含 ASCII 大小写和数字，UTF-8 不超过 72 字节，不含用户名或可识别的邮箱本地部分。更严格的组织策略仍会生效。注册幂等重放不修改原密码；UNKNOWN 时只用原 key 和相同非敏感参数读取原结果，不换 key 再建用户。
 
-登录的 MFA、改密、同意或其他策略要求返回 `409 interaction_required`，包含 interaction.kind；产品应显示待支持交互，不能绕过。token 交换返回 `authorization_result_unknown` 时不得自动重放授权码。当前没有 GET 公开 client configuration、refresh token 或服务端 logout 接口。SDK 的 clearAccessToken 只清当前对象内存，不撤销 IdP 会话。
+登录的 MFA、改密、同意或其他策略要求返回 `409 interaction_required`，包含 interaction.kind；产品应显示待支持交互，不能绕过。authorization code 交换返回 `authorization_result_unknown` 时不得自动重放授权码。开启 `refresh_tokens` 的客户端会收到 UniHub 生成的不透明 refresh token；它只可使用一次，成功后轮换，重放会撤销整个 token family，最长 30 天。UniHub 只在数据库保存 token 摘要，并用私有 identity key 加密上游 refresh secret。`POST /v1/identity/revoke` 可幂等撤销该 family。未开启该开关的客户端仍不会收到 refresh token。SDK 的 clearAccessToken 只清当前对象内存，不撤销 IdP 会话。
 
 ```ts
 import { UniHubClient, UniHubError } from './packages/sdk/src/index.ts';
@@ -44,7 +44,7 @@ const accounts = await hub.accounts();
 const resources = await hub.resources(accounts[0].id);
 ```
 
-SDK不持久化 token、不写 Cookie/localStorage、不自动刷新。BFF 可在自己的安全会话中持有 token，通过 `setAccessToken` 注入；浏览器产品需要自行设计其内存会话生命周期。不要把密码或 token 放进日志、URL、追踪事件和持久化状态。
+SDK不持久化 token、不写 Cookie/localStorage。BFF 或产品后端必须在自己的受保护会话中保存获准客户端的 refresh token，并在 access token 到期前调用 refresh grant；浏览器产品不应把 refresh token 放入渲染器。不要把密码或 token 放进日志、URL、追踪事件和普通持久化状态。
 
 ## Scope 与领域权限
 

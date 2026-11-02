@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.30 - 2026-11-03
+
+修复 SuperWagie 登录会话在 access token 到期后被迫重新登录的问题。
+
+- 为受控产品客户端加入可选的 30 天 opaque refresh token，服务端只保存摘要并加密上游 refresh secret
+- 每次 refresh 都轮换 token，重放会撤销整个 family；退出登录支持幂等撤销
+- SuperWagie 在 access token 到期前自动续期，跨重启恢复加密会话，失败时才回到登录界面
+- 部署验收与 OpenAPI 补齐 refresh、撤销和重放检测契约
+
 ## 0.4.28 - 2026-10-30
 
 - 产品财务能力返回当前已验证运行服务的写权限标识，统一登录客户端据此开放已授权账户的 API key、预算及沙盒充值操作。
