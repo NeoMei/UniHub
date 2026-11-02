@@ -43,4 +43,19 @@ export function ProductRole({user,manifest,assignment,principal,csrf,onSaved}:{u
  const [selected,setSelected]=useState((assignment.roles||[]) as string[]);const [active,setActive]=useState(!!assignment.active);
  return <section className="admin-product-role"><h3>{text(manifest.name)} · {text(manifest.instance_id)}</h3><p>{assignment.explicit?'显式授权':'默认角色'} · 授权版本 {text(assignment.assignment_version)}</p><div className="admin-checks">{((manifest.roles||[]) as Row[]).map(r=><label key={String(r.id)}><input className="admin-checkbox" type="checkbox" disabled={!!r.privileged&&!can(principal,'access:privileged')} checked={selected.includes(String(r.id))} onChange={e=>setSelected(v=>e.target.checked?[...v,String(r.id)]:v.filter(id=>id!==r.id))}/>{text(r.name)}{r.privileged?'（特权）':''}</label>)}<label><input className="admin-checkbox" type="checkbox" checked={active} onChange={e=>setActive(e.target.checked)}/>允许访问</label></div><Mutation title="保存产品权限" path={`/admin/v1/users/${encoded(user)}/product-access/${encoded(manifest.product_id)}?instance=${encoded(manifest.instance_id)}`} method="PUT" body={{roles:selected,active,version:assignment.assignment_version}} csrf={csrf} onSaved={onSaved}/></section>;
 }
-export function IdentityDirectory({principal,csrf}:{principal:AdminPrincipal;csrf?:string}) {const [revision,setRevision]=useState(0);return <><h1>注册身份目录</h1><p>身份提供方注册记录与平台用户分别列示，查询不会自动合并或建立账户。</p><DataList endpoint="identities" refresh={revision} columns={[["username","用户名"],["display_name","显示名称"],["email","邮箱"],["subject","身份标识"],["user_id","平台用户"],["disabled","停用"]]} actions={can(principal,'identity:manage')?r=>!r.user_id?<Mutation title="建立平台记录" path="/admin/v1/identities/materialize" body={{issuer:r.issuer,subject:r.subject}} csrf={csrf} onSaved={()=>setRevision(v=>v+1)}/>:<button className="text-button" onClick={()=>go(`/admin/users/${encoded(r.user_id)}`)}>查看用户</button>:undefined}/></>;}
+type IdentityCapabilities = {directory?: boolean; reason?: string};
+
+function identityCapabilityReason(reason?: string) {
+ if (reason === 'identity provider administration not configured') return '当前部署未配置身份提供方管理能力，请先完成身份提供方部署验证。';
+ return reason || '请先完成身份提供方部署验证。';
+}
+
+export function IdentityDirectory({principal,csrf}:{principal:AdminPrincipal;csrf?:string}) {
+ const [revision,setRevision]=useState(0);
+ const capabilities=useResource<IdentityCapabilities>('/admin/v1/identity-capabilities',revision);
+ const heading=<><h1>注册身份目录</h1><p>身份提供方注册记录与平台用户分别列示，查询不会自动合并或建立账户。</p></>;
+ if(capabilities.loading)return <>{heading}<p role="status">正在检查身份提供方能力…</p></>;
+ if(capabilities.error)return <>{heading}<Notice kind="error">{capabilities.error}<button onClick={()=>setRevision(v=>v+1)}>重试</button></Notice></>;
+ if(!capabilities.data?.directory)return <>{heading}<Notice>身份提供方管理尚未启用。<br />{identityCapabilityReason(capabilities.data?.reason)}</Notice></>;
+ return <>{heading}<DataList endpoint="identities" refresh={revision} columns={[["username","用户名"],["display_name","显示名称"],["email","邮箱"],["subject","身份标识"],["user_id","平台用户"],["disabled","停用"]]} actions={can(principal,'identity:manage')?r=>!r.user_id?<Mutation title="建立平台记录" path="/admin/v1/identities/materialize" body={{issuer:r.issuer,subject:r.subject}} csrf={csrf} onSaved={()=>setRevision(v=>v+1)}/>:<button className="text-button" onClick={()=>go(`/admin/users/${encoded(r.user_id)}`)}>查看用户</button>:undefined}/></>;
+}
