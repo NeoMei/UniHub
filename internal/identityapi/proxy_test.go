@@ -61,7 +61,7 @@ func TestDeniedProxyIPCannotGrowUsernameBuckets(t *testing.T) {
 		}
 	}
 	for i := range 20 {
-		if s.limit(ctx, r, c, fmt.Sprintf("new-username-%d", i), "authorize") {
+		if retryAt, err := s.limit(ctx, r, c, fmt.Sprintf("new-username-%d", i), "authorize"); err != nil || retryAt.IsZero() {
 			t.Fatal("over-limit proxy IP was allowed")
 		}
 	}
@@ -70,7 +70,7 @@ func TestDeniedProxyIPCannotGrowUsernameBuckets(t *testing.T) {
 		t.Fatalf("denied requests created rate buckets: rows=%d err=%v", rows, err)
 	}
 	r.Header.Set("X-Real-IP", "198.51.100.2")
-	if !s.limit(ctx, r, c, "different-customer", "authorize") {
+	if retryAt, err := s.limit(ctx, r, c, "different-customer", "authorize"); err != nil || !retryAt.IsZero() {
 		t.Fatal("independent customer inherited the other proxy client's IP limit")
 	}
 }

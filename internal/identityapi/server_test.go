@@ -28,7 +28,7 @@ type testIssuer struct {
 	server                                    *httptest.Server
 	key                                       *rsa.PrivateKey
 	mu                                        sync.Mutex
-	mode, nonce, challenge                    string
+	mode, nonce, challenge, expectedPassword  string
 	creates, logins, exchanges, refreshes     int
 	user                                      map[string]any
 	orgPolicy                                 []string
@@ -43,7 +43,7 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	i := &testIssuer{key: key, orgPolicy: []string{"AtLeast8", "Aa123"}}
+	i := &testIssuer{key: key, orgPolicy: []string{"AtLeast8", "Aa123"}, expectedPassword: "CorrectHorse9Battery!"}
 	i.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		i.mu.Lock()
 		defer i.mu.Unlock()
@@ -102,7 +102,7 @@ func newTestIssuer(t *testing.T) *testIssuer {
 			}
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["owner"] != "unihub" || body["type"] != "normal-user" || body["isAdmin"] != false || body["emailVerified"] != false || body["passwordType"] != "plain" || body["password"] != "CorrectHorse9Battery!" {
+			if body["owner"] != "unihub" || body["type"] != "normal-user" || body["isAdmin"] != false || body["emailVerified"] != false || body["passwordType"] != "plain" || body["password"] != i.expectedPassword {
 				t.Error("unsafe creation DTO")
 			}
 			i.creates++

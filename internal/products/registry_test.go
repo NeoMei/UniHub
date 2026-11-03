@@ -86,7 +86,7 @@ func TestCORSDoesNotGrantCookiesOrAffectConsoleAuth(t *testing.T) {
 func TestCORSIdentityJSONWithoutBearer(t *testing.T) {
 	reached := false
 	h := CORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true; w.WriteHeader(202) }), map[string]Client{"c": {Origins: []string{"https://app.test"}}})
-	for _, path := range []string{"/v1/identity/authorize/password", "/v1/identity/registrations", "/v1/identity/token"} {
+	for _, path := range []string{"/v1/identity/authorize/password", "/v1/identity/authorize/mfa", "/v1/identity/registrations", "/v1/identity/token"} {
 		r := httptest.NewRequest("OPTIONS", path, nil)
 		r.Header.Set("Origin", "https://app.test")
 		r.Header.Set("Access-Control-Request-Method", "POST")

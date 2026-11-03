@@ -15,7 +15,7 @@ func productRouteAllowed(pattern string) bool {
 	switch pattern {
 	case "GET /v1/me", "GET /v1/accounts", "GET /v1/products", "GET /v1/catalog",
 		"GET /v1/accounts/{account}/subscriptions", "GET /v1/accounts/{account}/credits", "GET /v1/products/{product}/model-consistency", "GET /v1/products/{product}/billing-profile", "GET /v1/billing-presets",
-		"POST /v1/accounts/{account}/model-credentials":
+		"GET /v1/accounts/{account}/api-keys", "POST /v1/accounts/{account}/model-credentials", "POST /v1/accounts/{account}/model-discovery", "POST /v1/accounts/{account}/api-keys":
 		return true
 	}
 	return false
@@ -28,7 +28,8 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 	scope := map[string]string{
 		"GET /v1/me/profile": "accounts:read", "PATCH /v1/me/profile": "profile:write", "POST /v1/me/password": "profile:write", "GET /v1/me/avatar": "accounts:read", "PUT /v1/me/avatar": "profile:write",
 		"GET /v1/products/{product}/model-consistency": "catalog:read", "GET /v1/products/{product}/billing-profile": "catalog:read", "GET /v1/billing-presets": "catalog:read",
-		"GET /v1/me/product-access": "access:read", "GET /v1/me/applications": "access:read",
+		"POST /v1/accounts/{account}/model-discovery": "catalog:read",
+		"GET /v1/me/product-access":                   "access:read", "GET /v1/me/applications": "access:read",
 		"GET /v1/me": "accounts:read", "GET /v1/capabilities": "accounts:read",
 		"GET /v1/accounts": "accounts:read", "POST /v1/accounts": "accounts:write",
 		"GET /v1/accounts/{account}/members": "members:read",
