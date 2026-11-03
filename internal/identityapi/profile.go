@@ -199,7 +199,7 @@ func (s *Server) ChangePassword(ctx context.Context, userID, currentPassword, ne
 	if err != nil {
 		return ErrUnavailable
 	}
-	if !validPassword(newPassword, user.Name, user.Email, org.PasswordOptions) {
+	if !validPassword(newPassword, org.PasswordOptions) {
 		return ErrInvalidPassword
 	}
 	// Commit the cutoff before sending a mutation that may succeed without a

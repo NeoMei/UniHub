@@ -300,50 +300,56 @@ var authorizationCode = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var verifierPattern = regexp.MustCompile(`^[A-Za-z0-9._~-]{43,128}$`)
 
 func validUsername(v string) bool { return identifier.MatchString(v) && v == strings.ToLower(v) }
-func validPassword(v, username, email string, options []string) bool {
+func passwordIssues(v string, options []string) []string {
+	var issues []string
 	n := utf8.RuneCountInString(v)
-	if n < 12 || n > 128 || len(v) > 72 {
-		return false
+	if n < 8 {
+		issues = append(issues, "too_short")
 	}
-	low, up, digit, special := false, false, false, false
+	if n > 128 {
+		issues = append(issues, "too_long")
+	}
+	if len(v) > 72 {
+		issues = append(issues, "too_many_bytes")
+	}
+	low, up, digit, special, control := false, false, false, false, false
 	for _, r := range v {
-		if unicode.IsControl(r) {
-			return false
-		}
+		control = control || unicode.IsControl(r)
 		low = low || r >= 'a' && r <= 'z'
 		up = up || r >= 'A' && r <= 'Z'
 		digit = digit || r >= '0' && r <= '9'
 		special = special || r >= 33 && r <= 47 || r >= 58 && r <= 64 || r >= 91 && r <= 96 || r >= 123 && r <= 126
 	}
-	if !low || !up || !digit {
-		return false
-	}
-	lower := strings.ToLower(v)
-	if strings.Contains(lower, username) {
-		return false
-	}
-	name, _, _ := strings.Cut(strings.ToLower(email), "@")
-	if len(name) >= 3 && strings.Contains(lower, name) {
-		return false
+	if control {
+		issues = append(issues, "control_character")
 	}
 	for _, option := range options {
 		switch option {
-		case "AtLeast6", "AtLeast8", "Aa123":
+		case "AtLeast6", "AtLeast8":
+		case "Aa123":
+			if !low || !up || !digit {
+				issues = append(issues, "letter_case_and_digit_required")
+			}
 		case "SpecialChar":
 			if !special {
-				return false
+				issues = append(issues, "special_character_required")
 			}
 		case "NoRepeat":
 			for i := 1; i < len(v); i++ {
 				if v[i] == v[i-1] {
-					return false
+					issues = append(issues, "repeated_character")
+					break
 				}
 			}
 		default:
-			return false
+			issues = append(issues, "unsupported_policy")
 		}
 	}
-	return true
+	return issues
+}
+
+func validPassword(v string, options []string) bool {
+	return len(passwordIssues(v, options)) == 0
 }
 func validEmail(v string) bool {
 	if v == "" {
@@ -357,17 +363,35 @@ func validEmail(v string) bool {
 }
 
 // limit uses durable HMAC identifiers; raw addresses and usernames are not stored.
-func (s *Server) limit(ctx context.Context, r *http.Request, c products.Client, user, kind string) bool {
+func (s *Server) limit(ctx context.Context, r *http.Request, c products.Client, user, kind string) (time.Time, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return false
+		return time.Time{}, err
 	}
 	defer database.Rollback(tx)
 	retryAt, err := s.limitInTx(ctx, tx, r, c, user, kind)
-	if err != nil || tx.Commit(ctx) != nil {
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, err
+	}
+	return retryAt, nil
+}
+
+func (s *Server) allowIdentityRequest(w http.ResponseWriter, r *http.Request, c products.Client, user, kind string) bool {
+	retryAt, err := s.limit(r.Context(), r, c, user, kind)
+	if err != nil {
+		fail(w, 503, "service_unavailable")
 		return false
 	}
-	return retryAt.IsZero()
+	if retryAt.IsZero() {
+		return true
+	}
+	seconds := max(1, int((time.Until(retryAt)+time.Second-1)/time.Second))
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	jsonResponse(w, 429, map[string]any{"error": "rate_limited", "retry_after": seconds})
+	return false
 }
 
 // limitInTx returns the denied fixed window's end, or zero when allowed. The
@@ -390,6 +414,7 @@ func (s *Server) limitInTx(ctx context.Context, tx pgx.Tx, r *http.Request, c pr
 		dims = append(dims, dimension{"username", strings.ToLower(user), 15 * time.Minute, 5})
 	}
 	now := time.Now().UTC()
+	var retryAt time.Time
 	for _, d := range dims {
 		window := now.Truncate(d.duration)
 		var hits int
@@ -398,15 +423,24 @@ func (s *Server) limitInTx(ctx context.Context, tx pgx.Tx, r *http.Request, c pr
 			client = ""
 		}
 		key := s.mac("limit", kind, d.name, client, d.value)
-		if err := tx.QueryRow(ctx, `INSERT INTO identity_rate_limits(key_hash,window_start,hits) VALUES($1,$2,1) ON CONFLICT(key_hash,window_start) DO UPDATE SET hits=identity_rate_limits.hits+1 RETURNING hits`, key, window).Scan(&hits); err != nil {
-			return time.Time{}, err
-		}
-		if hits > d.max {
-			// Denied IPs cannot create fresh attacker-chosen username buckets.
-			return window.Add(d.duration), nil
+		if retryAt.IsZero() {
+			if err := tx.QueryRow(ctx, `INSERT INTO identity_rate_limits(key_hash,window_start,hits) VALUES($1,$2,1) ON CONFLICT(key_hash,window_start) DO UPDATE SET hits=identity_rate_limits.hits+1 RETURNING hits`, key, window).Scan(&hits); err != nil {
+				return time.Time{}, err
+			}
+			if hits > d.max {
+				retryAt = window.Add(d.duration)
+			}
+		} else {
+			// Inspect existing buckets without allocating or incrementing later dimensions.
+			if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT hits FROM identity_rate_limits WHERE key_hash=$1 AND window_start=$2), 0)`, key, window).Scan(&hits); err != nil {
+				return time.Time{}, err
+			}
+			if hits >= d.max && window.Add(d.duration).After(retryAt) {
+				retryAt = window.Add(d.duration)
+			}
 		}
 	}
-	return time.Time{}, nil
+	return retryAt, nil
 }
 
 func (s *Server) rateAddress(r *http.Request) string {
@@ -514,11 +548,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		fail(w, 503, "registration_policy_unavailable")
 		return
 	}
-	if !validPassword(req.Password, req.Username, req.Email, org.PasswordOptions) {
+	if issues := passwordIssues(req.Password, org.PasswordOptions); len(issues) > 0 {
 		if !commit() {
 			return
 		}
-		fail(w, 400, "invalid_password")
+		jsonResponse(w, 400, map[string]any{"error": "invalid_password", "password_issues": issues})
 		return
 	}
 	if kind, err := s.applicationPolicy(r.Context(), c, true); err != nil {
@@ -646,8 +680,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_request")
 		return
 	}
-	if !s.limit(r.Context(), r, c, req.Username, "authorize") {
-		fail(w, 429, "rate_limited")
+	if !s.allowIdentityRequest(w, r, c, req.Username, "authorize") {
 		return
 	}
 	if _, e := s.organization(r.Context()); e != nil {
@@ -737,8 +770,7 @@ func (s *Server) authorizeMfa(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_request")
 		return
 	}
-	if !s.limit(r.Context(), r, c, "", "token") {
-		fail(w, 429, "rate_limited")
+	if !s.allowIdentityRequest(w, r, c, "", "token") {
 		return
 	}
 	var row struct {
@@ -844,8 +876,7 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, "invalid_request")
 		return
 	}
-	if !s.limit(r.Context(), r, c, "", "token") {
-		fail(w, 429, "rate_limited")
+	if !s.allowIdentityRequest(w, r, c, "", "token") {
 		return
 	}
 	challenge := sha256.Sum256([]byte(req.Verifier))
@@ -968,8 +999,7 @@ func (s *Server) refresh(w http.ResponseWriter, r *http.Request, req tokenReques
 		fail(w, 400, "invalid_grant")
 		return
 	}
-	if !s.limit(r.Context(), r, c, "", "refresh") {
-		fail(w, 429, "rate_limited")
+	if !s.allowIdentityRequest(w, r, c, "", "refresh") {
 		return
 	}
 	tx, err := s.pool.Begin(r.Context())

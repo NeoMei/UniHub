@@ -135,8 +135,14 @@ def validate_billing_profiles(items):
             exact(item[name], {'enabled'})
             require(type(item[name]['enabled']) is bool)
         usage = item['usage']
-        exact(usage, {'enabled', 'require_subscription', 'funding_modes', 'default_funding_mode'})
+        usage_fields = {'enabled', 'require_subscription', 'funding_modes', 'default_funding_mode'}
+        require(isinstance(usage, dict) and set(usage) in (usage_fields, usage_fields | {'models'}))
         require(type(usage['enabled']) is bool and type(usage['require_subscription']) is bool)
+        if 'models' in usage:
+            models = usage['models']
+            require(models is None or (isinstance(models, list) and len(models) <= 32
+                                       and all(isinstance(model, str) and 0 < len(model) <= 128 for model in models)
+                                       and len(set(models)) == len(models)))
         modes = usage['funding_modes']
         require(isinstance(modes, list) and all(isinstance(mode, str) and mode in {'credits', 'prepaid_cash'} for mode in modes))
         require(len(set(modes)) == len(modes) and isinstance(usage['default_funding_mode'], str))
@@ -370,6 +376,13 @@ def prepare(root, release, inventory):
             raise DeploymentError(f'Release is missing required artifact {expected}.')
     billing_path = staged_billing_path(root)
     shared = root / 'shared'
+    previous_runtime = {}
+    runtime_path = shared / 'runtime.env'
+    if runtime_path.exists():
+        try:
+            previous_runtime = read_env(runtime_path)
+        except (OSError, ValueError):
+            raise DeploymentError('Existing runtime configuration is invalid; refusing to rewrite it.') from None
     credential_path = shared / 'credentials.json'
     no_symlink(credential_path)
     if not credential_path.exists():
@@ -406,6 +419,11 @@ def prepare(root, release, inventory):
         'BILLING_OPERATOR_IDS': '', 'OPS_OIDC_AUDIENCE': '', 'PAYMENT_MODE': 'sandbox',
         'PAYMENT_MERCHANT': 'unihub-sandbox', 'PAYMENT_SIGNING_KEY': credentials['payment_signing_key'],
         'HEADLESS_TRUST_LOOPBACK_PROXY': 'true', 'HEADLESS_AUDIT_REDACTION_VERIFIED': 'false'}
+    for key in ['ADMIN_IDENTITY_DEPLOYMENT_VERIFIED', 'ADMIN_PASSWORD_RESET_VERIFIED',
+                'ADMIN_SESSION_REVOCATION_VERIFIED', 'RECOVERY_SMTP_ADDR',
+                'RECOVERY_SMTP_FROM', 'RECOVERY_SMTP_USERNAME', 'RECOVERY_SMTP_PASSWORD']:
+        if key in previous_runtime:
+            runtime[key] = previous_runtime[key]
     configure_headless_runtime(root, credentials, runtime)
     if billing_path is not None:
         runtime['PRODUCT_BILLING_FILE'] = str(billing_path)

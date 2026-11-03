@@ -223,7 +223,7 @@ func (p *adminProvider) SetRecoveryPassword(ctx context.Context, id platformadmi
 		return platformadmin.ErrIdentityUnavailable
 	}
 	org, e := p.server.organization(ctx)
-	if e != nil || !validPassword(password, u.Name, u.Email, org.PasswordOptions) {
+	if e != nil || !validPassword(password, org.PasswordOptions) {
 		return ErrInvalidPassword
 	}
 	var env envelope

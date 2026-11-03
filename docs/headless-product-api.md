@@ -26,7 +26,9 @@ UniHub 提供身份、账户/团队、产品钱包、商业订单、共享模型
 | `/v1/identity/authorize/password` | 固定精确 client/redirect，scope 固定 `openid profile email`，随机 state/nonce，S256 code challenge；返回 authorization_id、code、state |
 | `/v1/identity/token` | authorization_code，原 authorization_id/code、精确 client/redirect、code_verifier；单次消费，返回已由服务端验证的 access/id token |
 
-注册密码须符合当前组织策略；适配器至少要求 12–128 字符，含 ASCII 大小写和数字，UTF-8 不超过 72 字节，不含用户名或可识别的邮箱本地部分。更严格的组织策略仍会生效。注册幂等重放不修改原密码；UNKNOWN 时只用原 key 和相同非敏感参数读取原结果，不换 key 再建用户。
+注册密码至少 8 个 Unicode 字符、最多 128 个字符且 UTF-8 不超过 72 字节，不允许控制字符。组织密码策略仍会生效，包括配置的大小写字母和数字、特殊字符及相邻字符不重复要求。`400 invalid_password` 的 `password_issues` 数组只包含适用的规则代码：`too_short`、`too_long`、`too_many_bytes`、`control_character`、`letter_case_and_digit_required`、`special_character_required`、`repeated_character`。不支持的组织策略返回 `503 registration_policy_unavailable`。注册幂等重放不修改原密码；UNKNOWN 时只用原 key 和相同非敏感参数读取原结果，不换 key 再建用户。
+
+密码授权、MFA 和令牌交换限流时返回 `429 rate_limited`，`Retry-After` 与 JSON `retry_after` 给出当前已知限流窗口结束前的秒数，向上取整。其他请求可能触发新的限制，因此等待结束不保证下次请求成功。限流存储不可用时返回 `503 service_unavailable`，不提供猜测的等待时间。
 
 登录的 MFA、改密、同意或其他策略要求返回 `409 interaction_required`，包含 interaction.kind；产品应显示待支持交互，不能绕过。authorization code 交换返回 `authorization_result_unknown` 时不得自动重放授权码。开启 `refresh_tokens` 的客户端会收到 UniHub 生成的不透明 refresh token；它只可使用一次，成功后轮换，重放会撤销整个 token family，最长 30 天。UniHub 只在数据库保存 token 摘要，并用私有 identity key 加密上游 refresh secret。`POST /v1/identity/revoke` 可幂等撤销该 family。未开启该开关的客户端仍不会收到 refresh token。SDK 的 clearAccessToken 只清当前对象内存，不撤销 IdP 会话。
 
