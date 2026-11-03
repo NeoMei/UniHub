@@ -126,7 +126,7 @@ func (s *Service) RuntimeAward(ctx context.Context, scope RuntimeScope, r Runtim
 	if len(r.SourcePayload) > 64<<10 || (len(r.SourcePayload) > 0 && !json.Valid(r.SourcePayload)) {
 		return RuntimeAdjustment{}, ErrInvalid
 	}
-	return s.runtimeAdjustment(ctx, scope, "", r.LocalUserID, r.AccountID, r.SourceKind, r.ReceiptID, r.Amount, hash(r), n, nil, "", r)
+	return s.runtimeAdjustment(ctx, scope, "", r.LocalUserID, r.AccountID, r.SourceKind, r.ReceiptID, r.Amount, hash(r), n, nil, "", r, RuntimeAsset)
 }
 
 type RuntimeAdjustment struct {
@@ -202,7 +202,7 @@ func (s *Service) GetRuntimeBudget(ctx context.Context, scope RuntimeScope, loca
 	if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 		return out, e
 	}
-	e = s.pool.QueryRow(ctx, `SELECT COALESCE(sum(CASE WHEN snapshot->>'status' IN ('PENDING','RESERVED') THEN (snapshot->>'held')::numeric ELSE 0 END),0)::text,COALESCE(sum(CASE WHEN snapshot->>'status'='SETTLED' THEN (snapshot->>'charged')::numeric-COALESCE((snapshot->>'refunded')::numeric,0) ELSE 0 END),0)::text FROM product_runtime_calls WHERE account_id=$1 AND snapshot->>'product_id'=$2 AND snapshot->>'instance_id'=$3`, account, scope.ProductID, scope.InstanceID).Scan(&out.Held, &out.Used)
+	e = s.pool.QueryRow(ctx, `SELECT COALESCE(sum(CASE WHEN snapshot->>'status' IN ('PENDING','RESERVED') THEN (snapshot->>'held')::numeric ELSE 0 END),0)::text,COALESCE(sum(CASE WHEN snapshot->>'status'='SETTLED' THEN (snapshot->>'charged')::numeric-COALESCE((snapshot->>'refunded')::numeric,0) ELSE 0 END),0)::text FROM product_runtime_calls WHERE account_id=$1 AND snapshot->>'product_id'=$2 AND snapshot->>'instance_id'=$3 AND snapshot->>'asset'=$4`, account, scope.ProductID, scope.InstanceID, RuntimeAsset).Scan(&out.Held, &out.Used)
 	out.Remaining = UsageRemaining(out.MaxTotal, out.Held, out.Used)
 	return
 }
@@ -330,9 +330,9 @@ func (s *Service) runtimeResume(ctx context.Context, c *pgxpool.Conn, entity str
 	}
 	return nil
 }
-func (s *Service) runtimeCheckBudget(ctx context.Context, q accounts.Querier, scope RuntimeScope, account string, additional, total int64) error {
+func (s *Service) runtimeCheckBudget(ctx context.Context, q accounts.Querier, scope RuntimeScope, account, asset string, additional, total int64) error {
 	var maxTotal, maxCall string
-	e := q.QueryRow(ctx, `SELECT max_total,max_per_call FROM usage_budgets WHERE account_id=$1 AND origin_product_id=$2 AND instance_id=$3 AND asset=$4`, account, scope.ProductID, scope.InstanceID, RuntimeAsset).Scan(&maxTotal, &maxCall)
+	e := q.QueryRow(ctx, `SELECT max_total,max_per_call FROM usage_budgets WHERE account_id=$1 AND origin_product_id=$2 AND instance_id=$3 AND asset=$4`, account, scope.ProductID, scope.InstanceID, asset).Scan(&maxTotal, &maxCall)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil
 	}
@@ -340,7 +340,7 @@ func (s *Service) runtimeCheckBudget(ctx context.Context, q accounts.Querier, sc
 		return e
 	}
 	var held, used string
-	e = q.QueryRow(ctx, `SELECT COALESCE(sum(CASE WHEN snapshot->>'status' IN ('PENDING','RESERVED') THEN (snapshot->>'held')::numeric ELSE 0 END),0)::text,COALESCE(sum(CASE WHEN snapshot->>'status'='SETTLED' THEN (snapshot->>'charged')::numeric-COALESCE((snapshot->>'refunded')::numeric,0) ELSE 0 END),0)::text FROM product_runtime_calls WHERE account_id=$1 AND snapshot->>'product_id'=$2 AND snapshot->>'instance_id'=$3`, account, scope.ProductID, scope.InstanceID).Scan(&held, &used)
+	e = q.QueryRow(ctx, `SELECT COALESCE(sum(CASE WHEN snapshot->>'status' IN ('PENDING','RESERVED') THEN (snapshot->>'held')::numeric ELSE 0 END),0)::text,COALESCE(sum(CASE WHEN snapshot->>'status'='SETTLED' THEN (snapshot->>'charged')::numeric-COALESCE((snapshot->>'refunded')::numeric,0) ELSE 0 END),0)::text FROM product_runtime_calls WHERE account_id=$1 AND snapshot->>'product_id'=$2 AND snapshot->>'instance_id'=$3 AND snapshot->>'asset'=$4`, account, scope.ProductID, scope.InstanceID, asset).Scan(&held, &used)
 	if e != nil {
 		return e
 	}
@@ -348,7 +348,7 @@ func (s *Service) runtimeCheckBudget(ctx context.Context, q accounts.Querier, sc
 }
 func (s *Service) RuntimeReserve(ctx context.Context, scope RuntimeScope, r RuntimeReserveRequest) (out RuntimeCall, e error) {
 	n, e := runtimeAmount(r.Amount)
-	if e != nil || !validRuntimeScope(scope) || !runtimeUnits(r.Asset, r.UnitVersion) {
+	if e != nil || !validRuntimeScope(scope) || !runtimeCallUnits(r.Asset, r.UnitVersion) {
 		return out, ErrInvalid
 	}
 	for _, v := range []string{r.CallID, r.LocalUserID, r.AccountID, r.RequestDigest, r.Model, r.Operation, r.PriceVersion, r.PricingDigest} {
@@ -406,11 +406,14 @@ func (s *Service) RuntimeReserve(ctx context.Context, scope RuntimeScope, r Runt
 				return err
 			}
 			actor = b.UserID
-			if err = s.runtimeCheckBudget(ctx, c, scope, r.AccountID, n, n); err != nil {
+			if err = s.runtimeCallAuthority(ctx, c, scope, r.LocalUserID, r.AccountID, r.Asset); err != nil {
+				return err
+			}
+			if err = s.runtimeCheckBudget(ctx, c, scope, r.AccountID, r.Asset, n, n); err != nil {
 				return err
 			}
 		}
-		balance, err := s.ledger.Balance(ctx, RuntimeAddress(scope, r.AccountID, "available"), RuntimeAsset)
+		balance, err := s.ledger.Balance(ctx, runtimeCallAddress(scope, r.AccountID, r.Asset, "available"), r.Asset)
 		if err != nil {
 			return err
 		}
@@ -438,7 +441,7 @@ func (s *Service) RuntimeReserve(ctx context.Context, scope RuntimeScope, r Runt
 		}
 		posts := []ledger.Posting{}
 		if n > 0 {
-			posts = append(posts, ledger.Posting{Source: RuntimeAddress(scope, r.AccountID, "available"), Destination: RuntimeAddress(scope, r.AccountID, "reserved"), Asset: RuntimeAsset, Amount: n})
+			posts = append(posts, ledger.Posting{Source: runtimeCallAddress(scope, r.AccountID, r.Asset, "available"), Destination: runtimeCallAddress(scope, r.AccountID, r.Asset, "reserved"), Asset: r.Asset, Amount: n})
 		}
 		commandKey := id
 		if retryAttempt > 0 {
@@ -518,7 +521,7 @@ func (s *Service) RuntimeTopUp(ctx context.Context, scope RuntimeScope, callID s
 			return ErrConflict
 		}
 		if !r.AcceptedCall {
-			if _, err = s.runtimeAuthority(ctx, c, scope, out.LocalUserID, out.AccountID); err != nil {
+			if err = s.runtimeCallAuthority(ctx, c, scope, out.LocalUserID, out.AccountID, out.Asset); err != nil {
 				return err
 			}
 		}
@@ -527,11 +530,11 @@ func (s *Service) RuntimeTopUp(ctx context.Context, scope RuntimeScope, callID s
 			return ErrInvalid
 		}
 		if !r.AcceptedCall {
-			if err = s.runtimeCheckBudget(ctx, c, scope, out.AccountID, n, held+n); err != nil {
+			if err = s.runtimeCheckBudget(ctx, c, scope, out.AccountID, out.Asset, n, held+n); err != nil {
 				return err
 			}
 		}
-		balance, err := s.ledger.Balance(ctx, RuntimeAddress(scope, out.AccountID, "available"), RuntimeAsset)
+		balance, err := s.ledger.Balance(ctx, runtimeCallAddress(scope, out.AccountID, out.Asset, "available"), out.Asset)
 		if err != nil {
 			return err
 		}
@@ -539,7 +542,7 @@ func (s *Service) RuntimeTopUp(ctx context.Context, scope RuntimeScope, callID s
 			return ledger.ErrInsufficientFunds
 		}
 		out.Held = str(held + n)
-		posts := []ledger.Posting{{Source: RuntimeAddress(scope, out.AccountID, "available"), Destination: RuntimeAddress(scope, out.AccountID, "reserved"), Asset: RuntimeAsset, Amount: n}}
+		posts := []ledger.Posting{{Source: runtimeCallAddress(scope, out.AccountID, out.Asset, "available"), Destination: runtimeCallAddress(scope, out.AccountID, out.Asset, "reserved"), Asset: out.Asset, Amount: n}}
 		out, err = s.runtimeCallCommand(ctx, c, out, "runtime_topup", commandKey, requestDigest, posts, runtimeCommandOption{Accepted: r.AcceptedCall, Attempt: attempt})
 		return err
 	})
@@ -620,10 +623,10 @@ func (s *Service) RuntimeSettle(ctx context.Context, scope RuntimeScope, callID 
 			return ErrConflict
 		} // Caller must explicitly reserve an extension first.
 		if amount > 0 {
-			posts = append(posts, ledger.Posting{Source: RuntimeAddress(scope, out.AccountID, "reserved"), Destination: RuntimeAddress(scope, out.AccountID, "consumed"), Asset: RuntimeAsset, Amount: amount})
+			posts = append(posts, ledger.Posting{Source: runtimeCallAddress(scope, out.AccountID, out.Asset, "reserved"), Destination: runtimeCallAddress(scope, out.AccountID, out.Asset, "consumed"), Asset: out.Asset, Amount: amount})
 		}
 		if held > amount {
-			posts = append(posts, ledger.Posting{Source: RuntimeAddress(scope, out.AccountID, "reserved"), Destination: RuntimeAddress(scope, out.AccountID, "available"), Asset: RuntimeAsset, Amount: held - amount})
+			posts = append(posts, ledger.Posting{Source: runtimeCallAddress(scope, out.AccountID, out.Asset, "reserved"), Destination: runtimeCallAddress(scope, out.AccountID, out.Asset, "available"), Asset: out.Asset, Amount: held - amount})
 		}
 		out.Status = "SETTLED"
 		out.Charged = r.Amount
@@ -667,7 +670,7 @@ func (s *Service) RuntimeRelease(ctx context.Context, scope RuntimeScope, callID
 		held, _ := runtimeAmount(out.Held)
 		posts := []ledger.Posting{}
 		if held > 0 {
-			posts = append(posts, ledger.Posting{Source: RuntimeAddress(scope, out.AccountID, "reserved"), Destination: RuntimeAddress(scope, out.AccountID, "available"), Asset: RuntimeAsset, Amount: held})
+			posts = append(posts, ledger.Posting{Source: runtimeCallAddress(scope, out.AccountID, out.Asset, "reserved"), Destination: runtimeCallAddress(scope, out.AccountID, out.Asset, "available"), Asset: out.Asset, Amount: held})
 		}
 		out.Status = "RELEASED"
 		out.Charged = "0"
@@ -699,7 +702,7 @@ func (s *Service) RuntimeAdjustCredit(ctx context.Context, scope RuntimeScope, a
 			return RuntimeAdjustment{}, ErrInvalid
 		}
 	}
-	return s.runtimeAdjustment(ctx, scope, actor, r.LocalUserID, r.AccountID, "gift", r.RequestKey, r.Amount, hash(r), n, r.SetAvailable, r.ExpectedAvailable, r)
+	return s.runtimeAdjustment(ctx, scope, actor, r.LocalUserID, r.AccountID, "gift", r.RequestKey, r.Amount, hash(r), n, r.SetAvailable, r.ExpectedAvailable, r, RuntimeAsset)
 }
 func (s *Service) RuntimeImportBalance(ctx context.Context, scope RuntimeScope, r RuntimeImportRequest) (RuntimeAdjustment, error) {
 	n, e := runtimeAmount(r.Amount)
@@ -708,10 +711,10 @@ func (s *Service) RuntimeImportBalance(ctx context.Context, scope RuntimeScope, 
 	}
 	// The source key excludes batch ID: retrying another batch cannot import the
 	// same legacy user's remaining balance a second time.
-	return s.runtimeAdjustment(ctx, scope, "", r.LocalUserID, r.AccountID, "migration", r.LegacyUserID, r.Amount, hash(r), n, nil, "", r)
+	return s.runtimeAdjustment(ctx, scope, "", r.LocalUserID, r.AccountID, "migration", r.LegacyUserID, r.Amount, hash(r), n, nil, "", r, RuntimeAsset)
 }
-func (s *Service) runtimeAdjustment(ctx context.Context, scope RuntimeScope, actor, local, account, kind, key, amount, digest string, n int64, setAvailable *string, expectedAvailable string, source any) (out RuntimeAdjustment, e error) {
-	if !validRuntimeScope(scope) {
+func (s *Service) runtimeAdjustment(ctx context.Context, scope RuntimeScope, actor, local, account, kind, key, amount, digest string, n int64, setAvailable *string, expectedAvailable string, source any, asset string) (out RuntimeAdjustment, e error) {
+	if !validRuntimeScope(scope) || (asset != RuntimeAsset && (asset != "CNY/6" || kind != "payment")) {
 		return out, ErrInvalid
 	}
 	entity := runtimeID(scope, kind, key)
@@ -761,7 +764,7 @@ func (s *Service) runtimeAdjustment(ctx context.Context, scope RuntimeScope, act
 			actor = b.UserID
 		}
 		if setAvailable != nil {
-			available, err := s.ledger.Balance(ctx, RuntimeAddress(scope, account, "available"), RuntimeAsset)
+			available, err := s.ledger.Balance(ctx, runtimeCallAddress(scope, account, asset, "available"), asset)
 			if err != nil {
 				return err
 			}
@@ -774,28 +777,31 @@ func (s *Service) runtimeAdjustment(ctx context.Context, scope RuntimeScope, act
 		}
 		posts := []ledger.Posting{}
 		if n > 0 {
-			available, err := s.ledger.Balance(ctx, RuntimeAddress(scope, account, "available"), RuntimeAsset)
+			available, err := s.ledger.Balance(ctx, runtimeCallAddress(scope, account, asset, "available"), asset)
 			if err != nil {
 				return err
 			}
-			reserved, err := s.ledger.Balance(ctx, RuntimeAddress(scope, account, "reserved"), RuntimeAsset)
+			reserved, err := s.ledger.Balance(ctx, runtimeCallAddress(scope, account, asset, "reserved"), asset)
 			if err != nil {
 				return err
 			}
-			if n > 2147483646 || available > 2147483646-n || reserved > 2147483646-n-available {
+			if asset == RuntimeAsset && (n > 2147483646 || available > 2147483646-n || reserved > 2147483646-n-available) {
 				return ErrConflict
 			}
-			posts = append(posts, ledger.Posting{Source: "world", Destination: RuntimeAddress(scope, account, "available"), Asset: RuntimeAsset, Amount: n})
+			if asset != RuntimeAsset && available > math.MaxInt64-n {
+				return ErrConflict
+			}
+			posts = append(posts, ledger.Posting{Source: "world", Destination: runtimeCallAddress(scope, account, asset, "available"), Asset: asset, Amount: n})
 		}
 		if n < 0 {
-			balance, err := s.ledger.Balance(ctx, RuntimeAddress(scope, account, "available"), RuntimeAsset)
+			balance, err := s.ledger.Balance(ctx, runtimeCallAddress(scope, account, asset, "available"), asset)
 			if err != nil {
 				return err
 			}
 			if -n > balance {
 				return ledger.ErrInsufficientFunds
 			}
-			posts = append(posts, ledger.Posting{Source: RuntimeAddress(scope, account, "available"), Destination: RuntimeAddress(scope, account, "withdrawn"), Asset: RuntimeAsset, Amount: -n})
+			posts = append(posts, ledger.Posting{Source: runtimeCallAddress(scope, account, asset, "available"), Destination: runtimeCallAddress(scope, account, asset, "withdrawn"), Asset: asset, Amount: -n})
 		}
 		out = RuntimeAdjustment{RuntimeScope: scope, ID: entity, AccountID: account, Amount: amount, Status: "PENDING", RequestDigest: digest, Source: encode(source)}
 		applied := out

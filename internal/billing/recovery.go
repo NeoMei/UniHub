@@ -204,7 +204,7 @@ func (s *Service) runLocked(ctx context.Context, c *pgxpool.Conn, cmdID string) 
 					return s.reject(ctx, c, x, "CANCELED", "original_obligation_mismatch")
 				}
 			} else if !x.Effect.RuntimeAcceptedCall {
-				if _, e = s.runtimeAuthority(ctx, c, call.RuntimeScope, call.LocalUserID, call.AccountID); e != nil {
+				if e = s.runtimeCallAuthority(ctx, c, call.RuntimeScope, call.LocalUserID, call.AccountID, call.Asset); e != nil {
 					return s.reject(ctx, c, x, "CANCELED", "product_authorization_revoked")
 				}
 			}

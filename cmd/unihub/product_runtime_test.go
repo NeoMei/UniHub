@@ -75,3 +75,17 @@ func TestFinanceRuntimeRequiresOneExactProductClientAndScopes(t *testing.T) {
 		t.Fatalf("legitimate write-only runtime rejected: %v", err)
 	}
 }
+
+func TestRuntimeServiceConfigAllowsExplicitCashCapabilities(t *testing.T) {
+	registry, err := productusers.Parse([]byte(`[{"product_id":"llmrouter","name":"Router","entry_url":"https://router.test","version":1,"roles":[{"id":"member","name":"Member","permissions":["product:use"]}],"default_roles":["member"]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range []string{"cash:charge", "cash:payment"} {
+		raw := `{"lr":{"token":"test-runtime-credential-over-thirty-two-bytes","product_id":"llmrouter","allowed_ops":["` + op + `"]}}`
+		out, err := parseRuntimeServices(raw, registry, "")
+		if err != nil || len(out) != 1 {
+			t.Fatalf("explicit %s capability rejected: %v", op, err)
+		}
+	}
+}

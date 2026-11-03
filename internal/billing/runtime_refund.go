@@ -77,7 +77,7 @@ func (s *Service) RuntimeRefund(ctx context.Context, scope RuntimeScope, callID 
 		if _, err = tx.Exec(ctx, `INSERT INTO product_runtime_adjustments(id,account_id,product_id,instance_id,source_kind,source_key,request_digest,snapshot) VALUES($1,$2,$3,$4,'refund',$5,$6,$7)`, entity, call.AccountID, scope.ProductID, scope.InstanceID, call.ID+":"+r.RequestKey, digest, encode(out)); err != nil {
 			return err
 		}
-		posts := []ledger.Posting{{Source: RuntimeAddress(scope, call.AccountID, "consumed"), Destination: RuntimeAddress(scope, call.AccountID, "available"), Asset: RuntimeAsset, Amount: n}}
+		posts := []ledger.Posting{{Source: runtimeCallAddress(scope, call.AccountID, call.Asset, "consumed"), Destination: runtimeCallAddress(scope, call.AccountID, call.Asset, "available"), Asset: call.Asset, Amount: n}}
 		cmd, err := s.createCommand(ctx, tx, call.AccountID, call.ActorID, "runtime_refund", entity, posts, effect{RuntimeAdjustment: &applied, RuntimeCall: &call})
 		if err != nil {
 			return err
