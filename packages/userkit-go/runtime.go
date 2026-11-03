@@ -13,6 +13,8 @@ import (
 )
 
 const RuntimeAsset = "LR_QUOTA/0"
+const RuntimeCashAsset = "CNY/6"
+const RuntimeCashUnitVersion = "lr-cny-v1"
 const RuntimeUnitVersion = "lr-quota-v1"
 
 // ServiceConfig contains a product-instance credential, never a user credential.
@@ -300,6 +302,14 @@ func (c *RuntimeClient) Access(ctx context.Context, localID string) (out Runtime
 }
 func (c *RuntimeClient) Balance(ctx context.Context, localID, account string) (out RuntimeBalance, e error) {
 	e = c.request(ctx, "GET", "/users/"+url.PathEscape(localID)+"/balance?account_id="+url.QueryEscape(account), "", nil, &out)
+	if e == nil {
+		e = c.scope(out.ProductID, out.InstanceID)
+	}
+	return
+}
+func (c *RuntimeClient) BalanceAsset(ctx context.Context, localID, account, asset, version string) (out RuntimeBalance, e error) {
+	query := url.Values{"account_id": {account}, "asset": {asset}, "unit_version": {version}}
+	e = c.request(ctx, "GET", "/users/"+url.PathEscape(localID)+"/balance?"+query.Encode(), "", nil, &out)
 	if e == nil {
 		e = c.scope(out.ProductID, out.InstanceID)
 	}

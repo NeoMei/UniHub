@@ -38,3 +38,27 @@ The central account page reads a native account's canonical name and email and i
 
 
 The financial adapter also requires `calls:reprice` for accepted final-usage top-ups and post-result fee corrections. These operations carry an immutable parent call or the existing accepted call; they cannot admit another supplier request. Credential expiry/revocation blocks new use while the original payer/key/price remains responsible for already accepted usage. Insufficient available money stays pending for reconciliation and funding; no local wallet or artificial award pays it.
+
+
+## LLMRouter shared CNY funding
+
+LLMRouter retains product Key issuance, model routing and pricing. With
+`UNIHUB_PRODUCT_FUNDING_MODE=unified_cash`, new product calls submit exact
+`CNY/6` amounts using `lr-cny-v1`; the service needs the explicit `cash:charge`
+capability in addition to the ordinary billing operations. The bound personal
+payer spends `cash:<account>:unified`. This does not move balances from legacy
+`LR_QUOTA/0` or product-specific cash wallets.
+
+The product freezes its quota-to-CNY rational conversion and cumulative rounding
+contract per call. Top-ups, supplemental corrections, settlements and refunds
+retain that contract. UniHub never re-prices the model. Old calls finish in their
+original asset, regardless of the current product funding mode. `BalanceAsset`
+queries the declared asset; the original `Balance` SDK method remains legacy.
+
+Only a trusted payment service with the separate `cash:payment` capability can
+credit shared cash from a verified CNY payment receipt. The receipt includes its
+original order, unique provider transaction, exact paid fen and payload SHA256;
+the amount must equal paid fen times 10000. It reuses the immutable payment
+receipt identity, so retrying cannot credit either asset twice. Product rewards,
+redemption, imports and administrator gifts cannot issue CNY through this lane.
+Product payment-provider activation remains a separate deployment setting.

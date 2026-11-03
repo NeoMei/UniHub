@@ -11,6 +11,7 @@ import (
 	"unihub/internal/auth"
 	"unihub/internal/billing"
 	"unihub/internal/productusers"
+	"unihub/internal/wallet"
 )
 
 // RuntimeService is private deployment policy. Tokens are never accepted from
@@ -59,6 +60,17 @@ func (s *api) runtimeAuthenticated(op string, next func(http.ResponseWriter, *ht
 		if service.ProductID == "" || !slices.Contains(service.AllowedOps, op) || r.Header.Get("Origin") != "" {
 			fail(w, 403, "forbidden")
 			return
+		}
+		if callID := r.PathValue("call"); callID != "" && s.options.Billing != nil {
+			asset, err := s.options.Billing.RuntimeFundingAsset(r.Context(), runtimeScope(service), callID)
+			if err != nil && !errors.Is(err, accounts.ErrNotFound) {
+				writeError(w, err)
+				return
+			}
+			if asset == wallet.Asset && !slices.Contains(service.AllowedOps, "cash:charge") {
+				fail(w, 403, "forbidden")
+				return
+			}
 		}
 		if e := next(w, r, service); e != nil {
 			writeError(w, e)
@@ -225,9 +237,18 @@ func (s *api) productRuntimeRoutes(m *http.ServeMux) {
 		op := "credits:award"
 		if in.SourceKind == "payment" {
 			op = "credits:payment"
+			if in.Asset == wallet.Asset {
+				op = "cash:payment"
+			}
 		}
 		s.runtimeAuthenticated(op, func(w http.ResponseWriter, r *http.Request, service RuntimeService) error {
-			out, e := b.RuntimeAward(r.Context(), runtimeScope(service), in)
+			var out billing.RuntimeAdjustment
+			var e error
+			if in.Asset == wallet.Asset {
+				out, e = b.RuntimeCashPayment(r.Context(), runtimeScope(service), in)
+			} else {
+				out, e = b.RuntimeAward(r.Context(), runtimeScope(service), in)
+			}
 			if e != nil {
 				return e
 			}
@@ -260,7 +281,14 @@ func (s *api) productRuntimeRoutes(m *http.ServeMux) {
 		return respond(w, 200, out)
 	})
 	route("GET /internal/v1/product-runtime/users/{local}/balance", "billing:read", func(w http.ResponseWriter, r *http.Request, service RuntimeService) error {
-		out, e := b.RuntimeBalance(r.Context(), runtimeScope(service), r.PathValue("local"), r.URL.Query().Get("account_id"))
+		asset, version := r.URL.Query().Get("asset"), r.URL.Query().Get("unit_version")
+		if asset == "" && version == "" {
+			asset, version = billing.RuntimeAsset, billing.RuntimeUnitVersion
+		}
+		if asset == wallet.Asset && !slices.Contains(service.AllowedOps, "cash:charge") {
+			return accounts.ErrForbidden
+		}
+		out, e := b.RuntimeBalanceForAsset(r.Context(), runtimeScope(service), r.PathValue("local"), r.URL.Query().Get("account_id"), asset, version)
 		if e != nil {
 			return e
 		}
@@ -270,6 +298,9 @@ func (s *api) productRuntimeRoutes(m *http.ServeMux) {
 		var in billing.RuntimeReserveRequest
 		if e := decode(w, r, &in); e != nil {
 			return e
+		}
+		if in.Asset == wallet.Asset && !slices.Contains(service.AllowedOps, "cash:charge") {
+			return accounts.ErrForbidden
 		}
 		if in.ParentCallID != "" && !slices.Contains(service.AllowedOps, "calls:reprice") {
 			return accounts.ErrForbidden
