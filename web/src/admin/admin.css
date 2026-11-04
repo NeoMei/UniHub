@@ -150,9 +150,10 @@
 .admin-onboarding-grid .panel{margin-top:0}
 .admin-scope-list{display:grid;gap:10px;border:0;padding:0;margin:0}
 .admin-scope-list legend{font-size:12px;color:var(--admin-muted);margin-bottom:7px}
-.admin-scope-list label{display:flex;flex-direction:row;align-items:flex-start;gap:9px;font-size:12px;color:var(--admin-ink)}
-.admin-scope-list label span{display:grid;gap:2px}
-.admin-scope-list input{margin-top:2px}
+.admin-scope-list label{display:flex;flex-direction:row;align-items:center;min-height:44px;gap:9px;font-size:12px;color:var(--admin-ink)}
+.admin-scope-list label span{display:grid;flex:1;min-width:0;gap:2px;overflow-wrap:anywhere}
+.admin-scope-list input[type=checkbox],.admin-form input[type=checkbox]{flex:none;width:18px;height:18px;min-height:0;padding:0;margin:0;accent-color:var(--admin-teal)}
+.admin-form label:has(>input[type=checkbox]){flex-direction:row;align-items:center;min-height:44px}
 .admin-scope-list small{font-size:11px;color:var(--admin-faint)}
 .admin-form-hint{font-size:11px;color:var(--admin-faint);line-height:1.7;margin:10px 0 0}
 .admin-onboarding-checklist{display:grid;gap:10px;padding:0;margin:0 0 14px;list-style:none;font-size:12px;color:var(--admin-ink)}
@@ -163,3 +164,4 @@
 .admin-onboarding-actions{display:flex;align-items:center;gap:12px;margin-top:14px}
 .admin-onboarding-actions span{font-size:11px;color:var(--admin-faint)}
 @media(max-width:760px){.admin-onboarding-grid{grid-template-columns:1fr}.admin-onboarding-actions{align-items:flex-start;flex-direction:column}.admin-command{flex-direction:column}}
+.admin-rate-price{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}

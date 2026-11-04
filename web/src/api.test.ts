@@ -2,6 +2,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, request } from "./api";
 afterEach(() => vi.unstubAllGlobals());
 describe("browser API boundary", () => {
+  it("retains only safe password guidance and Retry-After without exposing provider data", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      error: "invalid_password", password_issues: ["too_short", "special_character_required"],
+      provider_token: "private", password: "private",
+    }), { status: 400, headers: { "Retry-After": "45" } })));
+    const error = await request("/v1/me/password", { method: "POST", csrf: "csrf" }).catch(e => e);
+    if (!(error instanceof ApiError)) throw new Error("Expected a structured API error");
+    expect(error.body).toEqual({ error: "invalid_password", password_issues: ["too_short", "special_character_required"] });
+    expect(error.retryAfter).toBe(45);
+    expect(error.message).toContain("至少 8 个字符");
+    expect(error.message).toContain("特殊字符");
+    expect(error.message).not.toContain("private");
+  });
+  it("explains rate limits with the server wait instead of suggesting immediate resubmission", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response('{"error":"rate_limited","retry_after":90}', { status: 429 })));
+    await expect(request("/v1/me/password")).rejects.toThrow("90 秒");
+  });
   it("sends same-origin cookies, CSRF and stable idempotency key without bearer credentials", async () => {
     const fetcher = vi
       .fn()

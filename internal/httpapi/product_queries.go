@@ -9,6 +9,7 @@ import (
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/billing"
+	"unihub/internal/productusers"
 	"unihub/internal/wallet"
 )
 
@@ -32,11 +33,15 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 			if r.PathValue("call") != "" {
 				q := r.URL.Query()
 				for k, v := range q {
-					if k != "origin_product_id" || len(v) != 1 {
+					if (k != "origin_product_id" && k != "instance_id") || len(v) != 1 {
 						return billing.ErrInvalid
 					}
 				}
-				v, e := s.options.Billing.QueryCall(r.Context(), u.ID, r.PathValue("account"), r.PathValue("call"), q.Get("origin_product_id"))
+				instance, e := callQueryInstance(r)
+				if e != nil {
+					return e
+				}
+				v, e := s.options.Billing.QueryCall(r.Context(), u.ID, r.PathValue("account"), r.PathValue("call"), q.Get("origin_product_id"), instance)
 				if e != nil {
 					return e
 				}
@@ -87,7 +92,7 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 	add("GET /v1/accounts/{account}/calls/{call}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		q := r.URL.Query()
 		for k, v := range q {
-			if k != "origin_product_id" || len(v) != 1 {
+			if (k != "origin_product_id" && k != "instance_id") || len(v) != 1 {
 				return billing.ErrInvalid
 			}
 		}
@@ -98,7 +103,11 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 			}
 			origin = p
 		}
-		v, e := s.options.Billing.QueryCall(r.Context(), u.ID, r.PathValue("account"), r.PathValue("call"), origin)
+		instance, e := callQueryInstance(r)
+		if e != nil {
+			return e
+		}
+		v, e := s.options.Billing.QueryCall(r.Context(), u.ID, r.PathValue("account"), r.PathValue("call"), origin, instance)
 		if e != nil {
 			return e
 		}
@@ -187,7 +196,7 @@ func callQuery(r *http.Request, paged bool) (billing.CallFilter, billing.CallPag
 			return f, page, billing.ErrInvalid
 		}
 		switch k {
-		case "from", "to", "model", "origin_product_id", "asset":
+		case "from", "to", "model", "origin_product_id", "instance_id", "asset":
 		case "limit", "cursor":
 			if !paged {
 				return f, page, billing.ErrInvalid
@@ -196,9 +205,14 @@ func callQuery(r *http.Request, paged bool) (billing.CallFilter, billing.CallPag
 			return f, page, billing.ErrInvalid
 		}
 	}
+	var e error
+	f.InstanceID, e = callQueryInstance(r)
+	if e != nil {
+		return f, page, e
+	}
 	f.Model = q.Get("model")
 	f.Asset = q.Get("asset")
-	if f.Asset != "" && f.Asset != billing.CreditAsset && f.Asset != billing.CashAsset {
+	if f.Asset != "" && f.Asset != billing.CreditAsset && f.Asset != billing.CashAsset && f.Asset != billing.RuntimeAsset {
 		return f, page, billing.ErrInvalid
 	}
 	f.OriginProductID = q.Get("origin_product_id")
@@ -219,6 +233,9 @@ func callQuery(r *http.Request, paged bool) (billing.CallFilter, billing.CallPag
 		page.Cursor = q.Get("cursor")
 		f.From = restored.From
 		f.To = restored.To
+		if f.InstanceID == "" {
+			f.InstanceID = restored.InstanceID
+		}
 		if f.Asset == "" {
 			f.Asset = restored.Asset
 		}
@@ -249,4 +266,18 @@ func callQuery(r *http.Request, paged bool) (billing.CallFilter, billing.CallPag
 		page.Limit = n
 	}
 	return f, page, nil
+}
+
+// A pool scope permits cross-product attribution, never another deployment
+// instance. Central console queries may explicitly choose an instance.
+func callQueryInstance(r *http.Request) (string, error) {
+	instance := r.URL.Query().Get("instance_id")
+	if policy, ok := productPolicy(r); ok {
+		trusted := productusers.Instance(policy.InstanceID)
+		if instance != "" && instance != trusted {
+			return "", accounts.ErrForbidden
+		}
+		instance = trusted
+	}
+	return instance, nil
 }

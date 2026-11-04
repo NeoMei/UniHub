@@ -113,7 +113,7 @@ it("provides a real usage guide route from the public portal", async () => {
   expect(screen.getByText("选择账户")).toBeDefined();
   expect(screen.getByText("在 UniHub 完成")).toBeDefined();
   expect(screen.getByText("SuperWagie")).toBeDefined();
-  expect(screen.getByText(/模型路由、供应商凭证/)).toBeDefined();
+  expect(screen.getAllByText(/模型路由、供应商凭证/).length).toBeGreaterThan(0);
   expect(screen.getByRole("heading", { name: "产品功能与使用方法" })).toBeDefined();
   expect(screen.getAllByText("核心功能").length).toBe(3);
   expect(screen.getAllByText("开始使用").length).toBe(3);
@@ -182,6 +182,26 @@ it("keeps team member cash and finance APIs out of the browser while allowing cr
     ).toBeDefined(),
   );
 });
+it("opens actor-scoped model consumption from a member's bills without requesting team financial resources", async () => {
+  const calls: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    calls.push(path);
+    const data = path === "/auth/session" ? { authenticated: true, sandbox: true, user: { id: "member", name: "Member" }, csrf_token: "csrf" }
+      : path === "/v1/accounts" ? [{ id: "team", name: "Team", kind: "team", role: "member" }]
+      : path.includes("/calls?") ? { scope: { account_id: "team", visibility: "actor", actor_id: "member" }, items: [], financial_details: false, filter: { from: "2026-10-01T00:00:00Z", to: "2026-10-31T00:00:00Z" }, total: "0", unknown_time: "0", has_more: false }
+      : path.includes("usage/summary") ? { financial_details: false, calls_total: "0", settled_calls: "0", pending_calls: "0", unknown_calls: "0", usage_complete: true }
+      : [];
+    return new Response(JSON.stringify(data), { status: 200 });
+  }));
+  render(<App />);
+  await screen.findByRole("heading", { name: "账户概览" });
+  fireEvent.click(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", { name: "账单" }));
+  fireEvent.click(screen.getByRole("button", { name: "查看模型消费" }));
+  expect(await screen.findByText("当前条件下暂无模型消费")).toBeDefined();
+  expect(screen.getByRole("heading", { name: "模型消费" })).toBeDefined();
+  expect(calls.some(path => path.startsWith("/v1/accounts/team/calls?"))).toBe(true);
+  expect(calls.some(path => /\/(wallets|orders|settings|operations)$/.test(path))).toBe(false);
+});
 it("shows product-owned prepaid guidance and zero-credit memberships from existing reads", async () => {
   const calls: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
@@ -207,7 +227,8 @@ it("shows product-owned prepaid guidance and zero-credit memberships from existi
   render(<App />);
   const guidance = await screen.findByText(/现金按量产品 已启用现金按量服务/);
   expect(guidance.textContent).toContain("使用入口由各产品自己的界面提供");
-  expect(guidance.textContent).toContain("当前付费账户的 llmrouter 产品钱包扣款");
+  expect(guidance.textContent).toContain("实际选择的计费模式和调用记录");
+  expect(guidance.textContent).not.toContain("llmrouter 产品钱包扣款");
   expect(guidance.textContent).toContain("额度不足不会自动转为现金扣款");
   expect(guidance.textContent).not.toContain("功能产品");
   expect(await screen.findByText("年付 · 纯功能订阅，不含模型额度")).toBeDefined();
@@ -303,6 +324,9 @@ it("saves the display name and submits password changes from account settings", 
   fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "new-password" } });
   fireEvent.click(screen.getByRole("button", { name: "更新密码" }));
   await waitFor(() => expect(calls.some((call) => call.path === "/v1/me/password" && call.init?.method === "POST")).toBe(true));
+  expect(await screen.findByRole("link", { name: "重新登录" })).toBeDefined();
+  expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
+  expect(screen.queryByLabelText("当前密码")).toBeNull();
 });
 
 it("selects a newly created team after the create confirmation completes", async () => {

@@ -62,3 +62,19 @@ the amount must equal paid fen times 10000. It reuses the immutable payment
 receipt identity, so retrying cannot credit either asset twice. Product rewards,
 redemption, imports and administrator gifts cannot issue CNY through this lane.
 Product payment-provider activation remains a separate deployment setting.
+
+## Reporting and account budgets
+
+The console's call reports include both managed-model and native runtime calls,
+with source, product instance, original call ID, operation, funding source and
+price ownership identified. Native runtime calls use a namespaced central report
+ID; product routing, local Key issuance and pricing stay in the product. Unknown
+historical creation times remain unknown. Native usage is not guessed from token
+fields. Financial details retain the current account finance-role restriction.
+
+Account budget totals and new-reservation checks combine both channels for the
+same account, product, instance and asset. Confirmed native refunds reduce used
+exposure; unresolved reserve/top-up commands keep their full exposure. Managed
+Key-specific limits remain private to that Key. The existing runtime budget
+GET/SET contract still addresses `LR_QUOTA/0`; shared CNY budgets are configured
+through the central account usage-budget interface using `prepaid_cash`.

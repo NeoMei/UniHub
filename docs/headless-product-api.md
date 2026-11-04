@@ -87,6 +87,8 @@ SDK不持久化 token、不写 Cookie/localStorage。BFF 或产品后端必须�
 
 响应 `held` 是尚未完成、缺失 usage 或结果未明调用的预占，`used` 是已结算实扣，`remaining` 是预算减去两者；不限预算时为 null。预算不是钱包余额，不产生资金。单个密钥和共享预算同时在中心账户锁下检查，重放不重复占用；结算释放未使用预占，失败释放全部预占。降低上限不会抹去已有调用。原 LLMRouter 余额、历史密钥和账单不自动合并。
 
+账户级预算的统计和执行覆盖同账户、产品、实例、资产下的托管模型调用与产品原生结算调用；原生调用已确认的返还从已用额中扣除，UNKNOWN 预占在账本结果确定前保留。单个托管 Key 的预算不包含原生产品 Key；`LR_QUOTA/0` 继续使用原生资产和单位，不折算为人民币。
+
 托管视频暂未开放：`videos.create` 无法授权新调用，已识别的视频价目不接受新预留（包括旧的无 wire 请求）；既有调用的账单读取、同一请求重试、结算及释放继续按历史契约处理。此门禁不能识别被错误归类为其他操作的价目，网关仍须阻止新增托管视频请求。
 
 可信模型服务仍调用 `/internal/v1/model-credentials/verify` 与 `/internal/v1/calls/reserve`，长期密钥必须提交配置一致的 `instance_id`。verify 允许空 `model` 供模型列表使用，但仍检查完整密钥授权；创建调用时必须传具体 rate 与服务端生成的非空 `task_id`。短期任务凭证继续要求原任务完全一致。模型服务凭证和最终结算权限不向浏览器公开。
@@ -200,3 +202,15 @@ provider costs, credentials and prompts are never included. SDK methods are
 `modelPoolCalls(account, filter)`, `modelPoolCall(account, id, origin?)`, and
 `modelPoolUsage(account, filter)`. A missing scope must be presented as an incomplete
 own-origin view by clients using the ordinary reporting fallback.
+
+## 控制台模型消费与来源
+
+账户 `/calls`、`/calls/{call}` 和 `/usage/summary` 同时覆盖 UniHub 托管模型与产品原生结算调用，沿用当前账户角色和产品来源限制。普通成员只看本人调用，现金预占、实扣、返还等财务字段仅向 owner / billing_admin 返回。报表资产包括 `CREDIT/6`、`CNY/6` 和 `LR_QUOTA/0`；汇总按资产分组，跨资产不相加。
+
+`instance_id` 可用于中央控制台精确过滤实例；产品 token 的普通查询和 model-pool 查询都强制登记实例，跨产品汇总权限不授予跨实例读取。
+
+`source` 区分 `managed_model` 和 `product_runtime`；`source_call_id` 是原产品调用号。原生调用的 `call_id` 是带 `product_runtime:` 前缀的中央查询标识，详情请求应使用该标识，不自行拼接原调用号。记录提供产品实例、操作、资金来源、价格版本和价格归属；原产品 Key、价格计算和请求内容不会因此移到中央页面。缺失创建时间保留为空，原生产品 usage 不伪装为通用 token 用量。
+
+故障费用豁免只读状态分别说明客户费用处理和供应商结果待核实。它不表示供应商执行失败或成本为零，不提供普通网页豁免写入口。统一现金入账通道与中央收银开通是两个能力，页面不得据此推断真实支付已启用。
+
+消费汇总的 `charged` / `charges_by_asset` 保留原始已结算实扣，已确认返还通过 `refunded` / `refunds_by_asset` 单独返回。调用记录的预占、实扣和返还是最后已确认快照；UNKNOWN 可能另有待核实预占，不能将待处理命令视为到账或最终金额。

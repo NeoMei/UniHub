@@ -1,6 +1,7 @@
 /** UniHub JSON protocol client. No UI, storage, refresh, permissions or retries. */
 export type IntegerString = string;
 export type BillingAsset = 'CREDIT/6' | 'CNY/6';
+export type ReportAsset = BillingAsset | 'LR_QUOTA/0';
 export type FundingMode = 'credits' | 'prepaid_cash';
 export type BillingPreset = 'hybrid' | 'prepaid' | 'subscription';
 export interface BillingComponent { enabled: boolean }
@@ -47,16 +48,16 @@ export interface MeteringPrice { version: "metered_v2"; operation: string; polic
 export interface MeteringMeasurement { key: string; unit: string; provider_unit?: string; quantity: MeteringQuantity }
 export interface MeteringUsage { version: "metered_v2"; operation: string; state: string; source: string; measurements: MeteringMeasurement[]; provider_request_id?: string }
 export type Usage = { input: IntegerString; output: IntegerString; cache_read: IntegerString; cache_write: IntegerString; reasoning: IntegerString; metered?: never } | { metered: MeteringUsage; input?: never; output?: never; cache_read?: never; cache_write?: never; reasoning?: never };
-export interface QueryScope { account_id: string; origin_product_id?: string; actor_id?: string; visibility: 'actor'|'account' }
-export interface CallFilter { from?: string; to?: string; model?: string; origin_product_id?: string; asset?: BillingAsset }
+export interface QueryScope { account_id: string; instance_id?: string; origin_product_id?: string; actor_id?: string; visibility: 'actor'|'account' }
+export interface CallFilter { instance_id?: string; from?: string; to?: string; model?: string; origin_product_id?: string; asset?: ReportAsset }
 export interface CallQuery extends CallFilter { limit?: number; cursor?: string }
 export interface Rate { asset: BillingAsset; id: string; model: string; status: string; semantics: string; input?: MeteringRational; output?: MeteringRational; cache_read?: MeteringRational; cache_write?: MeteringRational; reasoning?: MeteringRational; metered?: MeteringPrice }
 
-export interface CallView { rate?: Rate; scope: QueryScope; financial_details: boolean; asset: BillingAsset; call_id: string; account_id: string; actor_id: string; origin_product_id: string; model: string; status: string; created_at: string|null; time_source: string; task_id?: string; held?: IntegerString; charged?: IntegerString; usage?: Usage }
+export interface CallView { source?: 'managed_model'|'product_runtime'; source_call_id?: string; instance_id?: string; operation?: string; funding_mode?: string; funding_product_id?: string; refunded?: IntegerString; price_version?: string; price_owner?: string; usage_status?: string; waiver?: { case_id: string; provider_state: string; customer_status: string }; rate?: Rate; scope: QueryScope; financial_details: boolean; asset: ReportAsset; call_id: string; account_id: string; actor_id: string; origin_product_id: string; model: string; status: string; created_at: string|null; time_source: string; task_id?: string; held?: IntegerString; charged?: IntegerString; usage?: Usage }
 export interface CallPage { scope: QueryScope; filter: CallFilter; financial_details: boolean; items: CallView[]; next_cursor?: string; has_more: boolean; total: IntegerString; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
 /** mixed omits charged. All charge amounts are omitted without a finance role. */
 export interface NativeUsageTotal { operation: string; measurements: MeteringMeasurement[] }
-export interface UsageSummary { native_usage?: NativeUsageTotal[]; scope: QueryScope; filter: CallFilter; financial_details: boolean; calls_total: IntegerString; settled_calls: IntegerString; pending_calls: IntegerString; missing_usage_calls: IntegerString; unknown_calls: IntegerString; rejected_calls: IntegerString; released_calls: IntegerString; by_status: Record<string,IntegerString>; charged?: IntegerString; charges_by_asset?: Partial<Record<BillingAsset,IntegerString>>; asset: BillingAsset | 'mixed'; usage: Usage; usage_complete: boolean; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
+export interface UsageSummary { native_usage?: NativeUsageTotal[]; scope: QueryScope; filter: CallFilter; financial_details: boolean; calls_total: IntegerString; settled_calls: IntegerString; pending_calls: IntegerString; missing_usage_calls: IntegerString; unknown_calls: IntegerString; rejected_calls: IntegerString; released_calls: IntegerString; by_status: Record<string,IntegerString>; charged?: IntegerString; refunded?: IntegerString; charges_by_asset?: Partial<Record<ReportAsset,IntegerString>>; refunds_by_asset?: Partial<Record<ReportAsset,IntegerString>>; asset: ReportAsset | 'mixed'; usage: Usage; usage_complete: boolean; unknown_time: IntegerString; as_of: string; accuracy: string; consistency: string }
 export interface Resources { account_id: string; product_id: string; billing_profile?: BillingProfile; subscriptions: Subscription[]; credits?: { asset: 'CREDIT/6'; pool: 'llmrouter'; spendable: IntegerString; reserved: IntegerString; frozen: IntegerString }; wallets?: Balance[]; payments: {mode: string; real_payments_configured: boolean}; as_of: string }
 export interface ClientOptions { baseUrl: string; clientId: string; redirectUri: string; fetch?: typeof globalThis.fetch; crypto?: Crypto }
 export interface RequestOptions { body?: unknown; idempotencyKey?: string; signal?: AbortSignal }
@@ -154,10 +155,10 @@ revokeInvitation(account: string,id: string): Promise<void>{return this.request(
  async setAuthorization(account: string,body: Authorization): Promise<Authorization>{if(body.enabled){integer(body.max_per_operation);integer(body.max_total);}return this.request('PUT',this.path(account,'/settings'),{body:{product_id:body.product_id,purpose:body.purpose,enabled:body.enabled,version:body.version,max_per_operation:body.max_per_operation,max_total:body.max_total,expires_at:body.expires_at}});}
  resources(account: string): Promise<Resources>{return this.request('GET',this.path(account,'/resources'));}
  modelPoolCalls(account: string,filter: CallQuery={}): Promise<CallPage>{return this.request('GET',query(this.path(account,'/model-pool/calls'),filter));}
- modelPoolCall(account: string,id: string,origin?: string): Promise<CallView>{return this.request('GET',query(this.path(account,'/model-pool/calls/'+encodeURIComponent(id)),{origin_product_id:origin}));}
+ modelPoolCall(account: string,id: string,origin?: string,instanceId?: string): Promise<CallView>{return this.request('GET',query(this.path(account,'/model-pool/calls/'+encodeURIComponent(id)),{origin_product_id:origin,instance_id:instanceId}));}
  modelPoolUsage(account: string,filter: CallFilter={}): Promise<UsageSummary>{return this.request('GET',query(this.path(account,'/model-pool/usage/summary'),filter));}
  calls(account: string,filter: CallQuery={}): Promise<CallPage>{return this.request('GET',query(this.path(account,'/calls'),filter));}
- getCall(account: string,id: string,originProductId?: string): Promise<CallView>{return this.request('GET',query(this.path(account,`/calls/${segment(id)}`),{origin_product_id:originProductId}));}
+ getCall(account: string,id: string,originProductId?: string,instanceId?: string): Promise<CallView>{return this.request('GET',query(this.path(account,`/calls/${segment(id)}`),{origin_product_id:originProductId,instance_id:instanceId}));}
  usage(account: string,filter: CallFilter={}): Promise<UsageSummary>{return this.request('GET',query(this.path(account,'/usage/summary'),filter));}
  issueModelCredential(account: string,models: string[],taskId: string,fundingMode?: FundingMode): Promise<ModelCredential>{return this.request('POST',this.path(account,'/model-credentials'),{body:{models,task_id:taskId,funding_mode:fundingMode}});}
  revokeModelCredential(account: string,id: string): Promise<void>{return this.request('DELETE',this.path(account,`/model-credentials/${segment(id)}`));}

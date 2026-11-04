@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -22,8 +21,10 @@ import (
 
 // CallFilter has inclusive From and exclusive To bounds. A zero bound is open;
 // unknown historical times are included only when neither time bound is set.
-// The HTTP product boundary must supply its verified product as OriginProductID.
+// The HTTP product boundary supplies its verified product and instance; a
+// model-pool scope may clear the product, never the instance.
 type CallFilter struct {
+	InstanceID      string    `json:"instance_id,omitempty"`
 	Asset           string    `json:"asset,omitempty"`
 	From            time.Time `json:"from,omitempty"`
 	To              time.Time `json:"to,omitempty"`
@@ -35,31 +36,50 @@ type CallPageRequest struct {
 	Cursor string
 }
 type QueryScope struct {
+	InstanceID      string `json:"instance_id,omitempty"`
 	AccountID       string `json:"account_id"`
 	OriginProductID string `json:"origin_product_id,omitempty"`
 	ActorID         string `json:"actor_id,omitempty"`
 	Visibility      string `json:"visibility"` // actor or account; never an implied team total
 }
 
-// CallView intentionally has no provider-cost, platform-difference, digest,
-// credential, allocation or request/response-content fields.
+// CallWaiverView separates customer release from unresolved supplier liability.
+type CallWaiverView struct {
+	CaseID         string `json:"case_id"`
+	ProviderState  string `json:"provider_state"`
+	CustomerStatus string `json:"customer_status"`
+}
+
+// CallView excludes provider costs, credentials, digests and raw product usage.
 type CallView struct {
-	Rate             *Rate      `json:"rate,omitempty"`
-	Scope            QueryScope `json:"scope"`
-	FinancialDetails bool       `json:"financial_details"`
-	Asset            string     `json:"asset"`
-	CallID           string     `json:"call_id"`
-	AccountID        string     `json:"account_id"`
-	ActorID          string     `json:"actor_id"`
-	OriginProductID  string     `json:"origin_product_id"`
-	Model            string     `json:"model"`
-	Status           string     `json:"status"`
-	CreatedAt        *time.Time `json:"created_at"`
-	TimeSource       string     `json:"time_source"`
-	TaskID           string     `json:"task_id,omitempty"`
-	Held             string     `json:"held,omitempty"`
-	Charged          string     `json:"charged,omitempty"`
-	Usage            *Usage     `json:"usage,omitempty"`
+	Source           string          `json:"source"`
+	SourceCallID     string          `json:"source_call_id"`
+	InstanceID       string          `json:"instance_id"`
+	Operation        string          `json:"operation"`
+	FundingMode      string          `json:"funding_mode"`
+	FundingProductID string          `json:"funding_product_id"`
+	Refunded         string          `json:"refunded,omitempty"`
+	PriceVersion     string          `json:"price_version,omitempty"`
+	PriceOwner       string          `json:"price_owner"`
+	UsageStatus      string          `json:"usage_status"`
+	Waiver           *CallWaiverView `json:"waiver,omitempty"`
+	Rate             *Rate           `json:"rate,omitempty"`
+	Scope            QueryScope      `json:"scope"`
+	FinancialDetails bool            `json:"financial_details"`
+	Asset            string          `json:"asset"`
+	CallID           string          `json:"call_id"`
+	AccountID        string          `json:"account_id"`
+	ActorID          string          `json:"actor_id"`
+	OriginProductID  string          `json:"origin_product_id"`
+	Model            string          `json:"model"`
+	Status           string          `json:"status"`
+	CreatedAt        *time.Time      `json:"created_at"`
+	TimeSource       string          `json:"time_source"`
+	TaskID           string          `json:"task_id,omitempty"`
+	Held             string          `json:"held,omitempty"`
+	Charged          string          `json:"charged,omitempty"`
+	Usage            *Usage          `json:"usage,omitempty"`
+	reportID         string
 }
 type CallPage struct {
 	Scope            QueryScope `json:"scope"`
@@ -82,6 +102,8 @@ type NativeUsageTotal struct {
 type UsageSummary struct {
 	NativeUsage       []NativeUsageTotal `json:"native_usage,omitempty"`
 	ChargesByAsset    map[string]string  `json:"charges_by_asset,omitempty"`
+	RefundsByAsset    map[string]string  `json:"refunds_by_asset,omitempty"`
+	Refunded          string             `json:"refunded,omitempty"`
 	Scope             QueryScope         `json:"scope"`
 	Filter            CallFilter         `json:"filter"`
 	FinancialDetails  bool               `json:"financial_details"`
@@ -124,7 +146,7 @@ type usageCursor struct {
 }
 
 func normalizeCallFilter(f CallFilter) (CallFilter, error) {
-	if (f.Asset != "" && f.Asset != CreditAsset && f.Asset != CashAsset) || (!f.From.IsZero() && !f.To.IsZero() && !f.From.Before(f.To)) || len(f.Model) > 256 || len(f.OriginProductID) > 64 || strings.TrimSpace(f.Model) != f.Model || strings.TrimSpace(f.OriginProductID) != f.OriginProductID {
+	if (f.Asset != "" && f.Asset != CreditAsset && f.Asset != CashAsset && f.Asset != RuntimeAsset) || (!f.From.IsZero() && !f.To.IsZero() && !f.From.Before(f.To)) || len(f.InstanceID) > 128 || strings.TrimSpace(f.InstanceID) != f.InstanceID || len(f.Model) > 256 || len(f.OriginProductID) > 64 || strings.TrimSpace(f.Model) != f.Model || strings.TrimSpace(f.OriginProductID) != f.OriginProductID {
 		return f, ErrInvalid
 	}
 	if !f.From.IsZero() {
@@ -140,7 +162,7 @@ func (s *Service) usageScope(ctx context.Context, q accounts.Querier, actor, acc
 	if err != nil {
 		return QueryScope{}, false, err
 	}
-	scope := QueryScope{AccountID: account, OriginProductID: f.OriginProductID, Visibility: "account"}
+	scope := QueryScope{InstanceID: f.InstanceID, AccountID: account, OriginProductID: f.OriginProductID, Visibility: "account"}
 	finance := role == "owner" || role == "billing_admin"
 	if !finance {
 		scope.Visibility = "actor"
@@ -156,12 +178,12 @@ func callQueryArgs(scope QueryScope, f CallFilter) []any {
 	if !f.To.IsZero() {
 		to = &f.To
 	}
-	return []any{scope.AccountID, scope.OriginProductID, scope.ActorID, from, to, f.Model, f.Asset}
+	return []any{scope.AccountID, scope.OriginProductID, scope.ActorID, from, to, f.Model, f.Asset, f.InstanceID}
 }
 
 const callAssetSQL = `COALESCE(NULLIF(c.snapshot->>'charge_asset',''),'CREDIT/6')`
 
-const callBaseWhere = `c.account_id=$1 AND ($2='' OR c.snapshot->>'origin_product_id'=$2) AND ($3='' OR c.snapshot->>'actor_id'=$3) AND ($6='' OR c.snapshot#>>'{rate,model}'=$6) AND ($7='' OR ` + callAssetSQL + `=$7)`
+const callBaseWhere = `c.account_id=$1 AND ($2='' OR c.snapshot->>'origin_product_id'=$2) AND ($3='' OR c.snapshot->>'actor_id'=$3) AND ($6='' OR c.snapshot#>>'{rate,model}'=$6) AND ($7='' OR ` + callAssetSQL + `=$7) AND ($8='' OR COALESCE(NULLIF(c.snapshot->>'instance_id',''),'default')=$8)`
 const callTimeWhere = ` AND ($4::timestamptz IS NULL OR c.created_at >= $4) AND ($5::timestamptz IS NULL OR c.created_at < $5)`
 
 func cursorBinding(actor string, scope QueryScope, f CallFilter) string {
@@ -220,14 +242,14 @@ func readUsageCursor(raw string) (usageCursor, error) {
 	if !hmac.Equal(sig, mac.Sum(nil)) {
 		return c, ErrInvalid
 	}
-	if json.Unmarshal(b, &c) != nil || c.Version != 1 || !keyOK(c.ID) || !time.Now().Before(c.Expires) {
+	if json.Unmarshal(b, &c) != nil || c.Version != 1 || (c.ID == "" || len(c.ID) > 256) || !time.Now().Before(c.Expires) {
 		return c, ErrInvalid
 	}
 	return c, nil
 }
 
-const callReportStatus = `COALESCE(uncertain.status,c.snapshot->>'status','UNKNOWN')`
-const callStatusJoin = ` LEFT JOIN LATERAL (SELECT 'UNKNOWN'::text AS status FROM billing_commands bc WHERE bc.account_id=c.account_id AND bc.status='UNKNOWN' AND bc.kind IN ('reserve','topup','settle','release') AND bc.effect#>>'{call,call_id}'=c.id LIMIT 1) uncertain ON true `
+const callReportStatus = `c.report_status`
+const callReportTable = `(` + ReportCallsSQL + `) c `
 const callViewColumns = `c.id,c.snapshot,c.created_at,c.time_source,COALESCE(NULLIF(c.snapshot->>'task_id',''),mc.task_id,''),` + callReportStatus
 const callViewJoin = ` LEFT JOIN model_credentials mc ON mc.id=c.snapshot->>'credential_id' AND mc.account_id=c.account_id AND mc.actor_id=c.snapshot->>'actor_id' AND mc.origin_product_id=c.snapshot->>'origin_product_id' `
 
@@ -235,16 +257,44 @@ func scanCallView(row pgx.Row, scope QueryScope, finance bool) (CallView, error)
 	var c Call
 	var data []byte
 	var out CallView
-	if err := row.Scan(&out.CallID, &data, &out.CreatedAt, &out.TimeSource, &out.TaskID, &out.Status); err != nil {
+	if err := row.Scan(&out.reportID, &data, &out.CreatedAt, &out.TimeSource, &out.TaskID, &out.Status); err != nil {
 		return out, err
 	}
 	if err := json.Unmarshal(data, &c); err != nil {
 		return out, err
 	}
+	var metadata struct {
+		QueryCallID  string          `json:"query_call_id"`
+		Source       string          `json:"source"`
+		SourceCallID string          `json:"source_call_id"`
+		Operation    string          `json:"operation"`
+		Refunded     string          `json:"refunded"`
+		PriceVersion string          `json:"price_version"`
+		PriceOwner   string          `json:"price_owner"`
+		Waiver       *CallWaiverView `json:"waiver"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return out, err
+	}
+	out.CallID, out.Source, out.SourceCallID = metadata.QueryCallID, metadata.Source, metadata.SourceCallID
+	out.InstanceID, out.Operation = c.InstanceID, metadata.Operation
+	out.FundingMode, out.FundingProductID = c.FundingMode, c.FundingProductID
+	if out.FundingMode == "" {
+		if callAsset(c) == CashAsset {
+			out.FundingMode = FundingPrepaidCash
+		} else {
+			out.FundingMode = FundingCredits
+		}
+	}
+	out.PriceOwner, out.Waiver = metadata.PriceOwner, metadata.Waiver
+	out.UsageStatus = "unavailable"
+	if c.Usage != nil {
+		out.UsageStatus = "available"
+	}
 	out.Scope = scope
 	out.FinancialDetails = finance
 	out.Asset = callAsset(c)
-	if out.Asset != CreditAsset && out.Asset != CashAsset {
+	if out.Asset != CreditAsset && out.Asset != CashAsset && out.Asset != RuntimeAsset {
 		return out, ErrInvalid
 	}
 	out.AccountID = scope.AccountID
@@ -253,7 +303,10 @@ func scanCallView(row pgx.Row, scope QueryScope, finance bool) (CallView, error)
 	out.Model = c.Rate.Model
 	out.Usage = c.Usage
 	if finance {
-		out.Rate = &c.Rate
+		if out.Source == "managed_model" {
+			out.Rate = &c.Rate
+		}
+		out.Refunded, out.PriceVersion = metadata.Refunded, metadata.PriceVersion
 		out.Held = c.Held
 		out.Charged = c.Charged
 	}
@@ -279,13 +332,13 @@ func (s *Service) QueryCalls(ctx context.Context, actor, account string, f CallF
 		return out, err
 	}
 	args := callQueryArgs(out.Scope, f)
-	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM billing_calls c WHERE `+callBaseWhere+callTimeWhere, args...).Scan(&out.Total); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere, args...).Scan(&out.Total); err != nil {
 		return out, err
 	}
-	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM billing_calls c WHERE `+callBaseWhere+` AND $4::timestamptz IS NOT DISTINCT FROM $4 AND $5::timestamptz IS NOT DISTINCT FROM $5 AND c.created_at IS NULL`, args...).Scan(&out.UnknownTime); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM `+callReportTable+` WHERE `+callBaseWhere+` AND $4::timestamptz IS NOT DISTINCT FROM $4 AND $5::timestamptz IS NOT DISTINCT FROM $5 AND c.created_at IS NULL`, args...).Scan(&out.UnknownTime); err != nil {
 		return out, err
 	}
-	query := `SELECT ` + callViewColumns + ` FROM billing_calls c ` + callViewJoin + callStatusJoin + ` WHERE ` + callBaseWhere + callTimeWhere
+	query := `SELECT ` + callViewColumns + ` FROM ` + callReportTable + callViewJoin + ` WHERE ` + callBaseWhere + callTimeWhere
 	binding := cursorBinding(actor, out.Scope, f)
 	if page.Cursor != "" {
 		cursor, e := decodeUsageCursor(page.Cursor, binding)
@@ -293,10 +346,10 @@ func (s *Service) QueryCalls(ctx context.Context, actor, account string, f CallF
 			return out, e
 		}
 		if cursor.At == nil {
-			query += ` AND c.created_at IS NULL AND c.id < $8`
+			query += ` AND c.created_at IS NULL AND c.id < $9`
 			args = append(args, cursor.ID)
 		} else {
-			query += ` AND (c.created_at < $8 OR (c.created_at = $8 AND c.id < $9) OR c.created_at IS NULL)`
+			query += ` AND (c.created_at < $9 OR (c.created_at = $9 AND c.id < $10) OR c.created_at IS NULL)`
 			args = append(args, cursor.At, cursor.ID)
 		}
 	}
@@ -324,7 +377,7 @@ func (s *Service) QueryCalls(ctx context.Context, actor, account string, f CallF
 		out.HasMore = true
 		out.Items = out.Items[:page.Limit]
 		last := out.Items[len(out.Items)-1]
-		out.NextCursor, err = encodeUsageCursor(usageCursor{Version: 1, Binding: binding, At: last.CreatedAt, ID: last.CallID, Expires: time.Now().Add(time.Hour), Filter: f})
+		out.NextCursor, err = encodeUsageCursor(usageCursor{Version: 1, Binding: binding, At: last.CreatedAt, ID: last.reportID, Expires: time.Now().Add(time.Hour), Filter: f})
 		if err != nil {
 			return out, err
 		}
@@ -338,12 +391,19 @@ func (s *Service) QueryCalls(ctx context.Context, actor, account string, f CallF
 	return out, nil
 }
 
-func (s *Service) QueryCall(ctx context.Context, actor, account, callID, origin string) (CallView, error) {
+func (s *Service) QueryCall(ctx context.Context, actor, account, callID, origin string, instance ...string) (CallView, error) {
 	var out CallView
 	if !keyOK(callID) {
 		return out, ErrInvalid
 	}
-	f, err := normalizeCallFilter(CallFilter{OriginProductID: origin})
+	if len(instance) > 1 {
+		return out, ErrInvalid
+	}
+	filter := CallFilter{OriginProductID: origin}
+	if len(instance) == 1 {
+		filter.InstanceID = instance[0]
+	}
+	f, err := normalizeCallFilter(filter)
 	if err != nil {
 		return out, err
 	}
@@ -358,12 +418,30 @@ func (s *Service) QueryCall(ctx context.Context, actor, account, callID, origin 
 	}
 	errArgs := callQueryArgs(scope, f)
 	errArgs = append(errArgs, callID)
-	out, err = scanCallView(tx.QueryRow(ctx, `SELECT `+callViewColumns+` FROM billing_calls c `+callViewJoin+callStatusJoin+` WHERE `+callBaseWhere+callTimeWhere+` AND c.id=$8`, errArgs...), scope, finance)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return out, accounts.ErrNotFound
-	}
+	rows, err := tx.Query(ctx, `SELECT `+callViewColumns+` FROM `+callReportTable+callViewJoin+` WHERE `+callBaseWhere+callTimeWhere+` AND c.snapshot->>'query_call_id'=$9 LIMIT 2`, errArgs...)
 	if err != nil {
 		return out, err
+	}
+	count := 0
+	for rows.Next() {
+		count++
+		if count > 1 {
+			rows.Close()
+			return out, ErrConflict
+		}
+		out, err = scanCallView(rows, scope, finance)
+		if err != nil {
+			rows.Close()
+			return out, err
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return out, err
+	}
+	if count == 0 {
+		return out, accounts.ErrNotFound
 	}
 	return out, tx.Commit(ctx)
 }
@@ -396,9 +474,9 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	for _, name := range []string{"input", "output", "cache_read", "cache_write", "reasoning"} {
 		selects = append(selects, `COALESCE(sum(CASE WHEN `+callReportStatus+`='SETTLED' AND `+validLegacyUsageSQL+` THEN (c.snapshot#>>'{usage,`+name+`}')::numeric ELSE 0 END),0)::text`)
 	}
-	selects = append(selects, `COALESCE(bool_and(`+callReportStatus+` IN ('SETTLED','RELEASED','REJECTED','CANCELED') AND (`+callReportStatus+`<>'SETTLED' OR `+validUsageSQL+`)),true)`, `count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND (NOT COALESCE(c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$',false) OR (c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND NOT COALESCE(`+validUsageSQL+`,false))))`)
+	selects = append(selects, `COALESCE(bool_and(`+callReportStatus+` IN ('SETTLED','RELEASED','REJECTED','CANCELED') AND (`+callReportStatus+`<>'SETTLED' OR COALESCE(`+validUsageSQL+`,false))),true)`, `count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND (NOT COALESCE(c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$',false) OR (c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND NOT COALESCE(`+validUsageSQL+`,false))))`)
 	var invalid int64
-	err = tx.QueryRow(ctx, `SELECT `+strings.Join(selects, ",")+` FROM billing_calls c `+callStatusJoin+` WHERE `+callBaseWhere+callTimeWhere, args...).Scan(&out.CallsTotal, &out.SettledCalls, &out.PendingCalls, &out.MissingUsageCalls, &out.UnknownCalls, &out.RejectedCalls, &out.ReleasedCalls, &out.Usage.Input, &out.Usage.Output, &out.Usage.CacheRead, &out.Usage.CacheWrite, &out.Usage.Reasoning, &out.UsageComplete, &invalid)
+	err = tx.QueryRow(ctx, `SELECT `+strings.Join(selects, ",")+` FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere, args...).Scan(&out.CallsTotal, &out.SettledCalls, &out.PendingCalls, &out.MissingUsageCalls, &out.UnknownCalls, &out.RejectedCalls, &out.ReleasedCalls, &out.Usage.Input, &out.Usage.Output, &out.Usage.CacheRead, &out.Usage.CacheWrite, &out.Usage.Reasoning, &out.UsageComplete, &invalid)
 	if err != nil {
 		return out, err
 	}
@@ -406,7 +484,7 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 		return out, fmt.Errorf("billing: invalid stored call counters")
 	}
 	// Aggregate native quantities independently of money and legacy counters.
-	nativeRows, nativeErr := tx.Query(ctx, `SELECT c.snapshot FROM billing_calls c `+callStatusJoin+` WHERE `+callBaseWhere+callTimeWhere+` AND `+callReportStatus+`='SETTLED' AND c.snapshot#>>'{rate,semantics}'='metered_v2'`, args...)
+	nativeRows, nativeErr := tx.Query(ctx, `SELECT c.snapshot FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere+` AND `+callReportStatus+`='SETTLED' AND c.snapshot#>>'{rate,semantics}'='metered_v2'`, args...)
 	if nativeErr != nil {
 		return out, nativeErr
 	}
@@ -477,24 +555,26 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 		out.NativeUsage[index].Measurements = append(out.NativeUsage[index].Measurements, metering.Measurement{Key: d.key, Unit: d.unit, ProviderUnit: d.provider, Quantity: metering.Quantity{Value: n.String(), Scale: scale}})
 	}
 
-	// A total across CREDIT and CNY would be meaningless. Determine the
-	// selected asset set from all matching calls, and sum settled money per asset.
-	assetRows, e := tx.Query(ctx, `SELECT `+callAssetSQL+`,COALESCE(sum(CASE WHEN `+callReportStatus+`='SETTLED' AND c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$' THEN (c.snapshot->>'charged')::numeric ELSE 0 END),0)::text FROM billing_calls c `+callStatusJoin+` WHERE `+callBaseWhere+callTimeWhere+` GROUP BY `+callAssetSQL, args...)
+	// Keep confirmed gross charges even when a later command is UNKNOWN.
+	// Pending effects never replace confirmed refunds, and assets stay separate.
+	assetRows, e := tx.Query(ctx, `SELECT `+callAssetSQL+`,COALESCE(sum(CASE WHEN c.snapshot->>'status'='SETTLED' AND c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$' THEN (c.snapshot->>'charged')::numeric ELSE 0 END),0)::text,COALESCE(sum(CASE WHEN c.snapshot->>'refunded' ~ '^(0|[1-9][0-9]*)$' THEN (c.snapshot->>'refunded')::numeric ELSE 0 END),0)::text FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere+` GROUP BY `+callAssetSQL, args...)
 	if e != nil {
 		return out, e
 	}
 	amounts := map[string]string{}
+	refunds := map[string]string{}
 	for assetRows.Next() {
-		var asset, amount string
-		if e = assetRows.Scan(&asset, &amount); e != nil {
+		var asset, amount, refunded string
+		if e = assetRows.Scan(&asset, &amount, &refunded); e != nil {
 			assetRows.Close()
 			return out, e
 		}
-		if asset != CreditAsset && asset != CashAsset {
+		if asset != CreditAsset && asset != CashAsset && asset != RuntimeAsset {
 			assetRows.Close()
 			return out, ErrInvalid
 		}
 		amounts[asset] = amount
+		refunds[asset] = refunded
 	}
 	e = assetRows.Err()
 	assetRows.Close()
@@ -507,12 +587,14 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 			asset = CreditAsset
 		}
 		amounts[asset] = "0"
+		refunds[asset] = "0"
 	}
 	if len(amounts) == 1 {
 		for asset, amount := range amounts {
 			out.Asset = asset
 			if out.FinancialDetails {
 				out.Charged = amount
+				out.Refunded = refunds[asset]
 			}
 		}
 	} else {
@@ -520,11 +602,12 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	}
 	if out.FinancialDetails {
 		out.ChargesByAsset = amounts
+		out.RefundsByAsset = refunds
 	}
-	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM billing_calls c WHERE `+callBaseWhere+` AND $4::timestamptz IS NOT DISTINCT FROM $4 AND $5::timestamptz IS NOT DISTINCT FROM $5 AND c.created_at IS NULL`, args...).Scan(&out.UnknownTime); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM `+callReportTable+` WHERE `+callBaseWhere+` AND $4::timestamptz IS NOT DISTINCT FROM $4 AND $5::timestamptz IS NOT DISTINCT FROM $5 AND c.created_at IS NULL`, args...).Scan(&out.UnknownTime); err != nil {
 		return out, err
 	}
-	rows, err := tx.Query(ctx, `SELECT `+callReportStatus+`,count(*)::text FROM billing_calls c `+callStatusJoin+` WHERE `+callBaseWhere+callTimeWhere+` GROUP BY `+callReportStatus, args...)
+	rows, err := tx.Query(ctx, `SELECT `+callReportStatus+`,count(*)::text FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere+` GROUP BY `+callReportStatus, args...)
 	if err != nil {
 		return out, err
 	}

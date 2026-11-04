@@ -19,7 +19,7 @@ afterEach(() => {
 });
 const shared: Shared = {
   account: { id: "A", name: "账户 A", kind: "personal", role: "owner" },
-  session: { authenticated: true, sandbox: false, csrf_token: "csrf" },
+  session: { authenticated: true, sandbox: true, csrf_token: "csrf" },
   products: [{ id: "product-a", name: "产品 A" }],
   refresh: () => {},
   act: () => {},
@@ -39,6 +39,14 @@ const membership: Offer = {
   status: "published",
   sandbox: false,
 };
+it.each([{ loading: true }, { loading: false, error: "不可用" }, { loading: false, data: {} }, { loading: true, data: { real_payments_configured: true } }, { loading: false, error: "不可用", data: { real_payments_configured: true } }])("blocks real purchases until capability is explicitly confirmed: %j", (capabilities) => {
+  const act = vi.fn();
+  render(<Catalog {...shared} session={{ ...shared.session, sandbox: false }} act={act} kind="membership" offers={{ data: [membership], loading: false }} subscriptions={[]} capabilities={capabilities} />);
+  const purchase = screen.getByRole("button", { name: "购买" }) as HTMLButtonElement;
+  expect(purchase.disabled).toBe(true);
+  fireEvent.click(purchase);
+  expect(act).not.toHaveBeenCalled();
+});
 it("describes zero-credit annual memberships as feature subscriptions with manual refunds", () => {
   const act = vi.fn<(spec: ActionSpec) => void>();
   render(

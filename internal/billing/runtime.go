@@ -202,7 +202,7 @@ func (s *Service) GetRuntimeBudget(ctx context.Context, scope RuntimeScope, loca
 	if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 		return out, e
 	}
-	e = s.pool.QueryRow(ctx, `SELECT COALESCE(sum(CASE WHEN snapshot->>'status' IN ('PENDING','RESERVED') THEN (snapshot->>'held')::numeric ELSE 0 END),0)::text,COALESCE(sum(CASE WHEN snapshot->>'status'='SETTLED' THEN (snapshot->>'charged')::numeric-COALESCE((snapshot->>'refunded')::numeric,0) ELSE 0 END),0)::text FROM product_runtime_calls WHERE account_id=$1 AND snapshot->>'product_id'=$2 AND snapshot->>'instance_id'=$3 AND snapshot->>'asset'=$4`, account, scope.ProductID, scope.InstanceID, RuntimeAsset).Scan(&out.Held, &out.Used)
+	out.Held, out.Used, e = UsageTotalsOn(ctx, s.pool, account, scope.ProductID, scope.InstanceID, RuntimeAsset, "")
 	out.Remaining = UsageRemaining(out.MaxTotal, out.Held, out.Used)
 	return
 }
@@ -339,8 +339,7 @@ func (s *Service) runtimeCheckBudget(ctx context.Context, q accounts.Querier, sc
 	if e != nil {
 		return e
 	}
-	var held, used string
-	e = q.QueryRow(ctx, `SELECT COALESCE(sum(CASE WHEN snapshot->>'status' IN ('PENDING','RESERVED') THEN (snapshot->>'held')::numeric ELSE 0 END),0)::text,COALESCE(sum(CASE WHEN snapshot->>'status'='SETTLED' THEN (snapshot->>'charged')::numeric-COALESCE((snapshot->>'refunded')::numeric,0) ELSE 0 END),0)::text FROM product_runtime_calls WHERE account_id=$1 AND snapshot->>'product_id'=$2 AND snapshot->>'instance_id'=$3 AND snapshot->>'asset'=$4`, account, scope.ProductID, scope.InstanceID, asset).Scan(&held, &used)
+	held, used, e := UsageTotalsOn(ctx, q, account, scope.ProductID, scope.InstanceID, asset, "")
 	if e != nil {
 		return e
 	}

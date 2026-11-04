@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.34"
+  "version": "0.4.35"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -2090,6 +2090,7 @@
       "x-product-scopes":
         - "usage:read"
       "parameters":
+        - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
           "name": "account"
           "in": "path"
@@ -2149,7 +2150,7 @@
           "in": "query"
           "required": false
           "schema":
-            "$ref": "#/components/schemas/BillingAsset"
+            "$ref": "#/components/schemas/ReportAsset"
           "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
   "/v1/accounts/{account}/usage/summary":
     "get":
@@ -2185,6 +2186,7 @@
       "x-product-scopes":
         - "usage:read"
       "parameters":
+        - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
           "name": "account"
           "in": "path"
@@ -2227,7 +2229,7 @@
           "in": "query"
           "required": false
           "schema":
-            "$ref": "#/components/schemas/BillingAsset"
+            "$ref": "#/components/schemas/ReportAsset"
           "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
   "/v1/accounts/{account}/calls/{call}":
     "get":
@@ -2263,6 +2265,7 @@
       "x-product-scopes":
         - "usage:read"
       "parameters":
+        - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
           "name": "account"
           "in": "path"
@@ -2318,6 +2321,7 @@
       "x-product-scopes":
         - "usage:all-products"
       "parameters":
+        - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
           "name": "account"
           "in": "path"
@@ -2377,7 +2381,7 @@
           "in": "query"
           "required": false
           "schema":
-            "$ref": "#/components/schemas/BillingAsset"
+            "$ref": "#/components/schemas/ReportAsset"
           "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
   "/v1/accounts/{account}/model-pool/calls/{call}":
     "get":
@@ -2413,6 +2417,7 @@
       "x-product-scopes":
         - "usage:all-products"
       "parameters":
+        - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
           "name": "account"
           "in": "path"
@@ -2468,6 +2473,7 @@
       "x-product-scopes":
         - "usage:all-products"
       "parameters":
+        - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
           "name": "account"
           "in": "path"
@@ -2510,7 +2516,7 @@
           "in": "query"
           "required": false
           "schema":
-            "$ref": "#/components/schemas/BillingAsset"
+            "$ref": "#/components/schemas/ReportAsset"
           "description": "Optional exact asset filter. Omit to include both. Pagination cursors bind this filter; repeat the same asset on subsequent pages."
   "/v1/accounts/{account}/api-keys":
     "get":
@@ -3479,6 +3485,7 @@
     "QueryScope":
       "type": "object"
       "properties":
+        "instance_id": {"type": "string", "description": "Exact instance. Product clients are restricted to their registered instance."}
         "account_id":
           "type": "string"
         "origin_product_id":
@@ -3496,6 +3503,7 @@
     "CallFilter":
       "type": "object"
       "properties":
+        "instance_id": {"type": "string", "description": "Exact instance. Product clients are restricted to their registered instance."}
         "from":
           "type": "string"
           "format": "date-time"
@@ -3507,7 +3515,7 @@
         "origin_product_id":
           "type": "string"
         "asset":
-          "$ref": "#/components/schemas/BillingAsset"
+          "$ref": "#/components/schemas/ReportAsset"
       "required": []
       "additionalProperties": false
     "Payments":
@@ -3845,6 +3853,23 @@
     "CallView":
       "type": "object"
       "properties":
+        "source": {"type": "string", "enum": ["managed_model", "product_runtime"]}
+        "source_call_id": {"type": "string", "description": "Original product call identifier. Use call_id for central detail lookups."}
+        "instance_id": {"type": "string"}
+        "operation": {"type": "string"}
+        "funding_mode": {"type": "string"}
+        "funding_product_id": {"type": "string"}
+        "price_version": {"type": "string"}
+        "price_owner": {"type": "string"}
+        "usage_status": {"type": "string", "description": "Native product usage is not inferred as generic token usage."}
+        "refunded": {"$ref": "#/components/schemas/IntegerString"}
+        "waiver":
+          "type": "object"
+          "properties":
+            "case_id": {"type": "string"}
+            "provider_state": {"type": "string"}
+            "customer_status": {"type": "string"}
+          "additionalProperties": false
         "rate":
           "$ref": "#/components/schemas/Rate"
         "scope":
@@ -3852,7 +3877,7 @@
         "financial_details":
           "type": "boolean"
         "asset":
-          "$ref": "#/components/schemas/BillingAsset"
+          "$ref": "#/components/schemas/ReportAsset"
         "call_id":
           "type": "string"
         "account_id":
@@ -3936,6 +3961,7 @@
     "UsageSummary":
       "type": "object"
       "properties":
+        "refunded": {"$ref": "#/components/schemas/IntegerString", "description": "Confirmed refunds for one matching asset and finance roles; omitted for mixed assets."}
         "native_usage":
           "type": "array"
           "items":
@@ -3974,6 +4000,7 @@
           "enum":
             - "CREDIT/6"
             - "CNY/6"
+            - "LR_QUOTA/0"
             - "mixed"
           "description": "Single matching asset or mixed when calls use both assets. mixed omits charged; use charges_by_asset without adding unlike assets."
         "usage":
@@ -3987,12 +4014,18 @@
           "const": "exact_for_query_snapshot"
         "consistency":
           "const": "live"
+        "refunds_by_asset":
+          "type": "object"
+          "additionalProperties": {"$ref": "#/components/schemas/IntegerString"}
+          "description": "Confirmed native refunds separately per asset; gross charged amounts remain unchanged. Finance roles only."
         "charges_by_asset":
           "type": "object"
           "properties":
             "CREDIT/6":
               "$ref": "#/components/schemas/IntegerString"
             "CNY/6":
+              "$ref": "#/components/schemas/IntegerString"
+            "LR_QUOTA/0":
               "$ref": "#/components/schemas/IntegerString"
           "additionalProperties": false
           "minProperties": 1
@@ -4123,6 +4156,10 @@
         - "asset"
         - "billing_profile_version"
       "additionalProperties": false
+    "ReportAsset":
+      "type": "string"
+      "enum": ["CREDIT/6", "CNY/6", "LR_QUOTA/0"]
+      "description": "Report assets stay separate; legacy native quota is not converted to cash or central model credits."
     "BillingAsset":
       "type": "string"
       "enum":

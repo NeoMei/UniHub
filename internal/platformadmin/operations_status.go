@@ -43,9 +43,9 @@ func (s *Store) OperationOverview(ctx context.Context, actor string) (map[string
 		if e != nil {
 			return nil, e
 		}
-		var calls, settled, released, processing int64
+		var calls, settled, released, processing, unknownCalls int64
 		from := time.Now().UTC().Add(-24 * time.Hour)
-		e = tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE snapshot->>'status'='SETTLED'),count(*) FILTER(WHERE snapshot->>'status'='RELEASED'),count(*) FILTER(WHERE snapshot->>'status' IN ('PENDING','RESERVED','MISSING_USAGE')) FROM billing_calls WHERE created_at >=$1`, from).Scan(&calls, &settled, &released, &processing)
+		e = tx.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE report_status='SETTLED'),count(*) FILTER(WHERE report_status='RELEASED'),count(*) FILTER(WHERE report_status IN ('PENDING','RESERVED','MISSING_USAGE')),count(*) FILTER(WHERE report_status='UNKNOWN') FROM (`+billing.ReportCallsSQL+`) c WHERE created_at >=$1 AND created_at <=$2`, from, out["as_of"]).Scan(&calls, &settled, &released, &processing, &unknownCalls)
 		if e != nil {
 			return nil, e
 		}
@@ -53,7 +53,7 @@ func (s *Store) OperationOverview(ctx context.Context, actor string) (map[string
 		out["refund_reviews"] = refunds
 		out["pending_commands"] = pending
 		out["unknown_commands"] = unknown
-		out["calls"] = map[string]any{"window_from": from, "window_to": out["as_of"], "timezone": "UTC", "logical_calls": calls, "settled": settled, "released": released, "processing": processing, "failure_rate": nil, "failure_rate_status": "supplier_outcome_telemetry_unavailable", "attempts_status": "supplier_attempt_telemetry_unavailable"}
+		out["calls"] = map[string]any{"window_from": from, "window_to": out["as_of"], "timezone": "UTC", "logical_calls": calls, "settled": settled, "released": released, "processing": processing, "unknown": unknownCalls, "failure_rate": nil, "failure_rate_status": "supplier_outcome_telemetry_unavailable", "attempts_status": "supplier_attempt_telemetry_unavailable"}
 	}
 	return out, tx.Commit(ctx)
 }

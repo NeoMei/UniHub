@@ -129,6 +129,16 @@ test('usage and call queries preserve asset selection and separate large per-ass
  assert.equal(calls.length,3);
 });
 
+test('call detail and model pool detail preserve explicit instance boundaries',async t=>{
+ const {client,calls}=await fixture(t,(r,res)=>{
+  send(res,200,{call_id:'product_runtime:opaque',source_call_id:'original-call',asset:'LR_QUOTA/0'});
+ });client.setAccessToken('instance-token');
+ await client.getCall('account','product_runtime:opaque','llmrouter','work');
+ await client.modelPoolCall('account','product_runtime:opaque','llmrouter','work');
+ assert.equal(calls.length,2);
+ for(const call of calls)assert.equal(new URL(call.path,'http://fixture.test').searchParams.get('instance_id'),'work');
+});
+
 test('unknown product route remains a structured error and is not retried',async t=>{
  const {client,calls}=await fixture(t,(r,res)=>send(res,404,{error:'not_found'}));
  await assert.rejects(client.request('GET','/v1/unknown-billing-route'),e=>e instanceof UniHubError&&e.status===404&&e.code==='not_found');assert.equal(calls.length,1);
