@@ -73,17 +73,24 @@ func UsageRemaining(total, held, used string) *string {
 	return &out
 }
 
-// UsageTotalsOn derives lifetime exposure from the same immutable calls and
-// recoverable commands as the final charge. No second balance or debit exists.
+// UsageTotalsOn derives lifetime exposure across both charging channels for an
+// account budget. A managed Key's private budget counts only its managed calls.
 // Unknown commands remain fully reserved until their ledger result is known.
 func UsageTotalsOn(ctx context.Context, q accounts.Querier, account, product, instance, asset, key string) (string, string, error) {
 	var held, used string
-	e := q.QueryRow(ctx, `SELECT
- COALESCE(sum(CASE WHEN c.snapshot->>'status' IN ('PENDING','RESERVED','MISSING_USAGE') THEN GREATEST((c.snapshot->>'held')::numeric,COALESCE(pending.held,0)) ELSE 0 END),0)::text,
- COALESCE(sum(CASE WHEN c.snapshot->>'status'='SETTLED' THEN (c.snapshot->>'charged')::numeric ELSE 0 END),0)::text
+	e := q.QueryRow(ctx, `SELECT COALESCE(sum(held),0)::text,COALESCE(sum(used),0)::text FROM (
+ SELECT CASE WHEN c.snapshot->>'status' IN ('PENDING','RESERVED','MISSING_USAGE','UNKNOWN') THEN GREATEST((c.snapshot->>'held')::numeric,COALESCE(pending.held,0)) ELSE 0 END AS held,
+ CASE WHEN c.snapshot->>'status'='SETTLED' THEN (c.snapshot->>'charged')::numeric ELSE 0 END AS used
  FROM billing_calls c
  LEFT JOIN LATERAL (SELECT max((bc.effect#>>'{call,held}')::numeric) AS held FROM billing_commands bc WHERE bc.account_id=c.account_id AND bc.effect#>>'{call,call_id}'=c.id AND bc.kind IN ('reserve','topup') AND bc.status IN ('CREATED','SUBMITTING','UNKNOWN')) pending ON true
- WHERE c.account_id=$1 AND c.snapshot->>'origin_product_id'=$2 AND COALESCE(NULLIF(c.snapshot->>'instance_id',''),'default')=$3 AND COALESCE(NULLIF(c.snapshot->>'charge_asset',''),'CREDIT/6')=$4 AND ($5='' OR c.snapshot->>'credential_id'=$5)`, account, product, instance, asset, key).Scan(&held, &used)
+ WHERE c.account_id=$1 AND c.snapshot->>'origin_product_id'=$2 AND COALESCE(NULLIF(c.snapshot->>'instance_id',''),'default')=$3 AND COALESCE(NULLIF(c.snapshot->>'charge_asset',''),'CREDIT/6')=$4 AND ($5='' OR c.snapshot->>'credential_id'=$5)
+ UNION ALL
+ SELECT CASE WHEN c.snapshot->>'status' IN ('PENDING','RESERVED','MISSING_USAGE','UNKNOWN') THEN GREATEST((c.snapshot->>'held')::numeric,COALESCE(pending.held,0)) ELSE 0 END,
+ CASE WHEN c.snapshot->>'status'='SETTLED' THEN (c.snapshot->>'charged')::numeric-COALESCE((c.snapshot->>'refunded')::numeric,0) ELSE 0 END
+ FROM product_runtime_calls c
+ LEFT JOIN LATERAL (SELECT max((bc.effect#>>'{runtime_call,held}')::numeric) AS held FROM billing_commands bc WHERE bc.account_id=c.account_id AND bc.effect#>>'{runtime_call,id}'=c.id AND bc.kind IN ('runtime_reserve','runtime_topup') AND bc.status IN ('CREATED','SUBMITTING','UNKNOWN')) pending ON true
+ WHERE $5='' AND c.account_id=$1 AND c.snapshot->>'product_id'=$2 AND c.snapshot->>'instance_id'=$3 AND c.snapshot->>'asset'=$4
+ ) exposure`, account, product, instance, asset, key).Scan(&held, &used)
 	return held, used, e
 }
 

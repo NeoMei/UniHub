@@ -60,6 +60,7 @@ import {
 } from "./ui";
 import { Catalog, Members, SettingsPage, Wallets } from "./forms";
 import { BillingHub } from "./BillingHub";
+import { Consumption } from "./Consumption";
 import {ProductApplications,ProductUserManagement} from "./ProductUsers";
 import QRCode from "qrcode";
 import type { AdminPrincipal } from "./admin/types";
@@ -74,6 +75,7 @@ export type Page =
   | "addons"
   | "wallets"
   | "bills"
+  | "consumption"
   | "members"
   | "settings";
 export type ActionSpec = {
@@ -100,6 +102,7 @@ const navigation = [
   { id: "addons", label: "加量包", icon: Box },
   { id: "wallets", label: "钱包与充值", icon: WalletIcon },
   { id: "bills", label: "账单", icon: CreditCard },
+  { id: "consumption", label: "模型消费", icon: FileText },
   { id: "members", label: "团队成员", icon: Users },
   { id: "settings", label: "支付自动化", icon: Settings },
 ] as const;
@@ -139,34 +142,36 @@ function initialAdminPath() {
   return /^\/admin(?:\/|$)/.test(hint) ? hint : "";
 }
 export default function App() {
+  const [passwordChanged, setPasswordChanged] = useState(false);
   const [version, setVersion] = useState(0);
   const session = useResource<Session>("/auth/session", version);
-  const profile = useResource<Profile>(session.data?.authenticated ? "/v1/me/profile" : undefined, version);
+  const authenticated = session.data?.authenticated && !passwordChanged;
+  const profile = useResource<Profile>(authenticated ? "/v1/me/profile" : undefined, version);
   const [profileView, setProfileView] = useState<Profile>();
   const accounts = useResource<Account[]>(
-    session.data?.authenticated ? "/v1/accounts" : undefined,
+    authenticated ? "/v1/accounts" : undefined,
     version,
   );
   const [selected, setSelected] = useState(initialAccount);
   const [page, setPage] = useState<Page>(initialPage);
   const [adminPath, setAdminPath] = useState(initialAdminPath);
-  const platform = useResource<AdminPrincipal>(session.data?.authenticated ? "/admin/v1/me" : undefined, version);
+  const platform = useResource<AdminPrincipal>(authenticated ? "/admin/v1/me" : undefined, version);
   useEffect(() => {
     const pop = () => setAdminPath(/^\/admin(?:\/|$)/.test(window.location.pathname) ? window.location.pathname + window.location.search : "");
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
   }, []);
   useEffect(() => {
-    if (session.data?.authenticated && adminPath) {
+    if (authenticated && adminPath) {
       window.history.replaceState(null, "", adminPath);
       window.sessionStorage.removeItem("unihub.return-admin");
     }
-  }, [session.data?.authenticated, adminPath]);
+  }, [authenticated, adminPath]);
   useEffect(() => {
-    if (session.data?.authenticated) window.sessionStorage.removeItem("unihub.return-view");
-  }, [session.data?.authenticated]);
+    if (authenticated) window.sessionStorage.removeItem("unihub.return-view");
+  }, [authenticated]);
   const [profileOpen, setProfileOpen] = useState(false);
- const userManagement=useResource<{enabled:boolean;can_manage:boolean}>(session.data?.authenticated?"/v1/user-management":undefined,version);
+ const userManagement=useResource<{enabled:boolean;can_manage:boolean}>(authenticated?"/v1/user-management":undefined,version);
   const [portalOpen, setPortalOpen] = useState(() => ["/guide", "/products"].includes(window.location.pathname));
   const [busy, setBusy] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -175,13 +180,14 @@ export default function App() {
     : accounts.data?.[0];
   useEffect(() => {
     if (profile.data) setProfileView(profile.data);
-    else if (!session.data?.authenticated) setProfileView(undefined);
-  }, [profile.data, session.data?.authenticated]);
+    else if (!authenticated) setProfileView(undefined);
+  }, [profile.data, authenticated]);
   useEffect(() => {
     if (accounts.data?.length && !selected) setSelected(accounts.data[0].id);
     if (selected && accounts.data?.some((item) => item.id === selected))
       window.sessionStorage.setItem("unihub.account", selected);
   }, [accounts.data, selected]);
+  if (passwordChanged) return <div className="auth-page"><img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" /><Notice>密码已更新，当前会话已结束。请使用新密码重新登录。</Notice><a className="button" href="/auth/login?switch_account=1">重新登录</a></div>;
   if (session.loading)
     return (
       <div className="auth-page">
@@ -354,6 +360,14 @@ export default function App() {
               session={session.data}
               onClose={() => setProfileOpen(false)}
               onChanged={setProfileView}
+              onPasswordChanged={() => {
+                setPasswordChanged(true);
+                setProfileView(undefined);
+                setProfileOpen(false);
+                setSelected("");
+                window.sessionStorage.removeItem("unihub.account");
+                window.sessionStorage.removeItem("unihub.return-admin");
+              }}
             />
           ) : page==="applications" ? <ProductApplications/> : page==="user-management" ? (
             userManagement.loading ? <Notice>正在核对管理权限…</Notice>
@@ -485,7 +499,7 @@ const productDocs = [
     sections: [
       ["适合什么", "统一接入模型供应商，按产品和账户记录调用、用量、费率与结算状态。"],
       ["常用路径", "由接入产品发起调用 → 选择允许的模型能力 → 记录用量 → 在 UniHub 核对额度和账单。"],
-      ["UniHub 负责什么", "UniHub 管理账户归属、额度和账单；模型路由、供应商凭证、费率和调用日志由 llmrouter 服务负责。"],
+      ["UniHub 负责什么", "UniHub 管理账户归属、额度和账单；模型路由、供应商凭证、原生 Key、登录安全、产品定价和调用日志仍在 llmrouter 原生界面管理；旧额度和历史记录继续保留。"],
     ],
     features: ["模型路由和供应商适配", "按产品与账户隔离凭证", "调用、用量和费率记录", "额度预占、结算与账单回执"],
     steps: ["由接入产品发起模型请求", "按产品权限选择模型能力", "等待调用和用量回执", "在 UniHub 核对额度与账单"],
@@ -545,12 +559,12 @@ function PortalGuide({ authenticated, onOpenConsole, onNavigate }: PortalPagePro
   const items = [
     ["01", "登录 UniHub", "在首页欢迎卡片中点击统一入口完成登录；登录态下同一个入口会直接显示“进入控制台”。"],
     ["02", "选择账户", "在控制台顶部选择个人账户或团队账户。账户决定成员、角色、会员、额度与账单范围。"],
-    ["03", "进入产品", "从产品矩阵选择工作入口，再回到对应产品完成项目、会话和运行时工作。"],
-    ["04", "核对使用", "会员、模型额度、钱包与账单在 UniHub 查看；具体用量由产品和模型服务按接入协议记录。"],
+    ["03", "进入产品", "继续使用成熟产品的原生界面、原产品用户与 Key；项目、会话、模型路由、供应商凭证和原生安全设置在对应产品管理。"],
+    ["04", "核对使用", "在 UniHub 的模型消费中核对来源、产品实例、原付款账户和资产。产品自行计价与托管模型按各自实际模式记账，原产品价格与 Key 仍由原产品管理。"],
     ["05", "从控制台回到产品站", "控制台左侧的产品站导航随时提供首页、使用指南和产品矩阵入口，不需要退出登录。"],
   ];
   return <>
-    <section className="portal-page-title"><span className="portal-kicker">使用指南</span><h1>从账户开始，把每一步走清楚</h1><p>参考天枢的指南结构，把 UniHub 的入口、产品功能、使用步骤和账户边界集中说明。</p><PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} /></section>
+    <section className="portal-page-title"><span className="portal-kicker">使用指南</span><h1>从账户开始，把每一步走清楚</h1><p>了解 UniHub 的账户入口、产品使用步骤和资金边界。</p><PortalAction authenticated={authenticated} onOpenConsole={onOpenConsole} /></section>
     <div className="portal-guide-layout">
       <aside className="portal-guide-sidebar" aria-label="使用指南目录">
         <strong>使用指南</strong>
@@ -563,8 +577,8 @@ function PortalGuide({ authenticated, onOpenConsole, onNavigate }: PortalPagePro
       <div className="portal-guide-content">
         <section className="portal-guide-block" id="quick-start"><span className="portal-kicker">快速上手</span><h2>如何使用 UniHub</h2><p>完成登录、选择账户和进入产品后，具体工作在产品工作台中完成，统一身份和账户能力回到 UniHub 核对。</p><div className="portal-guide-list">{items.map(([number, title, copy]) => <article key={number}><span>{number}</span><div><h3>{title}</h3><p>{copy}</p></div></article>)}</div></section>
         <section className="portal-guide-block" id="product-docs"><span className="portal-kicker">详细文档</span><h2>产品功能与使用方法</h2><p>每个产品解决的问题不同，先按功能选择入口，再按步骤开始使用。</p><div className="portal-doc-grid">{productDocs.map((doc) => <article className="portal-doc-card" key={doc.name}><div className="portal-doc-card-head"><div><span>{doc.type}</span><h2>{doc.name}</h2></div><BookOpen size={20} /></div><p className="portal-doc-summary">{doc.summary}</p><div className="portal-doc-sections">{doc.sections.map(([title, copy]) => <div key={title}><h3>{title}</h3><p>{copy}</p></div>)}</div><h3 className="portal-doc-subhead">核心功能</h3><ul className="portal-doc-list">{doc.features.map((feature) => <li key={feature}>{feature}</li>)}</ul><h3 className="portal-doc-subhead">开始使用</h3><ol className="portal-doc-steps">{doc.steps.map((step) => <li key={step}>{step}</li>)}</ol><a href="/products" onClick={(event) => { event.preventDefault(); onNavigate("products"); }}>查看接入状态 <ArrowRight size={14} /></a></article>)}</div></section>
-        <section className="portal-guide-block" id="account-model"><span className="portal-kicker">账户与权限</span><h2>账户、成员和权限如何协作</h2><div className="portal-guide-columns"><article><h3>个人账户</h3><p>适合个人使用。登录后自动准备，会员、额度、钱包和账单归属于当前个人账户。</p></article><article><h3>团队账户</h3><p>适合协作。所有者、管理员、财务管理员和成员按角色访问团队资源，成员关系由 UniHub 维护。</p></article><article><h3>产品权限</h3><p>进入产品后，产品自己的空间、项目、知识库和运行时权限仍由产品单独判断，不会因为拥有 UniHub 账户而自动获得。</p></article></div></section>
-        <section className="portal-guide-block" id="billing-flow"><span className="portal-kicker">额度与账单</span><h2>一次使用如何被记录</h2><div className="portal-flow-detail"><div><span>01</span><h3>产品发起调用</h3><p>接入产品使用当前付费账户发起会员或模型服务请求。</p></div><div><span>02</span><h3>服务记录用量</h3><p>产品和模型服务写入调用、额度、钱包或订单状态。</p></div><div><span>03</span><h3>UniHub 统一核对</h3><p>在控制台查看会员、模型额度、钱包、账单和操作记录。</p></div></div></section>
+        <section className="portal-guide-block" id="account-model"><span className="portal-kicker">账户与权限</span><h2>账户、成员和权限如何协作</h2><div className="portal-guide-columns"><article><h3>个人账户</h3><p>适合个人使用。登录后自动准备，会员、额度、钱包和账单归属于当前个人账户。</p></article><article><h3>团队账户</h3><p>适合协作。所有者、管理员、财务管理员和成员按角色访问团队资源，成员关系由 UniHub 维护。加入团队不会自动授权个人 Key 花费团队资金，实际付款账户须单独核验。</p></article><article><h3>产品权限</h3><p>进入产品后，产品自己的空间、项目、知识库和运行时权限仍由产品单独判断，不会因为拥有 UniHub 账户而自动获得。</p></article></div></section>
+        <section className="portal-guide-block" id="billing-flow"><span className="portal-kicker">额度与账单</span><h2>一次使用如何被记录</h2><div className="portal-flow-detail"><div><span>01</span><h3>产品发起调用</h3><p>接入产品使用当前付费账户发起会员或模型服务请求。</p></div><div><span>02</span><h3>服务记录用量</h3><p>产品和模型服务写入调用、额度、钱包或订单状态。</p></div><div><span>03</span><h3>UniHub 统一核对</h3><p>在控制台的模型消费与账单中查看记录；托管模型和产品自行计价分别显示来源，现金、模型额度与旧额度按各自资产核对，不跨资产合计。</p></div></div></section>
         <section className="portal-guide-block" id="boundaries"><span className="portal-kicker">职责边界</span><h2>UniHub 管账户，产品提供工作</h2><div className="portal-boundary-list"><div><b>在 UniHub 完成</b><span>登录 · 账户 · 成员 · 会员 · 额度 · 钱包 · 账单 · 产品站导航</span></div><div><b>在产品工作区完成</b><span>工作项目 · 知识库 · 页面 · 会话 · 模型设置 · 运行任务 · 产品通知</span></div></div></section>
       </div>
     </div>
@@ -718,6 +732,7 @@ function AccountConsole({
     addons: "按需补充模型额度，独立有效期以商品规则为准。",
     wallets: "统一钱包与产品钱包分开记账，资金始终归属当前账户。",
     bills: "核对会员订单、退款与钱包记账状态。",
+    consumption: "按来源、产品实例与资产核对调用，结果以实际调用记录为准。",
     members: "管理当前团队的访问与角色。",
     settings: "授权须明确开启，自动续费与自动划拨分别管理。",
   };
@@ -767,7 +782,9 @@ function AccountConsole({
           <Notice>
             {prepaidProducts.map((p) => p.name).join("、")} 已启用现金按量服务。
             使用入口由各产品自己的界面提供，归一（UniHub）是可选的账户管理入口。
-            现金模型用量从当前付费账户的 llmrouter 产品钱包扣款，额度不足不会自动转为现金扣款。
+            资金来源以产品实际选择的计费模式和调用记录为准；原生产品选择统一现金钱包时，仅使用已核验的个人付款账户统一钱包。
+            旧额度、奖励额度和既有产品资产保持原有归属，额度不足不会自动转为现金扣款。
+            加入团队不代表个人 Key 获得花费团队资金的授权。
           </Notice>
         )}
       {message && (
@@ -968,6 +985,8 @@ function AccountConsole({
         ) : (
           <Notice>只有所有者和财务管理员可查看钱包与充值。</Notice>
         ))}
+      {page === "consumption" && <Consumption account={account} products={products.data || []} version={version} />}
+      {page === "bills" && <Panel title="模型消费"><p>核对托管模型和原生产品调用的来源、实例、资产与原付款账户。普通成员仅查看自己的调用。</p><button onClick={() => setPage("consumption")}>查看模型消费 <ArrowRight size={15} /></button></Panel>}
       {page === "bills" &&
         (finance ? (
           <>
@@ -1301,6 +1320,7 @@ function ProfileSettings({
   session,
   onClose,
   onChanged,
+  onPasswordChanged,
 }: {
   profile?: Profile;
   loading: boolean;
@@ -1308,6 +1328,7 @@ function ProfileSettings({
   session: Session;
   onClose: () => void;
   onChanged: (profile: Profile) => void;
+  onPasswordChanged: () => void;
 }) {
   const [current, setCurrent] = useState(profile);
   const [displayName, setDisplayName] = useState(profile?.display_name || "");
@@ -1316,7 +1337,6 @@ function ProfileSettings({
   const [profileError, setProfileError] = useState("");
   const [passwords, setPasswords] = useState({ current: "", next: "", confirm: "" });
   const [savingPassword, setSavingPassword] = useState(false);
-  const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [mfa, setMfa] = useState<MfaStatus>();
   const [mfaEnroll, setMfaEnroll] = useState<MfaEnroll>();
@@ -1395,7 +1415,6 @@ function ProfileSettings({
   async function changePassword(event: FormEvent) {
     event.preventDefault();
     setPasswordError("");
-    setPasswordMessage("");
     if (passwords.next !== passwords.confirm) {
       setPasswordError("两次输入的新密码不一致。");
       return;
@@ -1408,7 +1427,7 @@ function ProfileSettings({
         body: { current_password: passwords.current, new_password: passwords.next },
       });
       setPasswords({ current: "", next: "", confirm: "" });
-      setPasswordMessage("密码已更新，请重新登录其他设备。");
+      onPasswordChanged();
     } catch (e) {
       setPasswordError((e as Error).message);
     } finally {
@@ -1473,11 +1492,11 @@ function ProfileSettings({
             <div className="security-summary"><ShieldCheck size={20} /><div><strong>UniHub 统一身份</strong><p>{productCredentials ? "密码、二次验证及通行密钥由原产品管理，继续使用原有登录方式。" : "认证由 Casdoor 管理，资料变更会同步到所有产品。"}</p></div></div>
             {productCredentials ? <div className="stack-form">{current?.credential_management?.map((manager) => manager.url ? <a key={`${manager.product_id}/${manager.instance_id}`} href={manager.url}>前往 {manager.product_id} 管理密码与二次验证</a> : <p key={`${manager.product_id}/${manager.instance_id}`}>请在 {manager.product_id} 管理登录安全。</p>)}</div> : <form className="stack-form" onSubmit={changePassword}>
               <h3>修改密码</h3>
+              <p>新密码至少 8 个字符，UTF-8 编码最多 72 字节，不含控制字符；还须符合当前组织密码策略。更新后需要重新登录。</p>
               <label>当前密码<input type="password" autoComplete="current-password" value={passwords.current} onChange={(event) => setPasswords({ ...passwords, current: event.target.value })} /></label>
               <label>新密码<input type="password" autoComplete="new-password" value={passwords.next} onChange={(event) => setPasswords({ ...passwords, next: event.target.value })} /></label>
               <label>确认新密码<input type="password" autoComplete="new-password" value={passwords.confirm} onChange={(event) => setPasswords({ ...passwords, confirm: event.target.value })} /></label>
               {passwordError && <Notice kind="error">{passwordError}</Notice>}
-              {passwordMessage && <Notice>{passwordMessage}</Notice>}
               <button type="submit" disabled={savingPassword || !passwords.current || !passwords.next || !passwords.confirm}>更新密码</button>
             </form>}
             {!productCredentials && <div className="stack-form">

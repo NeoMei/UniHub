@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"unihub/internal/accounts"
+	"unihub/internal/billing"
 	"unihub/internal/database"
 )
 
@@ -92,13 +93,9 @@ func rankFailedModels(rows []FailedModel) []FailedModel {
 	return out
 }
 
-// Mirrors billing/query.go callStatusJoin: an unresolved billing command forces
-// the effective call status to UNKNOWN so in-flight calls are never miscounted.
-const operationCallStatusJoin = " LEFT JOIN LATERAL (SELECT 'UNKNOWN'::text AS status FROM billing_commands bc WHERE bc.account_id=c.account_id AND bc.status='UNKNOWN' AND bc.kind IN ('reserve','topup','settle','release') AND bc.effect#>>'{call,call_id}'=c.id LIMIT 1) unc ON true"
-
-// Failed platform calls are terminal REJECTED/CANCELED outcomes, matching the
-// rejected bucket of the billing call report. UNKNOWN outcomes stay excluded.
-const operationFailedStatuses = "COALESCE(unc.status,c.snapshot->>'status','UNKNOWN') IN ('REJECTED','CANCELED')"
+// Product-native and managed calls share the same effective uncertainty rules.
+const operationFailedStatuses = "c.report_status IN ('REJECTED','CANCELED')"
+const operationCallTable = "(" + billing.ReportCallsSQL + ") c"
 
 func scanDayCounts(ctx context.Context, tx pgx.Tx, sql string, from, to time.Time) (map[string][2]int64, error) {
 	counts := map[string][2]int64{}
@@ -157,13 +154,13 @@ func (s *Store) OperationTimeseries(ctx context.Context, actor string) (Operatio
 		out.Days[i].NewUsers = users[out.Days[i].Date][0]
 	}
 	if finance {
-		calls, e := scanDayCounts(ctx, tx, "SELECT (c.created_at AT TIME ZONE 'UTC')::date,count(*),count(*) FILTER (WHERE "+operationFailedStatuses+") FROM billing_calls c"+operationCallStatusJoin+" WHERE c.created_at>=$1 AND c.created_at<$2 GROUP BY 1", from, to)
+		calls, e := scanDayCounts(ctx, tx, "SELECT (c.created_at AT TIME ZONE 'UTC')::date,count(*),count(*) FILTER (WHERE "+operationFailedStatuses+") FROM "+operationCallTable+" WHERE c.created_at>=$1 AND c.created_at<$2 GROUP BY 1", from, to)
 		if e != nil {
 			return out, e
 		}
 		modelFrom := to.AddDate(0, 0, -modelFailureDays)
 		modelRows := []FailedModel{}
-		rows, e := tx.Query(ctx, "SELECT c.snapshot#>>'{rate,model}',count(*),count(*) FILTER (WHERE "+operationFailedStatuses+") FROM billing_calls c"+operationCallStatusJoin+" WHERE c.created_at>=$1 AND c.created_at<$2 AND COALESCE(c.snapshot#>>'{rate,model}','')<>'' GROUP BY 1", modelFrom, to)
+		rows, e := tx.Query(ctx, "SELECT c.snapshot#>>'{rate,model}',count(*),count(*) FILTER (WHERE "+operationFailedStatuses+") FROM "+operationCallTable+" WHERE c.created_at>=$1 AND c.created_at<$2 AND COALESCE(c.snapshot#>>'{rate,model}','')<>'' GROUP BY 1", modelFrom, to)
 		if e != nil {
 			return out, e
 		}

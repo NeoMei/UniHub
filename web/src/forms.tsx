@@ -63,10 +63,10 @@ export function Catalog({
   const canBuy = financeRole(account.role);
   const commerceReady =
     session.sandbox ||
-    capabilities.loading ||
-    capabilities.data?.real_payments_configured !== false;
+    (!capabilities.loading && !capabilities.error && capabilities.data?.real_payments_configured === true);
   const name = (id: string) => products.find((p) => p.id === id)?.name || id;
   async function choose(offer: Offer) {
+    if (!canBuy || !commerceReady) return;
     setError("");
     const current = subscriptions.find(
       (s) =>
@@ -109,7 +109,7 @@ export function Catalog({
     });
   }
   function accept() {
-    if (!quote) return;
+    if (!quote || !canBuy || !commerceReady) return;
     const { value, subscription } = quote;
     setQuote(undefined);
     act({
@@ -296,7 +296,7 @@ export function Catalog({
             <button className="secondary" onClick={() => setQuote(undefined)}>
               取消
             </button>
-            <button onClick={accept}>核对并继续</button>
+            <button onClick={accept} disabled={!commerceReady || !canBuy}>核对并继续</button>
           </div>
         </Modal>
       )}

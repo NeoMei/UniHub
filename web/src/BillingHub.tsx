@@ -1,7 +1,7 @@
 import { ArrowRight, Database, ReceiptText, Wallet as WalletIcon } from "lucide-react";
 import type { Account, Batch, Capabilities, Offer, Order, Product, Session, Subscription, Wallet } from "./types";
 import type { Resource } from "./useResource";
-import { activeSubscription, fixed, spendable } from "./money";
+import { activeSubscription, financeRole, fixed, spendable } from "./money";
 import { Empty, Notice, Panel, Status } from "./ui";
 
 export type BillingHubProps = {
@@ -14,7 +14,7 @@ export type BillingHubProps = {
   wallets: Resource<Wallet[]>;
   orders: Resource<Order[]>;
   capabilities: Resource<Capabilities>;
-  onNavigate?: (page: "memberships" | "addons" | "wallets" | "bills") => void;
+  onNavigate?: (page: "memberships" | "addons" | "wallets" | "bills" | "consumption") => void;
 };
 
 function productName(products: Product[], id: string) {
@@ -57,12 +57,13 @@ export function BillingHub({
   const current = (subscriptions.data || []).filter((subscription) => activeSubscription(subscription));
   const available = credits.data ? spendable(credits.data) : undefined;
   const walletAmount = wallets.data?.find((wallet) => !wallet.product_id)?.amount;
-  const paymentReady = session.sandbox || capabilities.loading || capabilities.data?.real_payments_configured !== false;
+  const paymentReady = session.sandbox || (!capabilities.loading && !capabilities.error && capabilities.data?.real_payments_configured === true);
+  const finance = financeRole(account.role);
   const published = (offers.data || []).filter((offer) => offer.status === "published" && (!offer.sandbox || session.sandbox));
   const monthly = published.filter((offer) => offer.kind === "membership" && offer.period !== "year");
   const yearly = published.filter((offer) => offer.kind === "membership" && offer.period === "year");
   const currentOfferIds = new Set(current.map((subscription) => subscription.offer.id));
-  const navigate = (page: "memberships" | "addons" | "wallets" | "bills") => onNavigate?.(page);
+  const navigate = (page: "memberships" | "addons" | "wallets" | "bills" | "consumption") => onNavigate?.(page);
   return (
     <div className="billing-hub">
       <div className="page-heading">
@@ -87,10 +88,10 @@ export function BillingHub({
         <Panel title="用量摘要">
           <div className="billing-metrics">
             <div><Database size={18} /><span>可用模型额度</span><strong>{credits.loading ? "—" : fixed(available, 6)}</strong></div>
-            <div><WalletIcon size={18} /><span>统一钱包余额</span><strong>{wallets.loading ? "—" : `¥ ${fixed(walletAmount)}`}</strong></div>
-            <div><ReceiptText size={18} /><span>待处理订单</span><strong>{orders.data?.filter((order) => !["FULFILLED", "REJECTED", "CANCELED", "REFUNDED"].includes(order.fulfillment_status)).length ?? "—"}</strong></div>
+            <div><WalletIcon size={18} /><span>{finance ? "统一钱包余额" : "钱包仅财务角色可查看"}</span><strong>{!finance || wallets.loading ? "—" : `¥ ${fixed(walletAmount)}`}</strong></div>
+            <div><ReceiptText size={18} /><span>待处理订单</span><strong>{finance ? orders.data?.filter((order) => !["FULFILLED", "REJECTED", "CANCELED", "REFUNDED"].includes(order.fulfillment_status)).length ?? "—" : "—"}</strong></div>
           </div>
-          <div className="billing-summary-actions"><button onClick={() => navigate("wallets")}>管理钱包</button><button className="secondary" onClick={() => navigate("bills")}>查看账单</button></div>
+          <div className="billing-summary-actions"><button onClick={() => navigate("consumption")}>查看模型消费</button><button className="secondary" onClick={() => navigate("bills")}>查看账单</button></div>
         </Panel>
       </section>
       <Panel title="选择方案" action={<button className="text-button" onClick={() => navigate("memberships")}>浏览更多方案 <ArrowRight size={14} /></button>}>

@@ -19,7 +19,7 @@ const navGroups:{title:string;items:NavEntry[]}[]=[
   {id:'admins',label:'平台管理员',permission:'admins:manage',icon:ShieldCheck},
   {id:'accounts',label:'账户与团队',permission:'accounts:read',icon:Building2},
   {id:'products',label:'产品目录',permission:'products:read',icon:Boxes},
-  {id:'api-keys',label:'API Key',permission:'keys:read',icon:KeyRound},
+  {id:'api-keys',label:'托管模型 Key',permission:'keys:read',icon:KeyRound},
   {id:'onboarding',label:'三方接入',permission:'products:write',icon:KeyRound},
  ]},
  {title:'运营',items:[
@@ -37,7 +37,7 @@ const navGroups:{title:string;items:NavEntry[]}[]=[
   {id:'refunds',label:'退款复核',permission:'finance:read',icon:RotateCcw},
   {id:'credit-batches',label:'额度批次',permission:'finance:read',icon:Package},
   {id:'offers',label:'商品与套餐',permission:'finance:read',icon:Package},
-  {id:'rates',label:'模型费率',permission:'finance:read',icon:SlidersHorizontal},
+  {id:'rates',label:'托管模型费率',permission:'finance:read',icon:SlidersHorizontal},
   {id:'billing-profiles',label:'计费配置',permission:'finance:read',icon:SlidersHorizontal},
  ]},
 ];
