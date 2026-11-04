@@ -181,7 +181,15 @@ Only a registered client with `product_id: "llmrouter"` may configure the exact
 `usage:all-products` scope in the registry referenced by `PRODUCT_CLIENTS_FILE` (or the offline onboarding
 `product_client.py prepare --product-id llmrouter --scope usage:all-products`).
 Keep any other required scopes explicit; this capability does not imply `usage:read`.
-Other product IDs are rejected by both registry and offline configuration validation.
+Other product IDs are rejected for `usage:all-products` by both registry and offline configuration validation.
+
+A registered product such as SuperWagie may instead receive the explicit
+`usage:llmrouter` scope. It grants **only** LLMRouter native runtime reports for
+that user's selected paying account and the client's registered instance:
+`origin_product_id=llmrouter`, `source=product_runtime`. Managed model records and
+other native products are excluded. This scope does not imply `usage:read`,
+`usage:all-products`, wallet access, API-key access or any write capability.
+Keep the existing product identity, keys, wallets and attribution unchanged.
 
 The following GET routes additionally require the authenticated user's **current**
 account role to be `owner` or `billing_admin`:
@@ -194,14 +202,32 @@ Console tokens, legacy product tokens, members and account admins cannot use the
 routes. Scope alone never grants account membership or finance access. The list and
 summary accept the existing time/model/asset/origin filters; list pagination uses
 account-, actor-, role- and filter-bound signed cursors. Detail accepts an optional
-`origin_product_id`. Source origin is optional here and restricts the report when
-provided. Existing `/calls`, `/calls/{call}` and `/usage/summary` always retain the
+`origin_product_id` and `instance_id`. For the router's all-product permission,
+source origin is optional and restricts the report when provided. For
+`usage:llmrouter`, omitted origin is fixed to `llmrouter`; a different origin or
+instance is 403, and an out-of-scope detail is 404. The response `scope.source`
+and `filter.source` are `product_runtime`; `source` is not a request parameter.
+The enforced source is bound into pagination cursors. A cursor from a wider
+report cannot be reused for the narrow report. Finance membership is rechecked
+in the same read transaction as the report. Existing `/calls`, `/calls/{call}` and `/usage/summary` always retain the
 verified product's own-origin restriction, including for llmrouter finance users.
-Amounts remain integer strings, with CREDIT/6 and CNY/6 grouped independently;
+Amounts remain integer strings, with CREDIT/6, CNY/6 and LR_QUOTA/0 grouped independently;
 provider costs, credentials and prompts are never included. SDK methods are
 `modelPoolCalls(account, filter)`, `modelPoolCall(account, id, origin?)`, and
 `modelPoolUsage(account, filter)`. A missing scope must be presented as an incomplete
-own-origin view by clients using the ordinary reporting fallback.
+own-origin view by clients using the ordinary reporting fallback. Do not interpret
+403 or an own-origin empty page as zero LLMRouter spending.
+
+For `usage:llmrouter`, clients may request `?asset=CNY%2F6` for cash, and must
+use the returned opaque `items[].call_id` for detail (not `source_call_id`).
+The existing list contract includes `source`, `source_call_id`, `model`, `status`,
+`asset`, `held`, `charged`, `refunded`, `created_at` and `usage_status`; summary
+includes `calls_total`, status counts, `charges_by_asset` and `refunds_by_asset`.
+CNY/6 amounts are millionths of CNY. LR_QUOTA/0 remains native quota and must not
+be displayed as currency. Gross charged and confirmed refunds stay separate.
+Native arbitrary usage JSON is not exposed as generic token counts: unavailable
+usage remains `usage_status=unavailable` / `usage_complete=false`. Unknown calls,
+missing timestamps and held reservations are not final settled spending.
 
 ## 控制台模型消费与来源
 

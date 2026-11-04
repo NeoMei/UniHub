@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.36 - 2026-11-05
+
+- 新增显式客户端权限 `usage:llmrouter`，供 SuperWagie 通过现有 model-pool 只读接口查询同一付款账户、同一登记实例的 LLMRouter 原生消费。
+- 窄权限固定 `origin_product_id=llmrouter`、`source=product_runtime`，列表、详情和汇总均重新检查当前 owner / billing_admin 角色；普通产品查询继续按原产品隔离。
+- 分页游标绑定消费来源，响应回显范围；原生额度、现金实扣和确认返还保留整数与资产区分，不迁移钱包或 Key。
+- 通过隔离真实 PostgreSQL/Formance 的三包 race 回归，以及财务重放、原生额度、统一现金和受控供应商 gateway 验收；跨仓测试显式绑定各实例的财务客户端。
+- 同步 OpenAPI、TypeScript SDK 和客户端登记工具契约；生产回读、真实支付及模型调用验收按独立证据记录。
+
 ## 0.4.35 - 2026-11-04
 
 - 用户控制台新增模型消费入口，按来源、产品实例、付款账户和原资产核对调用、预占、实扣、返还与待核实状态。

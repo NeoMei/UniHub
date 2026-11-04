@@ -23,7 +23,7 @@ func productRouteAllowed(pattern string) bool {
 
 func productScopeAllowed(pattern string, c products.Client) bool {
 	if isModelPoolRoute(pattern) {
-		return c.ProductID == "llmrouter" && c.HasScope("usage:all-products")
+		return (c.ProductID == "llmrouter" && c.HasScope("usage:all-products")) || c.HasScope("usage:llmrouter")
 	}
 	scope := map[string]string{
 		"GET /v1/me/profile": "accounts:read", "PATCH /v1/me/profile": "profile:write", "POST /v1/me/password": "profile:write", "GET /v1/me/avatar": "accounts:read", "PUT /v1/me/avatar": "profile:write",

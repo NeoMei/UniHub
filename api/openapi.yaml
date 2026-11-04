@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.35"
+  "version": "0.4.36"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -2291,7 +2291,7 @@
     "get":
       "operationId": "modelPoolCalls"
       "summary": "calls"
-      "description": "Registered llmrouter client with usage:all-products and current account owner or billing_admin only. Optional origin restricts the unified pool report."
+      "description": "Current account owner or billing_admin only. A registered llmrouter client with usage:all-products may read all product origins within its registered instance. Alternatively, explicit usage:llmrouter permits only origin_product_id=llmrouter and source=product_runtime within the same account and registered instance; managed model calls are excluded. A conflicting origin or instance is 403. Source is server-enforced and not a query parameter."
       "security":
         -
           "BearerAuth": []
@@ -2318,8 +2318,9 @@
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
-      "x-product-scopes":
-        - "usage:all-products"
+      "x-product-scopes-any-of":
+        - ["usage:all-products"]
+        - ["usage:llmrouter"]
       "parameters":
         - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
@@ -2387,7 +2388,7 @@
     "get":
       "operationId": "modelPoolCall"
       "summary": "getCall"
-      "description": "Registered llmrouter client with usage:all-products and current account owner or billing_admin only. Optional origin restricts the unified pool report."
+      "description": "Current account owner or billing_admin only. A registered llmrouter client with usage:all-products may read all product origins within its registered instance. Alternatively, explicit usage:llmrouter permits only origin_product_id=llmrouter and source=product_runtime within the same account and registered instance; managed model calls are excluded. A conflicting origin or instance is 403. Source is server-enforced and not a query parameter."
       "security":
         -
           "BearerAuth": []
@@ -2414,8 +2415,9 @@
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
-      "x-product-scopes":
-        - "usage:all-products"
+      "x-product-scopes-any-of":
+        - ["usage:all-products"]
+        - ["usage:llmrouter"]
       "parameters":
         - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
@@ -2443,7 +2445,7 @@
     "get":
       "operationId": "modelPoolUsage"
       "summary": "usageSummary"
-      "description": "Registered llmrouter client with usage:all-products and current account owner or billing_admin only. Optional origin restricts the unified pool report. Only settled charges are summed separately by asset. Mixed assets omit charged and return charges_by_asset."
+      "description": "Current account owner or billing_admin only. A registered llmrouter client with usage:all-products may read all product origins within its registered instance. Alternatively, explicit usage:llmrouter permits only origin_product_id=llmrouter and source=product_runtime within the same account and registered instance; managed model calls are excluded. A conflicting origin or instance is 403. Source is server-enforced and not a query parameter. Only settled charges are summed separately by asset. Mixed assets omit charged and return charges_by_asset."
       "security":
         -
           "BearerAuth": []
@@ -2470,8 +2472,9 @@
           "$ref": "#/components/responses/Error"
         "503":
           "$ref": "#/components/responses/Error"
-      "x-product-scopes":
-        - "usage:all-products"
+      "x-product-scopes-any-of":
+        - ["usage:all-products"]
+        - ["usage:llmrouter"]
       "parameters":
         - {"name": "instance_id", "in": "query", "required": false, "schema": {"type": "string"}, "description": "Product clients are restricted to their registered instance."}
         -
@@ -3485,6 +3488,7 @@
     "QueryScope":
       "type": "object"
       "properties":
+        "source": {"type": "string", "enum": ["managed_model", "product_runtime"], "readOnly": true, "description": "Server-enforced report channel. usage:llmrouter returns product_runtime only; this is not a request filter."}
         "instance_id": {"type": "string", "description": "Exact instance. Product clients are restricted to their registered instance."}
         "account_id":
           "type": "string"
@@ -3503,6 +3507,7 @@
     "CallFilter":
       "type": "object"
       "properties":
+        "source": {"type": "string", "enum": ["managed_model", "product_runtime"], "readOnly": true, "description": "Server-enforced report channel. usage:llmrouter returns product_runtime only; this is not a request filter."}
         "instance_id": {"type": "string", "description": "Exact instance. Product clients are restricted to their registered instance."}
         "from":
           "type": "string"

@@ -49,7 +49,7 @@ func TestCrossRepositoryProductBrowserAndOriginalBilling(t *testing.T) {
 	clients := map[string]products.Client{"router": {ClientID: "router", ProductID: "llmrouter", InstanceID: "default", BrowserSSO: true, RedirectURIs: []string{"https://router.test/api/unihub/callback"}}, "second": {ClientID: "second", ProductID: "llmrouter", InstanceID: "second", BrowserSSO: true, RedirectURIs: []string{"https://second.test/api/unihub/callback"}}}
 	pa.ConfigureBrowserClients(clients)
 	ops := []string{"identity:register", "identity:authenticate", "identity:browser", "identity:lookup", "identity:lifecycle", "bindings:write", "access:read", "billing:read", "billing:write", "calls:reprice", "credits:award"}
-	services := map[string]RuntimeService{"router": {Token: strings.Repeat("a", 32), ProductID: "llmrouter", InstanceID: "default", AllowedOps: ops}, "second": {Token: strings.Repeat("b", 32), ProductID: "llmrouter", InstanceID: "second", AllowedOps: ops}}
+	services := map[string]RuntimeService{"router": {Token: strings.Repeat("a", 32), ProductID: "llmrouter", InstanceID: "default", FinanceClientID: "router", AllowedOps: ops}, "second": {Token: strings.Repeat("b", 32), ProductID: "llmrouter", InstanceID: "second", FinanceClientID: "second", AllowedOps: ops}}
 	ledgerURL := os.Getenv("UNIHUB_TEST_LEDGER_URL")
 	if ledgerURL == "" {
 		t.Skip("UNIHUB_TEST_LEDGER_URL is not set")

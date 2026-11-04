@@ -141,3 +141,16 @@ func TestBrowserSSOExplicitOptional(t *testing.T) {
 		t.Fatal("legacy SSO enabled")
 	}
 }
+
+func TestLlmrouterUsageScopeIsExplicitAndDoesNotGrantOtherScopes(t *testing.T) {
+	for _, product := range []string{"superwagie", "agentwiki", "llmrouter"} {
+		clients, err := Parse([]byte(`[{"product_id":"` + product + `","client_id":"narrow","scopes":["usage:llmrouter"]}]`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := clients["narrow"]
+		if !c.HasScope("usage:llmrouter") || c.HasScope("usage:all-products") || c.HasScope("usage:read") {
+			t.Fatalf("unexpected scope: %+v", c)
+		}
+	}
+}

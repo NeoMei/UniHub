@@ -19,8 +19,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-SCOPES=set('access:read identity:read profile:write accounts:read accounts:write members:read members:write catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:read model-credentials:write'.split())
-COMMERCIAL_SCOPES=set('catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:read model-credentials:write'.split())
+SCOPES=set('access:read identity:read profile:write accounts:read accounts:write members:read members:write catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:llmrouter usage:read model-credentials:write'.split())
+COMMERCIAL_SCOPES=set('catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:all-products usage:llmrouter usage:read model-credentials:write'.split())
 FIELDS={'product_id','client_id','application','organization','redirect_uris','origins','scopes','billing_products','password_login','registration','browser_sso','refresh_tokens','instance_id','account_settings_url'}
 SLUG=re.compile(r'^[a-z][a-z0-9_-]{0,63}$')
 NAME=re.compile(r'^[A-Za-z][A-Za-z0-9_-]{1,63}$')

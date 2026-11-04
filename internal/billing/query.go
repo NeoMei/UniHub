@@ -24,6 +24,11 @@ import (
 // The HTTP product boundary supplies its verified product and instance; a
 // model-pool scope may clear the product, never the instance.
 type CallFilter struct {
+	// Source and RequireFinance are supplied by the trusted reporting boundary.
+	// Source is included in signed cursors and response scope, not accepted as
+	// an HTTP query parameter. Finance is checked inside the read transaction.
+	Source          string    `json:"source,omitempty"`
+	RequireFinance  bool      `json:"-"`
 	InstanceID      string    `json:"instance_id,omitempty"`
 	Asset           string    `json:"asset,omitempty"`
 	From            time.Time `json:"from,omitempty"`
@@ -36,6 +41,7 @@ type CallPageRequest struct {
 	Cursor string
 }
 type QueryScope struct {
+	Source          string `json:"source,omitempty"`
 	InstanceID      string `json:"instance_id,omitempty"`
 	AccountID       string `json:"account_id"`
 	OriginProductID string `json:"origin_product_id,omitempty"`
@@ -146,7 +152,7 @@ type usageCursor struct {
 }
 
 func normalizeCallFilter(f CallFilter) (CallFilter, error) {
-	if (f.Asset != "" && f.Asset != CreditAsset && f.Asset != CashAsset && f.Asset != RuntimeAsset) || (!f.From.IsZero() && !f.To.IsZero() && !f.From.Before(f.To)) || len(f.InstanceID) > 128 || strings.TrimSpace(f.InstanceID) != f.InstanceID || len(f.Model) > 256 || len(f.OriginProductID) > 64 || strings.TrimSpace(f.Model) != f.Model || strings.TrimSpace(f.OriginProductID) != f.OriginProductID {
+	if (f.Source != "" && f.Source != "managed_model" && f.Source != "product_runtime") || (f.Asset != "" && f.Asset != CreditAsset && f.Asset != CashAsset && f.Asset != RuntimeAsset) || (!f.From.IsZero() && !f.To.IsZero() && !f.From.Before(f.To)) || len(f.InstanceID) > 128 || strings.TrimSpace(f.InstanceID) != f.InstanceID || len(f.Model) > 256 || len(f.OriginProductID) > 64 || strings.TrimSpace(f.Model) != f.Model || strings.TrimSpace(f.OriginProductID) != f.OriginProductID {
 		return f, ErrInvalid
 	}
 	if !f.From.IsZero() {
@@ -162,8 +168,11 @@ func (s *Service) usageScope(ctx context.Context, q accounts.Querier, actor, acc
 	if err != nil {
 		return QueryScope{}, false, err
 	}
-	scope := QueryScope{InstanceID: f.InstanceID, AccountID: account, OriginProductID: f.OriginProductID, Visibility: "account"}
+	scope := QueryScope{Source: f.Source, InstanceID: f.InstanceID, AccountID: account, OriginProductID: f.OriginProductID, Visibility: "account"}
 	finance := role == "owner" || role == "billing_admin"
+	if f.RequireFinance && !finance {
+		return QueryScope{}, false, accounts.ErrForbidden
+	}
 	if !finance {
 		scope.Visibility = "actor"
 		scope.ActorID = actor
@@ -178,12 +187,12 @@ func callQueryArgs(scope QueryScope, f CallFilter) []any {
 	if !f.To.IsZero() {
 		to = &f.To
 	}
-	return []any{scope.AccountID, scope.OriginProductID, scope.ActorID, from, to, f.Model, f.Asset, f.InstanceID}
+	return []any{scope.AccountID, scope.OriginProductID, scope.ActorID, from, to, f.Model, f.Asset, f.InstanceID, f.Source}
 }
 
 const callAssetSQL = `COALESCE(NULLIF(c.snapshot->>'charge_asset',''),'CREDIT/6')`
 
-const callBaseWhere = `c.account_id=$1 AND ($2='' OR c.snapshot->>'origin_product_id'=$2) AND ($3='' OR c.snapshot->>'actor_id'=$3) AND ($6='' OR c.snapshot#>>'{rate,model}'=$6) AND ($7='' OR ` + callAssetSQL + `=$7) AND ($8='' OR COALESCE(NULLIF(c.snapshot->>'instance_id',''),'default')=$8)`
+const callBaseWhere = `c.account_id=$1 AND ($2='' OR c.snapshot->>'origin_product_id'=$2) AND ($3='' OR c.snapshot->>'actor_id'=$3) AND ($6='' OR c.snapshot#>>'{rate,model}'=$6) AND ($7='' OR ` + callAssetSQL + `=$7) AND ($8='' OR COALESCE(NULLIF(c.snapshot->>'instance_id',''),'default')=$8) AND ($9='' OR c.snapshot->>'source'=$9)`
 const callTimeWhere = ` AND ($4::timestamptz IS NULL OR c.created_at >= $4) AND ($5::timestamptz IS NULL OR c.created_at < $5)`
 
 func cursorBinding(actor string, scope QueryScope, f CallFilter) string {
@@ -346,10 +355,10 @@ func (s *Service) QueryCalls(ctx context.Context, actor, account string, f CallF
 			return out, e
 		}
 		if cursor.At == nil {
-			query += ` AND c.created_at IS NULL AND c.id < $9`
+			query += ` AND c.created_at IS NULL AND c.id < $10`
 			args = append(args, cursor.ID)
 		} else {
-			query += ` AND (c.created_at < $9 OR (c.created_at = $9 AND c.id < $10) OR c.created_at IS NULL)`
+			query += ` AND (c.created_at < $10 OR (c.created_at = $10 AND c.id < $11) OR c.created_at IS NULL)`
 			args = append(args, cursor.At, cursor.ID)
 		}
 	}
@@ -393,15 +402,22 @@ func (s *Service) QueryCalls(ctx context.Context, actor, account string, f CallF
 
 func (s *Service) QueryCall(ctx context.Context, actor, account, callID, origin string, instance ...string) (CallView, error) {
 	var out CallView
-	if !keyOK(callID) {
-		return out, ErrInvalid
-	}
 	if len(instance) > 1 {
 		return out, ErrInvalid
 	}
 	filter := CallFilter{OriginProductID: origin}
 	if len(instance) == 1 {
 		filter.InstanceID = instance[0]
+	}
+	return s.QueryCallWithFilter(ctx, actor, account, callID, filter)
+}
+
+// QueryCallWithFilter binds a detail lookup to the same trusted reporting
+// source, instance, product and finance policy as list and summary queries.
+func (s *Service) QueryCallWithFilter(ctx context.Context, actor, account, callID string, filter CallFilter) (CallView, error) {
+	var out CallView
+	if !keyOK(callID) {
+		return out, ErrInvalid
 	}
 	f, err := normalizeCallFilter(filter)
 	if err != nil {
@@ -418,7 +434,7 @@ func (s *Service) QueryCall(ctx context.Context, actor, account, callID, origin 
 	}
 	errArgs := callQueryArgs(scope, f)
 	errArgs = append(errArgs, callID)
-	rows, err := tx.Query(ctx, `SELECT `+callViewColumns+` FROM `+callReportTable+callViewJoin+` WHERE `+callBaseWhere+callTimeWhere+` AND c.snapshot->>'query_call_id'=$9 LIMIT 2`, errArgs...)
+	rows, err := tx.Query(ctx, `SELECT `+callViewColumns+` FROM `+callReportTable+callViewJoin+` WHERE `+callBaseWhere+callTimeWhere+` AND c.snapshot->>'query_call_id'=$10 LIMIT 2`, errArgs...)
 	if err != nil {
 		return out, err
 	}

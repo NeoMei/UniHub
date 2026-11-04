@@ -14,11 +14,11 @@ import (
 )
 
 func (s *api) productQueryRoutes(add func(string, action)) {
-	// Explicit pool reports require a registered router and a current financial role.
+	// Explicit pool reports require a registered reporting scope and a current financial role.
 	for _, route := range []string{"GET /v1/accounts/{account}/model-pool/calls", "GET /v1/accounts/{account}/model-pool/calls/{call}", "GET /v1/accounts/{account}/model-pool/usage/summary"} {
 		add(route, func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 			c, ok := productPolicy(r)
-			if !ok || c.ProductID != "llmrouter" || !c.HasScope("usage:all-products") {
+			if !ok || !productScopeAllowed(route, c) {
 				return accounts.ErrForbidden
 			}
 			role, e := s.accounts.Role(r.Context(), u.ID, r.PathValue("account"))
@@ -28,8 +28,13 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 			if role != "owner" && role != "billing_admin" {
 				return accounts.ErrForbidden
 			}
-			// Clearing attribution is local to these explicit reporting handlers.
-			r = r.WithContext(context.WithValue(r.Context(), productIdentityKey{}, ""))
+			// Only the full router scope may clear attribution. The narrow scope
+			// is bound to LLMRouter runtime records, never managed model calls.
+			origin, source := "llmrouter", "product_runtime"
+			if c.ProductID == "llmrouter" && c.HasScope("usage:all-products") {
+				origin, source = "", ""
+			}
+			r = r.WithContext(context.WithValue(r.Context(), productIdentityKey{}, origin))
 			if r.PathValue("call") != "" {
 				q := r.URL.Query()
 				for k, v := range q {
@@ -41,7 +46,15 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 				if e != nil {
 					return e
 				}
-				v, e := s.options.Billing.QueryCall(r.Context(), u.ID, r.PathValue("account"), r.PathValue("call"), q.Get("origin_product_id"), instance)
+				requestedOrigin := q.Get("origin_product_id")
+				if origin != "" {
+					if requestedOrigin != "" && requestedOrigin != origin {
+						return accounts.ErrForbidden
+					}
+					requestedOrigin = origin
+				}
+				f := billing.CallFilter{OriginProductID: requestedOrigin, InstanceID: instance, Source: source, RequireFinance: true}
+				v, e := s.options.Billing.QueryCallWithFilter(r.Context(), u.ID, r.PathValue("account"), r.PathValue("call"), f)
 				if e != nil {
 					return e
 				}
@@ -52,6 +65,8 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 			if e != nil {
 				return e
 			}
+			f.Source = source
+			f.RequireFinance = true
 			if summary {
 				v, e := s.options.Billing.QueryUsageSummary(r.Context(), u.ID, r.PathValue("account"), f)
 				if e != nil {

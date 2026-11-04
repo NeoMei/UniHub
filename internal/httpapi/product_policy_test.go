@@ -301,6 +301,8 @@ func TestModelPoolReportingPolicy(t *testing.T) {
 		{"llmrouter", []string{"accounts:read", "usage:all-products", "usage:read"}, "product-alice", 200},
 		{"llmrouter", []string{"accounts:read", "usage:read"}, "product-alice", 403},
 		{"superwagie", []string{"accounts:read", "usage:all-products"}, "product-alice", 403},
+		{"superwagie", []string{"accounts:read", "usage:llmrouter"}, "product-alice", 200},
+		{"superwagie", []string{"accounts:read", "usage:read"}, "product-alice", 403},
 	} {
 		c := products.Client{ProductID: tc.product, ClientID: "pool", Scopes: tc.scopes}
 		h := New(verifier{}, a, wallet.New(p, a, noLedger{}), Options{Billing: b, ProductVerifiers: map[string]auth.Verifier{"pool": productVerifier{}}, ProductAccess: map[string]products.Client{"pool": c}})

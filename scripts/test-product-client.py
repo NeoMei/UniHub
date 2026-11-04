@@ -17,7 +17,7 @@ class ProductClientTests(unittest.TestCase):
  def client(self,**kw):
   c={'product_id':'new-product','client_id':'new-audience','application':'app-new-product','organization':'unihub','redirect_uris':['https://app.test/callback'],'origins':['https://app.test'],'scopes':['accounts:read','catalog:read'],'billing_products':['new-product'],'password_login':False,'registration':False};c.update(kw);return c
  def test_prepare_cli_derives_commercial_defaults_from_selected_scopes(self):
-  commercial='catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:read usage:all-products model-credentials:write'.split()
+  commercial='catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:read usage:all-products usage:llmrouter model-credentials:write'.split()
   cases=[('defaults',[],['llmrouter']),('access',['--scope','access:read'],[]),('identity-and-accounts',sum((['--scope',s] for s in ['identity:read','profile:write','accounts:read','accounts:write','members:read','members:write']),[]),[]),('explicit',['--scope','access:read','--billing-product','notes','--billing-product','other'],['notes','other'])]
   cases.extend((scope,['--scope',scope],['llmrouter']) for scope in commercial)
   for name,flags,want in cases:
@@ -54,6 +54,11 @@ class ProductClientTests(unittest.TestCase):
   for change in [{'client_secret':'x'},{'unknown_field':'x'},{'origins':['https://app.test/path']},{'redirect_uris':['https://app.test/%2A']},{'scopes':['admin:all']},{'organization':'built-in'},{'application':'app-built-in'}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
   self.m.validate_client(self.client())
+ def test_llmrouter_usage_scope_is_explicit_and_narrow(self):
+  for product in ['superwagie','agentwiki','llmrouter']:
+   client=self.client(product_id=product,scopes=['usage:llmrouter'])
+   self.m.validate_client(client)
+   self.assertEqual(client['scopes'],['usage:llmrouter'])
  def test_prepare_preserves_existing_client_account_settings_url(self):
   existing={'product_id':'llmrouter','client_id':'llmrouter-browser','application':'app-llmrouter-browser','organization':'unihub','redirect_uris':['https://llmrouter.quukk.com/api/unihub/callback'],'origins':['https://llmrouter.quukk.com'],'scopes':['accounts:read','accounts:write','members:read','members:write','catalog:read','subscriptions:read','credits:read','wallets:read','recharges:read','recharges:write','operations:read','orders:read','orders:write','usage:read','usage:all-products','model-credentials:write','access:read','identity:read','settings:write'],'billing_products':['llmrouter'],'password_login':True,'registration':True,'browser_sso':True,'instance_id':'default','account_settings_url':'https://llmrouter.quukk.com/profile'}
   with tempfile.TemporaryDirectory() as d:

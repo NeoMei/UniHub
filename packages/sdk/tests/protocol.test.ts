@@ -164,7 +164,7 @@ test('OpenAPI publishes all named model pool methods with exact restricted scope
  const spec=await readFile(new URL('../../../api/openapi.yaml',import.meta.url),'utf8');
  for(const [path,method] of [['calls','modelPoolCalls'],['calls/{call}','modelPoolCall'],['usage/summary','modelPoolUsage']]){
   const block=spec.split(`  "/v1/accounts/{account}/model-pool/${path}":`)[1]?.split('\n  "/')[0];
-  assert.ok(block);assert.ok(block.includes(`"operationId": "${method}"`));assert.ok(block.includes('"usage:all-products"'));assert.ok(block.includes('billing_admin'));
+  assert.ok(block);assert.ok(block.includes(`"operationId": "${method}"`));assert.ok(block.includes('"usage:all-products"'));assert.ok(block.includes('billing_admin'));assert.ok(block.includes('"usage:llmrouter"'));assert.ok(block.includes('source=product_runtime'));assert.ok(block.includes('"x-product-scopes-any-of"'));
  }
 });
 
