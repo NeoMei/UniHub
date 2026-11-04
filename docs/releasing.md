@@ -1,6 +1,6 @@
 # UniHub 发布
 
-当前准备版本为 `v0.4.7`，上一已发布版本为 `v0.4.6`，定位为 LLMRouter 统一身份与计费预览；`v0.1.0` 为首版。Web、SDK、OpenAPI 与根目录 `VERSION` 保持相同版本。真实支付未配置、交互式 MFA 尚未续接及产品直接充值统一钱包未开放等边界必须保留在发布说明中。
+当前准备版本为 `v0.4.35`，上一已发布版本为 `v0.4.34`。Web、SDK、OpenAPI 与根目录 `VERSION` 保持相同版本。用户与管理端支持托管模型和原生产品结算的独立来源及资产；中央真实收款仍保持 sandbox 或未配置。产品 MFA、原生支付回执通道、供应商调用和生产验收分别按实际部署与证据说明，不以发版推断全部能力已经开通。
 
 ## 构建文件
 
@@ -23,6 +23,7 @@ python3 scripts/package-release.py \
 
 - `unihub-<version>-linux-amd64.tar.gz`：服务二进制、可选用户中心、部署工具、文档、品牌许可和可选身份静态资源。解压时去掉首层目录，作为新的不可变 release 使用。
 - `unihub-sdk-<version>-source.tar.gz`：`packages/sdk/` 的私有工作区 TypeScript 源码及接入文档。它不是 npm 发布包；由接入产品构建工具编译源码，不承诺在解压目录直接运行依赖原仓库路径的 typecheck。
+- `unihub-userkit-<version>-source.tar.gz`：可复用 Go 用户模块、示例、初始化脚本与接入文档的源码包，不隐含发布嵌套 Go 模块。
 - `unihub-casdoor-audit-<version>-linux-amd64.tar.gz`（可选）：带原始 LICENSE、修改 NOTICE、来源清单、源码锁及补丁的后台 Docker 构建上下文。
 - `unihub-<version>-openapi.yaml`、`release-manifest.json` 和 `SHA256SUMS`：机器契约、源提交/版本/工具链/文件校验以及所有附件的SHA256。
 
