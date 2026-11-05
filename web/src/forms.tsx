@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Box,
@@ -70,6 +70,14 @@ function AccountCatalog({
     value: Quote;
     subscription: Subscription;
   }>();
+  const quoteGeneration = useRef(0);
+  useEffect(() => () => { ++quoteGeneration.current; }, []);
+  function clearQuote() {
+    ++quoteGeneration.current;
+    setQuote(undefined);
+    setError("");
+    setLoading("");
+  }
   const [error, setError] = useState("");
   const [loading, setLoading] = useState("");
   const [productFilter, setProductFilter] = useState<string>();
@@ -91,6 +99,7 @@ function AccountCatalog({
         activeSubscription(s),
     );
     if (current && kind === "membership") {
+      const generation = ++quoteGeneration.current;
       setLoading(offer.id);
       try {
         const value = await request<Quote>(accountPath(account.id, "quotes"), {
@@ -99,11 +108,11 @@ function AccountCatalog({
           csrf: session.csrf_token,
           key: idempotencyKey(),
         });
-        setQuote({ value, subscription: current });
+        if (generation === quoteGeneration.current) setQuote({ value, subscription: current });
       } catch (e) {
-        setError((e as Error).message);
+        if (generation === quoteGeneration.current) setError((e as Error).message);
       } finally {
-        setLoading("");
+        if (generation === quoteGeneration.current) setLoading("");
       }
       return;
     }
@@ -173,8 +182,8 @@ function AccountCatalog({
   }
   return (
     <Panel title={kind === "addon" ? "可用加量包" : "会员方案"}>
-      <label>方案产品<select value={selectedProduct || ""} onChange={event => {setProductFilter(event.target.value); setSelectedOfferId(undefined);}}><option value="">全部产品</option>{selectedProduct && !products.some(product => product.id === selectedProduct) && <option value={selectedProduct}>未核验的产品</option>}{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
-      {selectedOfferId && <button className="text-button" onClick={() => setSelectedOfferId(undefined)}>查看该产品其他方案</button>}
+      <label>方案产品<select value={selectedProduct || ""} onChange={event => {clearQuote(); setProductFilter(event.target.value); setSelectedOfferId(undefined);}}><option value="">全部产品</option>{selectedProduct && !products.some(product => product.id === selectedProduct) && <option value={selectedProduct}>未核验的产品</option>}{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
+      {selectedOfferId && <button className="text-button" onClick={() => {clearQuote(); setSelectedOfferId(undefined);}}>查看该产品其他方案</button>}
       <CreditApplicability products={products} />
       {error && <Notice kind="error">{error}</Notice>}
       {offers.loading ? (

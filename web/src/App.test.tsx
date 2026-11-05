@@ -510,3 +510,30 @@ it("carries a chosen plan to account-bound confirmation and clears it when payer
   for (const button of screen.getAllByRole("button", {name: "购买"})) expect((button as HTMLButtonElement).disabled).toBe(true);
   expect(mutations).toEqual([]);
 });
+
+it("refreshes failed catalog and payment-capability reads before allowing purchases", async () => {
+  window.history.replaceState(null, "", "/?view=billing");
+  const counts: Record<string, number> = {};
+  const mutations: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
+    if (options?.method && options.method !== "GET") mutations.push(path);
+    counts[path] = (counts[path] || 0) + 1;
+    if (["/v1/catalog", "/v1/capabilities"].includes(path) && counts[path] === 1) return new Response(JSON.stringify({error: "service_unavailable"}), {status: 503});
+    const data = path === "/auth/session" ? {authenticated: true, sandbox: false, csrf_token: "csrf", user: {id: "owner", name: "Owner"}}
+      : path === "/v1/accounts" ? [{id: "A", name: "账户 A", kind: "personal", role: "owner"}]
+      : path === "/v1/products" ? [{id: "notes", name: "笔记"}]
+      : path === "/v1/capabilities" ? {real_payments_configured: true}
+      : path === "/v1/catalog" ? [{id: "recovered", name: "恢复的方案", product_id: "notes", account_kind: "both", kind: "membership", period: "month", price: "1000000", monthly_credit: "0", entitlements: {}, status: "published", sandbox: false, rank: 1, validity_months: 1}]
+      : path === "/admin/v1/me" ? {enabled: false, roles: [], permissions: []} : [];
+    return new Response(JSON.stringify(data), {status: 200});
+  }));
+  render(<App />);
+  await screen.findByText("服务暂时不可用，请稍后重试。");
+  fireEvent.click(screen.getByRole("button", {name: "刷新方案与用量"}));
+  await screen.findByText("恢复的方案");
+  expect(counts["/v1/catalog"]).toBe(2);
+  expect(counts["/v1/capabilities"]).toBe(2);
+  fireEvent.click(screen.getByRole("button", {name: "查看方案"}));
+  expect((screen.getByRole("button", {name: "购买"}) as HTMLButtonElement).disabled).toBe(false);
+  expect(mutations).toEqual([]);
+});

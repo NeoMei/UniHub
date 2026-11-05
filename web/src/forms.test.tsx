@@ -309,3 +309,21 @@ it("clears a selected offer when changing products without preparing a purchase"
   expect(screen.queryByText("功能年费")).toBeNull();
   expect(act).not.toHaveBeenCalled();
 });
+
+it.each([true, false])("ignores a late upgrade quote after product switching (success=%s)", async (success) => {
+  let resolveQuote!: (value: Response) => void;
+  const act = vi.fn();
+  const fetch = vi.fn(() => new Promise<Response>(resolve => {resolveQuote = resolve;}));
+  vi.stubGlobal("fetch", fetch);
+  const subscription: Subscription = {id: "sub", account_id: "A", product_id: "product-a", offer: {...membership, id: "basic", rank: 1}, version: 1, status: "active", anchor: "2026-01-01T00:00:00Z", paid_through: "2099-01-01T00:00:00Z"};
+  render(<Catalog {...shared} act={act} products={[...shared.products, {id: "product-b", name: "产品 B"}]} kind="membership" initialProductId="product-a" offers={{data: [membership, {...membership, id: "b", product_id: "product-b", name: "产品 B 方案"}], loading: false}} subscriptions={[subscription]} />);
+  fireEvent.click(screen.getByRole("button", {name: "获取升级报价"}));
+  fireEvent.change(screen.getByRole("combobox", {name: "方案产品"}), {target: {value: "product-b"}});
+  expect((screen.getByRole("button", {name: "购买"}) as HTMLButtonElement).disabled).toBe(false);
+  resolveQuote(new Response(JSON.stringify(success ? {id: "quote", offer: membership, amount: "1000000", grant_amount: "0", period_start: "2026-01-01T00:00:00Z", expires_at: "2099-01-01T00:00:00Z"} : {error: "quote_failed"}), {status: success ? 200 : 500}));
+  await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByText(/请求未完成/)).toBeNull();
+  expect(act).not.toHaveBeenCalled();
+});

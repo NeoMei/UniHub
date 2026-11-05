@@ -639,8 +639,8 @@ function AccountConsole({
   const [message, setMessage] = useState("");
   const finance = financeRole(account.role);
   const products = useResource<Product[]>("/v1/products", version);
-  const capabilities = useResource<Capabilities>("/v1/capabilities");
-  const offers = useResource<Offer[]>("/v1/catalog");
+  const capabilities = useResource<Capabilities>("/v1/capabilities", version);
+  const offers = useResource<Offer[]>("/v1/catalog", version);
   const subscriptions = useResource<Subscription[]>(
     accountPath(account.id, "subscriptions"),
     version,
