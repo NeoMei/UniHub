@@ -109,6 +109,8 @@ const purchase = await hub.purchase(accountId, offerId, savedPurchaseKey);
 
 产品可向自己的或显式获准的产品钱包建充值单。直接用产品 token 为统一钱包（product_id 空）建单、读取、模拟结算暂时拒绝，因为旧充值记录缺少可信来源 client 归属；控制台统一充值保留。wallets:read 的财务用户可看到同账户统一钱包余额和获准产品余额。划拨仅从该统一钱包到获准产品。
 
+产品可跳转中央控制台的 `/?view=wallets&account=<付款账户ID>&wallet=unified`，明确选择统一钱包；此链接不授予额外权限，也不创建充值单。账户和目标提示在同一浏览器标签的登录往返中保留，登录后仍按当前账户成员关系及财务角色核验。原产品钱包链接继续使用 `/?view=wallets&account=<付款账户ID>&product=llmrouter`，加量包使用 `view=addons&product=llmrouter`。`wallet=unified` 不与 `product` 混用；未知或重复 wallet、重复 product、同时指定两类目标时，充值目标保持未确认，必须由用户手动选择。统一钱包与产品钱包仍独立记账，打开链接或选择目标不会转账或自动充值，沙箱入账仍需后续明确确认。
+
 调用者显式持有稳定幂等键。SDK没有财务重试逻辑；网络失败、409 operation_pending、UNKNOWN 都查原对象和原 key，不换 key 重付。返回 202 只表示异步命令/未知结果，不能显示为支付成功；账务操作仅 APPLIED 表示账本确认。退款返回 refund_requires_review 可能已冻结来源额度，需要读取原订单。错误为 `UniHubError{status,code,body,headers}`；SDK不会吞掉错误或将它变成成功。
 
 `sandboxSettleRecharge` 仅供显式测试，不会在创建充值后自动调用；它运行真实账务命令恢复路径，但不是支付渠道到账证明。生产真实支付尚未集成。

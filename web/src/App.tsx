@@ -59,6 +59,7 @@ import {
   Table,
 } from "./ui";
 import { Catalog, CreditApplicability, Members, SettingsPage, WalletBalances, Wallets } from "./forms";
+import type { WalletDestination } from "./forms";
 import { BillingHub } from "./BillingHub";
 import { Consumption } from "./Consumption";
 import {ProductApplications,ProductUserManagement} from "./ProductUsers";
@@ -131,11 +132,18 @@ function initialPage(): Page {
   if (view !== null) {
     window.sessionStorage.removeItem("unihub.return-view");
     window.sessionStorage.removeItem("unihub.return-product");
+    window.sessionStorage.removeItem("unihub.return-wallet");
     if (taskViews.includes(view as Page)) {
       window.sessionStorage.setItem("unihub.return-view", view);
       const product = params.get("product");
       // An unmatched hint must stay unresolved, never become the default wallet.
       if (product) window.sessionStorage.setItem("unihub.return-product", product);
+      if (view === "wallets" && (params.has("wallet") || params.getAll("product").length > 1)) {
+        // An explicit unified destination is distinct from an absent product hint.
+        // Conflicting or duplicate destinations require a fresh user selection.
+        const unified = params.getAll("wallet").length === 1 && params.get("wallet") === "unified" && !params.has("product");
+        window.sessionStorage.setItem("unihub.return-wallet", unified ? "unified" : "invalid");
+      }
     }
   }
   const saved = window.sessionStorage.getItem("unihub.return-view") as Page;
@@ -165,6 +173,10 @@ export default function App() {
   const [page, setPage] = useState<Page>(initialPage);
   const [taskPage] = useState(page);
   const [taskProduct] = useState(() => window.sessionStorage.getItem("unihub.return-product") || undefined);
+  const [taskWallet] = useState<WalletDestination | undefined>(() => {
+    const saved = window.sessionStorage.getItem("unihub.return-wallet");
+    return saved === null ? undefined : saved === "unified" ? "unified" : "invalid";
+  });
   const [adminPath, setAdminPath] = useState(initialAdminPath);
   const platform = useResource<AdminPrincipal>(authenticated ? "/admin/v1/me" : undefined, version);
   useEffect(() => {
@@ -182,6 +194,7 @@ export default function App() {
     if (authenticated) {
       window.sessionStorage.removeItem("unihub.return-view");
       window.sessionStorage.removeItem("unihub.return-product");
+      window.sessionStorage.removeItem("unihub.return-wallet");
     }
   }, [authenticated]);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -394,6 +407,7 @@ export default function App() {
               session={session.data}
               page={page}
               initialProductId={page === taskPage ? taskProduct : undefined}
+              initialWalletDestination={page === taskPage ? taskWallet : undefined}
               setPage={setPage}
               setBusy={setBusy}
               refreshAccounts={(accountId) => {
@@ -621,11 +635,13 @@ function AccountConsole({
   setBusy,
   refreshAccounts,
   initialProductId,
+  initialWalletDestination,
 }: {
   account: Account;
   session: Session;
   page: Page;
   initialProductId?: string;
+  initialWalletDestination?: WalletDestination;
   setPage: (p: Page) => void;
   setBusy: (v: boolean) => void;
   refreshAccounts: (accountId?: string) => void;
@@ -1002,7 +1018,7 @@ function AccountConsole({
       )}
       {page === "wallets" &&
         (finance ? (
-          <Wallets {...shared} productCatalog={products} initialProductId={initialProductId || "llmrouter"} wallets={wallets} operations={operations} capabilities={capabilities} />
+          <Wallets {...shared} productCatalog={products} initialProductId={initialProductId || "llmrouter"} initialWalletDestination={initialWalletDestination} wallets={wallets} operations={operations} capabilities={capabilities} />
         ) : (
           <Notice>只有所有者和财务管理员可查看钱包与充值。</Notice>
         ))}

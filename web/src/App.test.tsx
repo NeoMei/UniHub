@@ -576,3 +576,110 @@ it("refreshes authoritative payer roles from billing and clears stale commerce c
   expect(screen.queryByRole("button", {name: "确认购买"})).toBeNull();
   expect(mutations).toEqual([]);
 });
+
+function walletDestinationFixture(authenticated = true, unifiedRecharge = true) {
+  const state = {authenticated};
+  const mutations: string[] = [];
+  const reads: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
+    if (options?.method && options.method !== "GET") {
+      mutations.push(path);
+      return new Response(JSON.stringify({error: "unexpected_mutation"}), {status: 405});
+    }
+    reads.push(path);
+    const data = path === "/auth/session" ? {authenticated: state.authenticated, sandbox: true, csrf_token: "csrf", user: {id: "owner", name: "Owner"}}
+      : path === "/v1/accounts" ? [{id: "other", name: "另一个账户", kind: "personal", role: "owner"}, {id: "payer", name: "指定付款账户", kind: "team", role: "owner"}]
+      : path === "/v1/products" ? [{id: "llmrouter", name: "LLMRouter"}, {id: "superwagie", name: "SuperWagie"}]
+      : path === "/v1/capabilities" ? {sandbox: true, unified_wallet_recharge: unifiedRecharge, product_wallet_recharge: true}
+      : path === "/admin/v1/me" ? {enabled: false, roles: [], permissions: []} : [];
+    return new Response(JSON.stringify(data), {status: 200});
+  }));
+  return {state, mutations, reads};
+}
+
+it("opens an explicit unified-wallet link on its authorized payer without creating a recharge", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&account=payer&wallet=unified");
+  const {mutations} = walletDestinationFixture();
+  render(<App />);
+  const target = await screen.findByRole("combobox", {name: "充值目标钱包"});
+  await waitFor(() => expect((screen.getByRole("button", {name: "创建测试充值单"}) as HTMLButtonElement).disabled).toBe(false));
+  expect((target as HTMLSelectElement).value).toBe("");
+  expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("payer");
+  fireEvent.change(screen.getByLabelText("充值金额（元）"), {target: {value: "25"}});
+  fireEvent.click(screen.getByRole("button", {name: "创建测试充值单"}));
+  const confirmation = screen.getByRole("dialog");
+  expect(confirmation.textContent).toContain("指定付款账户");
+  expect(within(confirmation).getByText("统一钱包")).toBeDefined();
+  expect(mutations).toEqual([]);
+});
+
+it("retains the explicit unified-wallet payer and destination through console authentication", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&account=payer&wallet=unified");
+  const {state, mutations} = walletDestinationFixture(false);
+  const beforeLogin = render(<App />);
+  await screen.findAllByRole("link", {name: /登录归一/});
+  beforeLogin.unmount();
+  window.history.replaceState(null, "", "/");
+  state.authenticated = true;
+  render(<App />);
+  const target = await screen.findByRole("combobox", {name: "充值目标钱包"});
+  await waitFor(() => expect((screen.getByRole("button", {name: "创建测试充值单"}) as HTMLButtonElement).disabled).toBe(false));
+  expect((target as HTMLSelectElement).value).toBe("");
+  expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("payer");
+  expect(mutations).toEqual([]);
+});
+
+it.each([
+  "wallet=unknown",
+  "wallet=",
+  "wallet=unified&product=llmrouter",
+  "wallet=unified&wallet=unified",
+  "product=llmrouter&product=superwagie",
+])("requires an explicit wallet choice for ambiguous or unsupported destination %s", async (query) => {
+  window.history.replaceState(null, "", `/?view=wallets&account=payer&${query}`);
+  const {mutations} = walletDestinationFixture();
+  render(<App />);
+  const target = await screen.findByRole("combobox", {name: "充值目标钱包"});
+  await waitFor(() => expect((target as HTMLSelectElement).disabled).toBe(false));
+  expect((target as HTMLSelectElement).value).toBe("__unconfirmed__");
+  expect((screen.getByRole("button", {name: "创建测试充值单"}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(target, {target: {value: ""}});
+  expect((target as HTMLSelectElement).value).toBe("");
+  expect((screen.getByRole("button", {name: "创建测试充值单"}) as HTMLButtonElement).disabled).toBe(false);
+  expect(mutations).toEqual([]);
+});
+
+it("does not replace an inaccessible payer with another account on a unified-wallet link", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&account=revoked&wallet=unified");
+  const {mutations, reads} = walletDestinationFixture();
+  render(<App />);
+  await screen.findByText("所选账户不可访问，请明确选择一个账户。");
+  expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("revoked");
+  expect(screen.queryByRole("combobox", {name: "充值目标钱包"})).toBeNull();
+  expect(reads.some(path => /^\/v1\/accounts\/[^/]+\//.test(path))).toBe(false);
+  expect(mutations).toEqual([]);
+});
+
+it("keeps legacy product wallet links and manual recharge target selection", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&account=payer&product=superwagie");
+  const {mutations} = walletDestinationFixture();
+  render(<App />);
+  const target = await screen.findByRole("combobox", {name: "充值目标钱包"});
+  await waitFor(() => expect((target as HTMLSelectElement).value).toBe("superwagie"));
+  fireEvent.change(target, {target: {value: ""}});
+  expect((target as HTMLSelectElement).value).toBe("");
+  expect(mutations).toEqual([]);
+});
+
+it("honors disabled unified recharge separately from an enabled product wallet recharge", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&account=payer&wallet=unified");
+  const {mutations} = walletDestinationFixture(true, false);
+  render(<App />);
+  const target = await screen.findByRole("combobox", {name: "充值目标钱包"});
+  await waitFor(() => expect((target as HTMLSelectElement).disabled).toBe(false));
+  expect((target as HTMLSelectElement).value).toBe("");
+  expect(screen.queryByRole("button", {name: "创建测试充值单"})).toBeNull();
+  fireEvent.change(target, {target: {value: "llmrouter"}});
+  expect((screen.getByRole("button", {name: "创建测试充值单"}) as HTMLButtonElement).disabled).toBe(false);
+  expect(mutations).toEqual([]);
+});
