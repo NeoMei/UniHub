@@ -242,3 +242,27 @@ missing timestamps and held reservations are not final settled spending.
 故障费用豁免只读状态分别说明客户费用处理和供应商结果待核实。它不表示供应商执行失败或成本为零，不提供普通网页豁免写入口。统一现金入账通道与中央收银开通是两个能力，页面不得据此推断真实支付已启用。
 
 消费汇总的 `charged` / `charges_by_asset` 保留原始已结算实扣，已确认返还通过 `refunded` / `refunds_by_asset` 单独返回。调用记录的预占、实扣和返还是最后已确认快照；UNKNOWN 可能另有待核实预占，不能将待处理命令视为到账或最终金额。
+
+### Usage coverage read contract
+
+Both usage-summary endpoints return `usage_coverage` with required
+`legacy_token_calls` and `native_metered_calls`: canonical nonnegative decimal
+strings, including explicit `"0"`. These count settled report records represented
+by the legacy token sums (using exactly their existing validity predicate) and
+validated native measurements, respectively. A valid all-zero legacy record
+counts once; a native request-only record counts once regardless of measurement
+quantity or number of dimensions. Pending, unknown, released and rejected records
+do not count. Missing legacy usage does not count. Invalid stored native evidence
+still fails the summary instead of yielding coverage. Product-runtime arbitrary
+usage is not projected into either aggregate and therefore is not covered.
+
+Counts and quantities share the existing repeatable-read snapshot and all
+account, actor, product, source, instance, model, asset and time filters. Members
+see only their own coverage; coverage carries no finance amounts and remains
+available when financial details are redacted. `usage_complete` keeps its existing
+report-state/validity meaning. Neither it nor coverage guarantees that all provider
+token observations were recorded: a complete request-metered report can have
+`legacy_token_calls="0"`. Consumers must not infer token coverage from zero token
+sums, request quantities or settled call counts. Absence on an older server means
+unknown coverage, not zero; preserve decimal strings without JavaScript number
+conversion. Existing legacy sums, native dimensions and amounts are unchanged.

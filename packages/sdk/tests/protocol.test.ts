@@ -173,3 +173,19 @@ test('product access and user administration preserve instance and assignment ve
  await client.productAccess('notes','staging');await client.applications();await client.userManagement();await client.managedUsers('Alice',25);await client.userProducts();await client.userAccess('immutable-user');await client.setUserAccess('immutable-user','notes','staging',{roles:[],active:true,version:0});await client.setUserStatus('immutable-user',{active:false,version:7});
  assert.equal(calls[0].path,'/v1/me/product-access?product_id=notes&instance=staging');assert.equal(calls[3].path,'/v1/user-management/users?q=Alice&limit=25');assert.equal(calls[6].path,'/v1/user-management/users/immutable-user/access/notes?instance=staging');assert.deepEqual(calls[6].body,{roles:[],active:true,version:0});assert.deepEqual(calls[7].body,{active:false,version:7});
 });
+
+test('usage coverage preserves explicit zero and counts beyond safe integers on both summary routes',async t=>{
+ const coverage={legacy_token_calls:'0',native_metered_calls:'9007199254740993'};
+ const {client}=await fixture(t,(r,res)=>send(res,200,{usage_coverage:coverage}));
+ assert.deepEqual((await client.usage('account')).usage_coverage,coverage);
+ assert.deepEqual((await client.modelPoolUsage('account')).usage_coverage,coverage);
+ const {readFile}=await import('node:fs/promises');
+ const api=await readFile(new URL('../../../api/openapi.yaml',import.meta.url),'utf8');
+ const schema=api.slice(api.indexOf('    "UsageCoverage":'),api.indexOf('    "UsageSummary":'));
+ assert.match(schema,/"legacy_token_calls": \{"\$ref": "#\/components\/schemas\/IntegerString"\}/);
+ assert.match(schema,/"native_metered_calls": \{"\$ref": "#\/components\/schemas\/IntegerString"\}/);
+ assert.match(schema,/"required": \["legacy_token_calls", "native_metered_calls"\]/);
+ const summary=api.slice(api.indexOf('    "UsageSummary":'),api.indexOf('    "UsageSummary":')+8000);
+ assert.match(summary,/"usage_coverage": \{"\$ref": "#\/components\/schemas\/UsageCoverage"\}/);
+ assert.match(summary,/"required":\n        - "usage_coverage"/);
+});

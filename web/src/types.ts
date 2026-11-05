@@ -188,6 +188,7 @@ export type CallPage = {
   consistency: string;
 };
 export type UsageSummary = {
+  usage_coverage: { legacy_token_calls: string; native_metered_calls: string };
   scope: CallScope;
   filter: CallFilter;
   financial_details: boolean;

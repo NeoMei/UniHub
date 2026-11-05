@@ -100,6 +100,7 @@ func TestMeteredSettlementFrozenReplayAndSummary(t *testing.T) {
 	if err != nil || !summary.UsageComplete || summary.Usage.Input != "0" || len(summary.NativeUsage) != 1 || summary.NativeUsage[0].Measurements[0].Quantity.Value != "1500" {
 		t.Fatalf("summary %+v %v", summary, err)
 	}
+	assertUsageCoverage(t, summary, "0", "2")
 }
 
 func TestNativeUsageWireOmitsLegacyCounters(t *testing.T) {

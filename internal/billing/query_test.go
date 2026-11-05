@@ -215,6 +215,7 @@ func TestUsageQueriesKeysetScopeAndCursorBinding(t *testing.T) {
 	if err != nil || memberSummary.CallsTotal != "1" || memberSummary.Usage.Input != "20" || memberSummary.Charged != "" || memberSummary.FinancialDetails {
 		t.Fatalf("member summary %+v %v", memberSummary, err)
 	}
+	assertUsageCoverage(t, memberSummary, "1", "0")
 	if _, err := s.QueryCall(ctx, member.ID, team.ID, "page-001", "superwagie"); !errors.Is(err, accounts.ErrNotFound) {
 		t.Fatalf("member other actor %v", err)
 	}
@@ -232,6 +233,7 @@ func TestUsageQueriesKeysetScopeAndCursorBinding(t *testing.T) {
 	if err != nil || finance.CallsTotal != "206" || finance.Charged != "615" || !finance.FinancialDetails || finance.Scope.Visibility != "account" {
 		t.Fatalf("billing admin %+v %v", finance, err)
 	}
+	assertUsageCoverage(t, finance, "205", "0")
 	bounded, err := s.QueryCalls(ctx, owner.ID, team.ID, CallFilter{From: when.Add(-time.Hour), To: when.Add(time.Hour), OriginProductID: "superwagie", Model: "model-a"}, CallPageRequest{Limit: 100})
 	if err != nil || bounded.Total != "205" || bounded.UnknownTime != "1" {
 		t.Fatalf("bounded %+v %v", bounded, err)

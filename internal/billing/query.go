@@ -105,7 +105,15 @@ type NativeUsageTotal struct {
 	Measurements []metering.Measurement `json:"measurements"`
 }
 
+// UsageCoverage counts settled records represented by the corresponding usage
+// aggregates, not the completeness of provider token observations.
+type UsageCoverage struct {
+	LegacyTokenCalls   string `json:"legacy_token_calls"`
+	NativeMeteredCalls string `json:"native_metered_calls"`
+}
+
 type UsageSummary struct {
+	UsageCoverage     UsageCoverage      `json:"usage_coverage"`
 	NativeUsage       []NativeUsageTotal `json:"native_usage,omitempty"`
 	ChargesByAsset    map[string]string  `json:"charges_by_asset,omitempty"`
 	RefundsByAsset    map[string]string  `json:"refunds_by_asset,omitempty"`
@@ -470,7 +478,7 @@ const nativeUsageSQL = `(c.snapshot#>>'{rate,semantics}'='metered_v2' AND c.snap
 const validUsageSQL = `(` + validLegacyUsageSQL + ` OR ` + nativeUsageSQL + `)`
 
 func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, f CallFilter) (UsageSummary, error) {
-	out := UsageSummary{Asset: CreditAsset, ByStatus: map[string]string{}}
+	out := UsageSummary{Asset: CreditAsset, ByStatus: map[string]string{}, UsageCoverage: UsageCoverage{LegacyTokenCalls: "0", NativeMeteredCalls: "0"}}
 	f, err := normalizeCallFilter(f)
 	if err != nil {
 		return out, err
@@ -490,9 +498,9 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	for _, name := range []string{"input", "output", "cache_read", "cache_write", "reasoning"} {
 		selects = append(selects, `COALESCE(sum(CASE WHEN `+callReportStatus+`='SETTLED' AND `+validLegacyUsageSQL+` THEN (c.snapshot#>>'{usage,`+name+`}')::numeric ELSE 0 END),0)::text`)
 	}
-	selects = append(selects, `COALESCE(bool_and(`+callReportStatus+` IN ('SETTLED','RELEASED','REJECTED','CANCELED') AND (`+callReportStatus+`<>'SETTLED' OR COALESCE(`+validUsageSQL+`,false))),true)`, `count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND (NOT COALESCE(c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$',false) OR (c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND NOT COALESCE(`+validUsageSQL+`,false))))`)
+	selects = append(selects, `count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND `+validLegacyUsageSQL+`)::text`, `COALESCE(bool_and(`+callReportStatus+` IN ('SETTLED','RELEASED','REJECTED','CANCELED') AND (`+callReportStatus+`<>'SETTLED' OR COALESCE(`+validUsageSQL+`,false))),true)`, `count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND (NOT COALESCE(c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$',false) OR (c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND NOT COALESCE(`+validUsageSQL+`,false))))`)
 	var invalid int64
-	err = tx.QueryRow(ctx, `SELECT `+strings.Join(selects, ",")+` FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere, args...).Scan(&out.CallsTotal, &out.SettledCalls, &out.PendingCalls, &out.MissingUsageCalls, &out.UnknownCalls, &out.RejectedCalls, &out.ReleasedCalls, &out.Usage.Input, &out.Usage.Output, &out.Usage.CacheRead, &out.Usage.CacheWrite, &out.Usage.Reasoning, &out.UsageComplete, &invalid)
+	err = tx.QueryRow(ctx, `SELECT `+strings.Join(selects, ",")+` FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere, args...).Scan(&out.CallsTotal, &out.SettledCalls, &out.PendingCalls, &out.MissingUsageCalls, &out.UnknownCalls, &out.RejectedCalls, &out.ReleasedCalls, &out.Usage.Input, &out.Usage.Output, &out.Usage.CacheRead, &out.Usage.CacheWrite, &out.Usage.Reasoning, &out.UsageCoverage.LegacyTokenCalls, &out.UsageComplete, &invalid)
 	if err != nil {
 		return out, err
 	}
@@ -506,6 +514,7 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	}
 	type dimension struct{ operation, key, unit, provider string }
 	totals := map[dimension]*big.Rat{}
+	nativeCount := new(big.Int)
 	for nativeRows.Next() {
 		var data []byte
 		var call Call
@@ -522,6 +531,7 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 		if _, nativeErr = CalculateCharge(call.Rate, *call.Usage); nativeErr != nil {
 			break
 		}
+		nativeCount.Add(nativeCount, big.NewInt(1))
 		for _, measurement := range call.Usage.Metered.Measurements {
 			d := dimension{call.Usage.Metered.Operation, measurement.Key, measurement.Unit, measurement.ProviderUnit}
 			n, _ := new(big.Int).SetString(measurement.Quantity.Value, 10)
@@ -539,6 +549,7 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	if nativeErr != nil {
 		return out, fmt.Errorf("billing: invalid stored native usage: %w", nativeErr)
 	}
+	out.UsageCoverage.NativeMeteredCalls = nativeCount.String()
 	dimensions := make([]dimension, 0, len(totals))
 	for d := range totals {
 		dimensions = append(dimensions, d)

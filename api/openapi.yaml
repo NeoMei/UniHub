@@ -3963,9 +3963,18 @@
         - "accuracy"
         - "consistency"
       "additionalProperties": false
+    "UsageCoverage":
+      "type": "object"
+      "description": "Settled records represented by legacy token aggregates and validated native quantities in the same authorized query snapshot. Explicit zero is authoritative; absence on older servers is unknown. Does not assert completeness of provider token observations."
+      "properties":
+        "legacy_token_calls": {"$ref": "#/components/schemas/IntegerString"}
+        "native_metered_calls": {"$ref": "#/components/schemas/IntegerString"}
+      "required": ["legacy_token_calls", "native_metered_calls"]
+      "additionalProperties": false
     "UsageSummary":
       "type": "object"
       "properties":
+        "usage_coverage": {"$ref": "#/components/schemas/UsageCoverage"}
         "refunded": {"$ref": "#/components/schemas/IntegerString", "description": "Confirmed refunds for one matching asset and finance roles; omitted for mixed assets."}
         "native_usage":
           "type": "array"
@@ -4036,6 +4045,7 @@
           "minProperties": 1
           "description": "Settled charges separately per matching asset. Present only for finance roles; pending/unknown holds are excluded."
       "required":
+        - "usage_coverage"
         - "calls_total"
         - "settled_calls"
         - "pending_calls"
