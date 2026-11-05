@@ -531,9 +531,42 @@ it("refreshes failed catalog and payment-capability reads before allowing purcha
   await screen.findByText("服务暂时不可用，请稍后重试。");
   fireEvent.click(screen.getByRole("button", {name: "刷新方案与用量"}));
   await screen.findByText("恢复的方案");
-  expect(counts["/v1/catalog"]).toBe(2);
-  expect(counts["/v1/capabilities"]).toBe(2);
+  expect(counts["/v1/catalog"]).toBeGreaterThanOrEqual(2);
+  expect(counts["/v1/capabilities"]).toBeGreaterThanOrEqual(2);
   fireEvent.click(screen.getByRole("button", {name: "查看方案"}));
   expect((screen.getByRole("button", {name: "购买"}) as HTMLButtonElement).disabled).toBe(false);
+  expect(mutations).toEqual([]);
+});
+
+it("refreshes authoritative payer roles from billing and clears stale commerce confirmation on revocation", async () => {
+  window.history.replaceState(null, "", "/?view=billing");
+  let role = "owner";
+  const reads: Record<string, number> = {};
+  const mutations: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
+    reads[path] = (reads[path] || 0) + 1;
+    if (options?.method && options.method !== "GET") mutations.push(path);
+    const data = path === "/auth/session" ? {authenticated: true, sandbox: true, csrf_token: "csrf", user: {id: "owner", name: "Owner"}}
+      : path === "/v1/accounts" ? [{id: "A", name: "当前付款账户", kind: "personal", role}]
+      : path === "/v1/products" ? [{id: "notes", name: "笔记"}]
+      : path === "/v1/catalog" ? [{id: "plan", name: "可选方案", product_id: "notes", account_kind: "both", kind: "membership", period: "month", price: "1000000", monthly_credit: "0", entitlements: {}, status: "published", sandbox: false, rank: 1, validity_months: 1}]
+      : path === "/admin/v1/me" ? {enabled: false, roles: [], permissions: []} : [];
+    return new Response(JSON.stringify(data), {status: 200});
+  }));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", {name: "查看方案"}));
+  fireEvent.click(screen.getByRole("button", {name: "购买"}));
+  expect(screen.getByRole("dialog").textContent).toContain("当前付款账户");
+  // Exercise the pending action across a route transition, as well as its role-keyed invalidation.
+  fireEvent.click(within(screen.getByRole("navigation", {name: "主导航"})).getByRole("button", {name: "套餐与用量"}));
+  role = "member";
+  fireEvent.click(screen.getByRole("button", {name: "刷新方案与用量"}));
+  await waitFor(() => expect(reads["/v1/accounts"]).toBe(2));
+  expect(reads["/auth/session"]).toBe(2);
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(await screen.findByText("钱包仅财务角色可查看")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", {name: "查看方案"}));
+  expect((screen.getByRole("button", {name: "购买"}) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", {name: "确认购买"})).toBeNull();
   expect(mutations).toEqual([]);
 });

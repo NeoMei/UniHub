@@ -921,7 +921,10 @@ function AccountConsole({
           orders={orders}
           capabilities={capabilities}
           initialProductId={initialProductId}
-          onRetry={refresh}
+          onRetry={() => {
+            refresh();
+            refreshAccounts();
+          }}
           onSelectOffer={offer => {setSelectedOffer(offer); setPage("memberships");}}
           onNavigate={page => {setSelectedOffer(undefined); setPage(page);}}
         />
