@@ -619,6 +619,9 @@ func (s *Service) RuntimeSettle(ctx context.Context, scope RuntimeScope, callID 
 		held, _ := runtimeAmount(out.Held)
 		posts := []ledger.Posting{}
 		if amount > held {
+			if err = retainRejectedRuntimeSettlement(ctx, c, out, r, digest); err != nil {
+				return err
+			}
 			return ErrConflict
 		} // Caller must explicitly reserve an extension first.
 		if amount > 0 {
