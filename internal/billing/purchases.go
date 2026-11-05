@@ -124,10 +124,16 @@ func (s *Service) payLocked(ctx context.Context, c *pgxpool.Conn, o Order, key, 
 		return o, e
 	}
 	defer database.Rollback(tx)
+	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('unihub:billing-rate-catalog',0))`); e != nil {
+		return o, e
+	}
 	if e = lockBillingProduct(ctx, tx, o.ProductID); e != nil {
 		return o, e
 	}
 	if e = s.offerForSaleOn(ctx, tx, o.Offer); e != nil {
+		return o, e
+	}
+	if e = s.requireSaleReadyOn(ctx, tx, o.Offer); e != nil {
 		return o, e
 	}
 	_, e = tx.Exec(ctx, `INSERT INTO billing_orders(id,account_id,actor_id,request_key,request_digest,snapshot) VALUES($1,$2,$3,$4,$5,$6)`, o.ID, o.AccountID, o.ActorID, key, digest, encode(o))
@@ -328,9 +334,6 @@ func (s *Service) renewLocked(ctx context.Context, c *pgxpool.Conn, sub Subscrip
 	if e != nil {
 		return e
 	}
-	if _, e = s.buyable(ctx, c, sub.Offer.ID, sub.AccountID); e != nil {
-		return e
-	}
 	months := 1
 	if sub.Offer.Period == "year" {
 		months = 12
@@ -349,6 +352,9 @@ func (s *Service) renewLocked(ctx context.Context, c *pgxpool.Conn, sub Subscrip
 		return s.resumeOrderLocked(ctx, c, &old)
 	}
 	if !errors.Is(e, accounts.ErrNotFound) {
+		return e
+	}
+	if _, e = s.buyable(ctx, c, sub.Offer.ID, sub.AccountID); e != nil {
 		return e
 	}
 	start, pend, _ := CurrentPeriod(sub.Anchor, end, now)

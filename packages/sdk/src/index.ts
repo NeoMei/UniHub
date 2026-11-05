@@ -36,6 +36,8 @@ export interface Invitation { id: string; account_id: string; recipient_id: stri
 export interface Balance { product_id: string; asset: 'CNY/6'; amount: IntegerString }
 export interface Recharge { id: string; account_id: string; product_id: string; amount: IntegerString; currency: string; merchant: string; operation_id?: string }
 export interface Operation { id: string; account_id: string; kind: string; status: string; ledger_transaction_id?: string; error_code?: string; created_at: string }
+export interface SalesReadiness { ready: boolean; reason?: 'credit_rates_unavailable' | string }
+export interface CatalogOffer extends Offer { sales_readiness?: SalesReadiness }
 export interface Offer { id: string; product_id: string; name: string; account_kind: string; kind: string; period: string; price: IntegerString; monthly_credit: IntegerString; entitlements: Record<string,string>; rank: number; validity_months: number; upgrade_rule: string; refund_rule: string; status: string; sandbox: boolean }
 export interface Subscription { id: string; account_id: string; product_id: string; offer: Offer; version: number; anchor: string; paid_through: string; status: string }
 export interface Order { id: string; account_id: string; actor_id: string; product_id: string; offer: Offer; amount: IntegerString; payment_status: string; fulfillment_status: string; refund_status?: string; [key: string]: unknown }
@@ -143,7 +145,7 @@ revokeInvitation(account: string,id: string): Promise<void>{return this.request(
  products(): Promise<Product[]>{return this.request('GET','/v1/products');}
  billingProfile(product: string): Promise<BillingProfile>{return this.request('GET',`/v1/products/${segment(product)}/billing-profile`);}
  billingPresets(): Promise<BillingPresets>{return this.request('GET','/v1/billing-presets');}
- catalog(): Promise<Offer[]>{return this.request('GET','/v1/catalog');}
+ catalog(): Promise<CatalogOffer[]>{return this.request('GET','/v1/catalog');}
  subscriptions(account: string): Promise<Subscription[]>{return this.request('GET',this.path(account,'/subscriptions'));}
  wallets(account: string): Promise<Balance[]>{return this.request('GET',this.path(account,'/wallets'));}
  async createRecharge(account: string,productId: string,amount: IntegerString,idempotencyKey: string): Promise<Recharge>{integer(amount);key(idempotencyKey);return this.request('POST',this.path(account,'/recharges'),{body:{product_id:productId,amount},idempotencyKey});}

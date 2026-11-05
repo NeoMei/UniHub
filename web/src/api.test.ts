@@ -58,3 +58,7 @@ describe("browser API boundary", () => {
     );
   });
 });
+
+it("explains unavailable CREDIT tariffs instead of suggesting insufficient balance", () => {
+ expect(new ApiError(409,"credit_rates_unavailable").message).toMatch(/暂无可用的 CREDIT 模型费率/);
+});

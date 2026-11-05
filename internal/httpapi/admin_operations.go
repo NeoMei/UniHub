@@ -118,7 +118,14 @@ func (s *api) adminOperationRoutes(add func(string, action)) {
 			return e
 		}
 		v["sandbox"] = s.options.Sandbox
-		v["payment_configured"] = s.options.Merchant != "" && len(s.options.SigningKey) >= 32
+		v["payment_mode"] = "disabled"
+		if s.options.Sandbox {
+			v["payment_mode"] = "sandbox"
+		}
+		v["sandbox_signing_configured"] = s.options.Sandbox && s.options.Merchant != "" && len(s.options.SigningKey) >= 32
+		v["real_payments_configured"] = false
+		// Compatibility alias: sandbox signing only, never real acquiring.
+		v["payment_configured"] = v["sandbox_signing_configured"]
 		v["billing_configured"] = s.options.Billing != nil
 		return respond(w, 200, v)
 	})

@@ -62,6 +62,7 @@ export type Recharge = {
   operation_id?: string;
 };
 export type Offer = {
+  sales_readiness?: { ready: boolean; reason?: string };
   id: string;
   product_id: string;
   name: string;

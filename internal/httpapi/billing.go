@@ -26,11 +26,11 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 	}
 	s.billingProfileRoutes(add, addOps)
 	add("GET /v1/catalog", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		v, e := b.Catalog(r.Context())
+		v, e := b.CatalogView(r.Context())
 		if e != nil {
 			return e
 		}
-		v = filterProducts(r, v, func(o billing.Offer) string { return o.ProductID })
+		v = filterProducts(r, v, func(o billing.CatalogOffer) string { return o.ProductID })
 		return respond(w, 200, v)
 	})
 	add("GET /v1/accounts/{account}/subscriptions", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {

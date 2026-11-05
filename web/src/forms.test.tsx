@@ -327,3 +327,10 @@ it.each([true, false])("ignores a late upgrade quote after product switching (su
   expect(screen.queryByText(/请求未完成/)).toBeNull();
   expect(act).not.toHaveBeenCalled();
 });
+it("keeps an unavailable credit offer visible with an actionable reason and no purchase", () => {
+ const act = vi.fn();
+ const offer = {...membership, monthly_credit: "1000000", sales_readiness: {ready:false, reason:"credit_rates_unavailable"}};
+ render(<Catalog {...shared} act={act} kind="membership" offers={{data:[offer],loading:false}} subscriptions={[]} />);
+ expect(screen.getByText(/暂无可用的 CREDIT 模型费率/)).toBeDefined();
+ expect((screen.getByRole("button",{name:"购买"}) as HTMLButtonElement).disabled).toBe(true);
+});

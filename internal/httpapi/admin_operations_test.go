@@ -50,6 +50,22 @@ func TestAdminOperationsHTTPRealAuthorityAndDomains(t *testing.T) {
 			t.Errorf("product accessed %s: %d %s", resource, w.Code, w.Body)
 		}
 	}
+	status := call(h, "GET", "/admin/v1/system-status", "alice", "", "")
+	var readiness map[string]any
+	if e := json.Unmarshal(status.Body.Bytes(), &readiness); e != nil {
+		t.Fatal(e)
+	}
+	if readiness["payment_mode"] != "disabled" || readiness["sandbox_signing_configured"] != false || readiness["real_payments_configured"] != false || readiness["payment_configured"] != false {
+		t.Fatalf("misleading readiness: %s", status.Body)
+	}
+	sandbox := New(verifier{}, a, wallet.New(pool, a, noLedger{}), Options{PlatformAdmin: admin, Billing: b, Sandbox: true, Merchant: "sandbox-test", SigningKey: []byte(strings.Repeat("x", 32))})
+	status = call(sandbox, "GET", "/admin/v1/system-status", "alice", "", "")
+	if e := json.Unmarshal(status.Body.Bytes(), &readiness); e != nil {
+		t.Fatal(e)
+	}
+	if readiness["payment_mode"] != "sandbox" || readiness["sandbox_signing_configured"] != true || readiness["payment_configured"] != true || readiness["real_payments_configured"] != false {
+		t.Fatalf("sandbox claimed real acquiring: %s", status.Body)
+	}
 	for _, resource := range []string{"orders", "refunds", "calls", "api-keys", "usage-budgets", "transactions", "billing-profiles"} {
 		w := call(h, "GET", "/admin/v1/"+resource, "bob", "", "")
 		if w.Code != 403 {

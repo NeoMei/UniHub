@@ -27,6 +27,7 @@ export class ApiError extends Error {
 export function errorText(code: string, status = 0): string {
   const texts: Record<string, string> = {
     operation_pending: "当前账户有待核实操作，请先刷新核对，勿重复提交。",
+    credit_rates_unavailable: "暂无可用的 CREDIT 模型费率，暂不能购买；请联系管理员配置费率。",
     insufficient_credits: "模型额度不足，请升级或购买加量包。",
     unsupported_plan_change: "当前不支持此方案变更，请选择同周期的更高等级。",
     refund_requires_review: "该退款需要人工核实，请联系账户管理员。",

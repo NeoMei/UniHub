@@ -91,7 +91,7 @@ function AccountCatalog({
     (!capabilities.loading && !capabilities.error && capabilities.data?.real_payments_configured === true);
   const name = (id: string) => products.find((p) => p.id === id)?.name || id;
   async function choose(offer: Offer) {
-    if (!canBuy || !commerceReady) return;
+    if (!canBuy || !commerceReady || offer.sales_readiness?.ready === false) return;
     setError("");
     const current = subscriptions.find(
       (s) =>
@@ -234,6 +234,7 @@ function AccountCatalog({
                     )}
                   </p>
                   <OfferEntitlements offer={o} />
+                  {o.sales_readiness?.ready === false && <p role="status">暂无可用的 CREDIT 模型费率，暂不能购买；请联系管理员配置费率。现有余额和已付权益不受影响。</p>}
                 </div>
                 <div className="offer-price">
                   <strong>¥ {fixed(o.price)}</strong>
@@ -250,6 +251,7 @@ function AccountCatalog({
                   aria-disabled={!commerceReady || undefined}
                   disabled={
                     !canBuy ||
+                    o.sales_readiness?.ready === false ||
                     !commerceReady ||
                     same ||
                     Boolean(loading) ||

@@ -1180,7 +1180,7 @@
     "get":
       "operationId": "catalog"
       "summary": "catalog"
-      "description": "Published environment-saleable offers restricted to BillingProducts; defaults to own product."
+      "description": "Published component-eligible offers restricted to BillingProducts; defaults to own product. Array shape unchanged. Additive sales_readiness={ready:boolean,reason?:string}; credit_rates_unavailable means no usable configured CREDIT/6 model tariff. Unavailable offers stay visible. New positive-credit purchase/upgrade/renewal fails HTTP 409 credit_rates_unavailable without a new order; persisted original-key recovery remains permitted."
       "security":
         -
           "BearerAuth": []
@@ -1192,7 +1192,7 @@
               "schema":
                 "type": "array"
                 "items":
-                  "$ref": "#/components/schemas/Offer"
+                  "$ref": "#/components/schemas/CatalogOffer"
         "400":
           "$ref": "#/components/responses/Error"
         "401":
@@ -3340,6 +3340,69 @@
         - "token_type"
         - "scope"
         - "expires_in"
+      "additionalProperties": false
+    "CatalogOffer":
+      "type": "object"
+      "properties":
+        "id":
+          "type": "string"
+        "product_id":
+          "type": "string"
+        "name":
+          "type": "string"
+        "account_kind":
+          "enum":
+            - "personal"
+            - "team"
+            - "both"
+        "kind":
+          "enum":
+            - "membership"
+            - "addon"
+        "period":
+          "type": "string"
+        "price":
+          "$ref": "#/components/schemas/IntegerString"
+        "monthly_credit":
+          "$ref": "#/components/schemas/IntegerString"
+        "entitlements":
+          "type": "object"
+          "additionalProperties":
+            "type": "string"
+        "rank":
+          "type": "integer"
+        "validity_months":
+          "type": "integer"
+        "upgrade_rule":
+          "type": "string"
+        "refund_rule":
+          "type": "string"
+        "status":
+          "type": "string"
+        "sandbox":
+          "type": "boolean"
+        "sales_readiness":
+          "type": "object"
+          "required": ["ready"]
+          "properties":
+            "ready": {"type": "boolean"}
+            "reason": {"type": "string", "example": "credit_rates_unavailable"}
+      "required":
+        - "id"
+        - "product_id"
+        - "name"
+        - "account_kind"
+        - "kind"
+        - "period"
+        - "price"
+        - "monthly_credit"
+        - "entitlements"
+        - "rank"
+        - "validity_months"
+        - "upgrade_rule"
+        - "refund_rule"
+        - "status"
+        - "sandbox"
       "additionalProperties": false
     "Offer":
       "type": "object"

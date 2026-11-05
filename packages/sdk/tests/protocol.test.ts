@@ -189,3 +189,15 @@ test('usage coverage preserves explicit zero and counts beyond safe integers on 
  assert.match(summary,/"usage_coverage": \{"\$ref": "#\/components\/schemas\/UsageCoverage"\}/);
  assert.match(summary,/"required":\n        - "usage_coverage"/);
 });
+
+test('catalog keeps the array and explicit unavailable readiness; errors remain caller visible',async t=>{
+ const offer={id:'credit',sales_readiness:{ready:false,reason:'credit_rates_unavailable'}};
+ const {client,calls}=await fixture(t,(r,res)=>r.path==='/v1/catalog'?send(res,200,[offer]):send(res,409,{error:'credit_rates_unavailable'}));
+ client.setAccessToken('access');assert.deepEqual(await client.catalog(),[offer]);
+ await assert.rejects(client.request('POST','/v1/accounts/a/orders',{body:{offer_id:'credit'},idempotencyKey:'sale'}),e=>e instanceof UniHubError&&e.status===409&&e.code==='credit_rates_unavailable');
+ assert.equal(calls.length,2);
+ const {readFile}=await import('node:fs/promises');const api=await readFile(new URL('../../../api/openapi.yaml',import.meta.url),'utf8');
+ const catalog=api.slice(api.indexOf('    "CatalogOffer":'),api.indexOf('    "Offer":'));
+ assert.match(catalog,/"sales_readiness":/);assert.match(catalog,/"ready": \{"type": "boolean"\}/);
+ assert.doesNotMatch(api.slice(api.indexOf('    "Offer":'),api.indexOf('    "Authorization":')),/sales_readiness/);
+});

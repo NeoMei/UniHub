@@ -40,7 +40,8 @@ function OfferCard({ offer, product, current, onBrowse }: { offer: Offer; produc
       <span className="billing-offer-unit">{offer.period === "year" ? "每年" : "每月"}</span>
       <p>{offer.monthly_credit === "0" ? "纯功能订阅，不含模型额度" : `每月包含 ${fixed(offer.monthly_credit, 6)} 权益额度（CREDIT）`}</p>
       <OfferEntitlements offer={offer} />
-      <button disabled={current} onClick={onBrowse}>
+      {offer.sales_readiness?.ready === false && <p>暂无可用的 CREDIT 模型费率，暂不能购买；请联系管理员配置费率。</p>}
+      <button disabled={current || offer.sales_readiness?.ready === false} onClick={onBrowse}>
         {current ? "已在使用" : "查看方案"} {!current && <ArrowRight size={15} />}
       </button>
     </article>

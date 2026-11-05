@@ -60,6 +60,11 @@ func setup(t *testing.T) fixture {
 	if e != nil {
 		t.Fatal(e)
 	}
+	// Isolated shared fixture models are explicitly usable before commercial sales.
+	_, e = s.PublishRate(ctx, u.ID, Rate{ID: "fixture-sale-readiness", Model: "fixture-sale-model", Semantics: "exclusive_v1", Input: Rational{"0", "1"}, Output: Rational{"0", "1"}, CacheRead: Rational{"0", "1"}, CacheWrite: Rational{"0", "1"}, Reasoning: Rational{"0", "1"}})
+	if e != nil {
+		t.Fatal(e)
+	}
 	return fixture{s, l, u.ID, as[0].ID, offers}
 }
 func (f fixture) auth(t *testing.T) {
@@ -269,6 +274,9 @@ func TestPaymentResponseLossRecoversWithoutNewAllocationOrGrant(t *testing.T) {
 	}
 	if _, e = f.s.Purchase(ctx, f.actor, f.account, PurchaseRequest{"sandbox-addon", "other"}); !errors.Is(e, ErrPending) {
 		t.Fatalf("new allocation allowed: %v", e)
+	}
+	if e = f.s.RetireRate(ctx, f.actor, "fixture-sale-readiness"); e != nil {
+		t.Fatal(e)
 	}
 	f.s = New(f.s.pool, f.s.accounts, f.l)
 	f.s.ConfigureSandbox(true)

@@ -461,6 +461,8 @@ func writeError(w http.ResponseWriter, e error) {
 		fail(w, 402, "insufficient_credits")
 	case errors.Is(e, ledger.ErrInsufficientFunds):
 		fail(w, 402, "insufficient_funds")
+	case errors.Is(e, billing.ErrCreditRatesUnavailable):
+		fail(w, 409, "credit_rates_unavailable")
 	case errors.Is(e, billing.ErrUnsupported):
 		fail(w, 409, "unsupported_plan_change")
 	case errors.Is(e, billing.ErrManualReview):

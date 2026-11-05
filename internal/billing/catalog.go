@@ -154,7 +154,10 @@ func (s *Service) buyable(ctx context.Context, q accounts.Querier, offerID, acco
 	if o.AccountKind != "both" && o.AccountKind != kind {
 		return o, accounts.ErrForbidden
 	}
-	return o, s.offerForSaleOn(ctx, q, o)
+	if e = s.offerForSaleOn(ctx, q, o); e != nil {
+		return o, e
+	}
+	return o, s.requireSaleReadyOn(ctx, q, o)
 }
 func (s *Service) PublishRate(ctx context.Context, actor string, r Rate) (Rate, error) {
 	if e := s.operator(actor); e != nil {
