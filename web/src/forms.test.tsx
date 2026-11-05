@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { Catalog, Members, SettingsPage, Wallets } from "./forms";
+import { Catalog, CreditApplicability, Members, SettingsPage, Wallets } from "./forms";
 import type { ActionSpec, Shared } from "./App";
 import type { Invitation, Offer, Quote, Subscription } from "./types";
 // jsdom does not implement native dialog methods used by the real Modal.
@@ -218,4 +218,49 @@ it("lets an owner change non-owner roles and revoke a pending team invitation", 
     method: "DELETE",
     path: "/v1/accounts/team-1/invitations/pending-1",
   }));
+});
+
+it("defers wallet targeting until the product catalog confirms a hint and never falls back for unknown hints", async () => {
+  const act = vi.fn();
+  const props = {...shared, act, initialProductId: "llmrouter", wallets: {data: [], loading: false}, operations: {data: [], loading: false}, capabilities: {data: {product_wallet_recharge: true}, loading: false}};
+  const view = render(<Wallets {...props} products={[]} />);
+  expect((screen.getByLabelText("充值目标钱包") as HTMLSelectElement).value).not.toBe("");
+  fireEvent.change(screen.getByLabelText("充值金额（元）"), {target: {value: "5"}});
+  fireEvent.click(screen.getByRole("button", {name: "创建测试充值单"}));
+  expect(act).not.toHaveBeenCalled();
+  view.rerender(<Wallets {...props} products={[{id: "llmrouter", name: "LLMRouter"}]} />);
+  await waitFor(() => expect((screen.getByLabelText("充值目标钱包") as HTMLSelectElement).value).toBe("llmrouter"));
+  fireEvent.click(screen.getByRole("button", {name: "创建测试充值单"}));
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({path: "/v1/accounts/A/recharges", body: {product_id: "llmrouter", amount: "5000000"}}));
+  view.unmount(); act.mockClear();
+  render(<Wallets {...props} initialProductId="unlisted" />);
+  fireEvent.change(screen.getByLabelText("充值金额（元）"), {target: {value: "5"}});
+  fireEvent.click(screen.getByRole("button", {name: "创建测试充值单"}));
+  expect(act).not.toHaveBeenCalled();
+});
+it("keeps manual transfer separate from recharge with the same explicit confirmation payload", () => {
+  const act = vi.fn();
+  render(<Wallets {...shared} act={act} wallets={{data: [], loading: false}} operations={{data: [], loading: false}} />);
+  fireEvent.click(screen.getByText("手动划拨（可选）"));
+  fireEvent.change(screen.getByLabelText("划拨目标钱包"), {target: {value: "product-a"}});
+  fireEvent.change(screen.getByLabelText("划拨金额（元）"), {target: {value: "3"}});
+  fireEvent.click(screen.getByRole("button", {name: "从统一钱包划拨"}));
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({path: "/v1/accounts/A/transfers", body: {product_id: "product-a", amount: "3000000"}}));
+  expect((screen.getByLabelText("充值金额（元）") as HTMLInputElement).value).toBe("");
+});
+it("preserves failed wallet reads as errors and authoritative zero as zero", () => {
+  const props = {...shared, operations: {data: [], loading: false}};
+  const view = render(<Wallets {...props} wallets={{data: [{product_id: "llmrouter", asset: "CNY/6", amount: "0"}], loading: false, error: "wallet offline"}} />);
+  expect(screen.getByRole("alert").textContent).toContain("wallet offline");
+  expect(screen.queryByText("¥ 0.00")).toBeNull();
+  view.rerender(<Wallets {...props} wallets={{data: [{product_id: "llmrouter", asset: "CNY/6", amount: "0"}], loading: false}} />);
+  expect(screen.getByText("¥ 0.00")).toBeDefined();
+});
+
+it("derives CREDIT applicability from the enabled funding mode, including paid-addon products", () => {
+  const profile = {product_id: "addon-only", version: 1, subscription: {enabled: false}, included_credits: {enabled: false}, addons: {enabled: true}, usage: {enabled: true, require_subscription: false, funding_modes: ["credits"], default_funding_mode: "credits"}};
+  const view = render(<CreditApplicability products={[{id: "addon-only", name: "AddonProduct", billing_profile: profile}]} />);
+  expect(screen.getByText(/AddonProduct/)).toBeDefined();
+  view.rerender(<CreditApplicability products={[{id: "addon-only", name: "AddonProduct", billing_profile: {...profile, usage: {...profile.usage, funding_modes: ["prepaid_cash"]}}}]} />);
+  expect(screen.queryByText(/AddonProduct/)).toBeNull();
 });

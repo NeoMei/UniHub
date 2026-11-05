@@ -1117,7 +1117,7 @@ td strong {
     min-width: 200px;
   }
 }
-@media (max-width: 760px) {
+@media (max-width: 1100px) {
   .app-shell {
     display: block;
   }
@@ -1920,3 +1920,43 @@ td strong {
   .consumption-page table { min-width: 850px; }
   .consumption-pagination { justify-content: center; }
 }
+
+/* Purpose balances and secondary controls retain the account workspace's tokens. */
+.secondary-navigation { margin-top: 10px; }
+.secondary-navigation summary { padding: 12px 23px; color: #425c69; cursor: pointer; min-height: 44px; }
+.secondary-navigation button { width: 100%; }
+.sidebar nav button.active { background: #edf2f3; color: var(--ink); }
+.sidebar nav button.active:before { display: none; }
+.purpose-balances { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; padding: 20px 0; font-variant-numeric: tabular-nums; }
+.purpose-balances h3 { margin: 0 0 12px; font-size: 14px; font-weight: 500; }
+.purpose-balances strong { display: block; font-size: 28px; font-weight: 600; }
+.purpose-balances small { display: block; margin-top: 8px; color: #425c69; }
+.wallet-other-balances { padding: 12px 0 20px; }
+.wallet-other-balances summary, .wallet-transfer > summary { cursor: pointer; min-height: 44px; padding: 12px 0; }
+.wallet-transfer { margin: 20px 0; }
+.credit-applicability { line-height: 1.7; margin: 12px 0 20px; }
+.call-details { margin-top: 8px; text-align: left; }
+.call-details summary, .consumption-assets summary { cursor: pointer; min-height: 32px; padding: 6px 0; color: #315b69; }
+.call-details dl { min-width: 210px; margin-top: 12px; }
+.call-details dd { overflow-wrap: anywhere; }
+.consumption-assets details { color: #425c69; font-size: 12px; }
+@media (max-width: 1100px) {
+  .secondary-navigation { flex-shrink: 0; margin-top: 0; }
+  .secondary-navigation summary { white-space: nowrap; padding: 10px 12px; }
+  .secondary-navigation[open] { min-width: 150px; }
+}
+@media (max-width: 640px) {
+  .purpose-balances { grid-template-columns: 1fr; gap: 24px; }
+  .purpose-balances strong { font-size: 26px; }
+  .consumption-page table { min-width: 650px; }
+}
+
+.metrics-benefits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 640px) { .metrics-benefits { grid-template-columns: 1fr; } }
+
+.app-shell { --muted: #536976; }
+.app-shell .sidebar-footer { font-size: 11px; color: #536976; }
+.app-shell .mono, .app-shell .status { font-size: 11px; }
+.app-shell .page-heading p { color: #536976; }
+.app-shell h1 { font-size: 30px; }
+@media (max-width: 640px) { .app-shell h1 { font-size: 25px; } }

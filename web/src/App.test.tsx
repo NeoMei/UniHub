@@ -35,14 +35,15 @@ it("explains missing central administration authority on a product user-manageme
   expect(screen.getByText(/个人或团队账户的所有者身份不等于平台管理员/)).toBeDefined();
   expect(screen.queryByText("搜索用户")).toBeNull();
 });
-it("keeps the system maintenance entry discoverable before platform permission is loaded", async () => {
+it("hides system maintenance without confirmed platform permission", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
     path === "/auth/session" ? { authenticated: true, user: { id: "member", name: "Member" }, sandbox: true, csrf_token: "csrf" }
     : path === "/admin/v1/me" ? { enabled: false, user_id: "member", roles: [], permissions: [], version: 0 }
     : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }] : []
   ), { status: 200 })));
   render(<App />);
-  expect(await screen.findByRole("button", { name: "系统维护" })).toBeDefined();
+  await screen.findByRole("heading", { name: "账户概览" });
+  expect(screen.queryByRole("button", { name: "系统维护" })).toBeNull();
 });
 it("retains the allowlisted user-management destination through a signed-out console login", async () => {
   window.history.replaceState(null, "", "/?view=user-management");
@@ -173,7 +174,7 @@ it("keeps team member cash and finance APIs out of the browser while allowing cr
   fireEvent.click(
     within(screen.getByRole("navigation", { name: "主导航" })).getByRole(
       "button",
-      { name: "钱包与充值" },
+      { name: "模型余额与充值" },
     ),
   );
   await waitFor(() =>
@@ -350,7 +351,8 @@ it("selects a newly created team after the create confirmation completes", async
   }));
   render(<App />);
   await screen.findByRole("heading", { name: "账户概览" });
-  fireEvent.click(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", { name: "团队成员" }));
+  fireEvent.click(screen.getByText("更多账户功能"));
+  fireEvent.click(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("button", { name: "团队与邀请" }));
   fireEvent.change(screen.getByLabelText("团队名称"), { target: { value: "新团队" } });
   fireEvent.click(screen.getByRole("button", { name: "创建团队" }));
   fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
@@ -367,4 +369,81 @@ it("shows trusted product credential management for a native-only central accoun
  expect(screen.queryByLabelText("当前密码")).toBeNull();
  expect(screen.queryByRole("button",{name:"保存个人资料"})).toBeNull();
  expect(screen.getByRole("link",{name:"前往 llmrouter 管理密码与二次验证"}).getAttribute("href")).toBe("https://router.example.test/profile");
+});
+
+function settingsFixture(overrides: Record<string, unknown> = {}) {
+  const calls: Array<{path: string; method: string}> = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    calls.push({path, method: init?.method || "GET"});
+    const data = path in overrides ? overrides[path]
+      : path === "/auth/session" ? {authenticated: true, sandbox: true, csrf_token: "csrf", user: {id: "u", name: "Test"}}
+      : path === "/v1/accounts" ? [{id: "A", name: "账户 A", kind: "personal", role: "owner"}, {id: "B", name: "账户 B", kind: "team", role: "owner"}]
+      : path === "/v1/products" ? [{id: "llmrouter", name: "LLMRouter"}, {id: "superwagie", name: "SuperWagie"}]
+      : path === "/v1/capabilities" ? {product_wallet_recharge: true, unified_wallet_recharge: true}
+      : path === "/admin/v1/me" ? {enabled: false, roles: [], permissions: []}
+      : [];
+    return new Response(JSON.stringify(data), {status: 200});
+  }));
+  return calls;
+}
+it.each([
+  ["wallets", "llmrouter", "模型余额与充值"], ["wallets", "superwagie", "模型余额与充值"],
+  ["memberships", "superwagie", "产品会员"], ["bills", "", "账单"], ["consumption", "", "模型消费"],
+])("opens the allowlisted %s task without writing finances", async (view, product, title) => {
+  window.history.replaceState(null, "", `/?view=${view}&product=${product}`);
+  const calls = settingsFixture();
+  render(<App />);
+  await screen.findByRole("heading", {name: title, level: 1});
+  if (view === "wallets") await waitFor(() => expect((screen.getByLabelText("充值目标钱包") as HTMLSelectElement).value).toBe(product));
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("discards unsupported view hints rather than granting a destination", async () => {
+  window.history.replaceState(null, "", "/?view=admin&product=intruder");
+  const calls = settingsFixture();
+  render(<App />);
+  await screen.findByRole("heading", {name: "账户概览", level: 1});
+  expect(screen.queryByRole("button", {name: "系统维护"})).toBeNull();
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("discards an account-bound confirmation when the payer changes", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&product=llmrouter");
+  const calls = settingsFixture();
+  render(<App />);
+  await screen.findByRole("heading", {name: "模型余额与充值", level: 1});
+  await waitFor(() => expect((screen.getByLabelText("充值目标钱包") as HTMLSelectElement).value).toBe("llmrouter"));
+  fireEvent.change(screen.getByLabelText("充值金额（元）"), {target: {value: "10"}});
+  fireEvent.click(screen.getByRole("button", {name: "创建测试充值单"}));
+  expect(screen.getByRole("dialog")).toBeDefined();
+  fireEvent.change(screen.getByLabelText("当前付费账户"), {target: {value: "B"}});
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+it("shows administration only after verified capability and keeps direct-route authorization", async () => {
+  settingsFixture({"/admin/v1/me": {enabled: true, roles: ["admin"], permissions: ["*"]}});
+  const view = render(<App />);
+  expect(await screen.findByRole("button", {name: "系统维护"})).toBeDefined();
+  view.unmount();
+  window.history.replaceState(null, "", "/admin/overview");
+  settingsFixture();
+  render(<App />);
+  expect(await screen.findByText("当前用户没有平台管理权限。")).toBeDefined();
+});
+it("keeps a wallet product hint scoped to that task when opening consumption", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&product=llmrouter");
+  const calls = settingsFixture();
+  render(<App />);
+  await screen.findByRole("heading", {name: "模型余额与充值", level: 1});
+  await waitFor(() => expect((screen.getByLabelText("充值目标钱包") as HTMLSelectElement).value).toBe("llmrouter"));
+  fireEvent.click(within(screen.getByRole("navigation", {name: "主导航"})).getByRole("button", {name: "模型消费"}));
+  await waitFor(() => expect(calls.some(call => call.path.includes("/calls?"))).toBe(true));
+  await waitFor(() => expect((screen.getByLabelText("产品") as HTMLSelectElement).value).toBe(""));
+  expect(calls.filter(call => call.path.includes("/calls?")).every(call => !new URL(call.path, "http://local").searchParams.has("origin_product_id"))).toBe(true);
+});
+it("selects the catalog-confirmed model wallet for the normal model-balance navigation", async () => {
+  const calls = settingsFixture();
+  render(<App />);
+  await screen.findByRole("heading", {name: "账户概览", level: 1});
+  fireEvent.click(within(screen.getByRole("navigation", {name: "主导航"})).getByRole("button", {name: "模型余额与充值"}));
+  await waitFor(() => expect((screen.getByLabelText("充值目标钱包") as HTMLSelectElement).value).toBe("llmrouter"));
+  expect(calls.every(call => call.method === "GET")).toBe(true);
 });

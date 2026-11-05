@@ -58,7 +58,7 @@ import {
   Status,
   Table,
 } from "./ui";
-import { Catalog, Members, SettingsPage, Wallets } from "./forms";
+import { Catalog, CreditApplicability, Members, SettingsPage, WalletBalances, Wallets } from "./forms";
 import { BillingHub } from "./BillingHub";
 import { Consumption } from "./Consumption";
 import {ProductApplications,ProductUserManagement} from "./ProductUsers";
@@ -98,9 +98,9 @@ const navigation = [
   { id: "overview", label: "账户概览", icon: House },
   { id: "billing", label: "套餐与用量", icon: CreditCard },
   { id: "memberships", label: "产品会员", icon: Crown },
-  { id: "credits", label: "模型额度", icon: Database },
+  { id: "credits", label: "权益额度", icon: Database },
   { id: "addons", label: "加量包", icon: Box },
-  { id: "wallets", label: "钱包与充值", icon: WalletIcon },
+  { id: "wallets", label: "模型余额与充值", icon: WalletIcon },
   { id: "bills", label: "账单", icon: CreditCard },
   { id: "consumption", label: "模型消费", icon: FileText },
   { id: "members", label: "团队成员", icon: Users },
@@ -124,13 +124,22 @@ function initialAccount() {
 }
 // This public destination hint contains no identity or credentials. Authentication
 // and the live user-management permission check still guard the resulting page.
+const taskViews: Page[] = ["wallets", "memberships", "consumption", "bills", "user-management"];
 function initialPage(): Page {
-  const view = new URLSearchParams(window.location.search).get("view");
-  if (view === "user-management") {
-    window.sessionStorage.setItem("unihub.return-view", view);
+  const params = new URLSearchParams(window.location.search);
+  const view = params.get("view");
+  if (view !== null) {
+    window.sessionStorage.removeItem("unihub.return-view");
+    window.sessionStorage.removeItem("unihub.return-product");
+    if (taskViews.includes(view as Page)) {
+      window.sessionStorage.setItem("unihub.return-view", view);
+      const product = params.get("product");
+      // An unmatched hint must stay unresolved, never become the default wallet.
+      if (product) window.sessionStorage.setItem("unihub.return-product", product);
+    }
   }
-  return window.sessionStorage.getItem("unihub.return-view") === "user-management"
-    ? "user-management" : "overview";
+  const saved = window.sessionStorage.getItem("unihub.return-view") as Page;
+  return taskViews.includes(saved) ? saved : "overview";
 }
 function initialAdminPath() {
   if (/^\/admin(?:\/|$)/.test(window.location.pathname)) {
@@ -154,6 +163,8 @@ export default function App() {
   );
   const [selected, setSelected] = useState(initialAccount);
   const [page, setPage] = useState<Page>(initialPage);
+  const [taskPage] = useState(page);
+  const [taskProduct] = useState(() => window.sessionStorage.getItem("unihub.return-product") || undefined);
   const [adminPath, setAdminPath] = useState(initialAdminPath);
   const platform = useResource<AdminPrincipal>(authenticated ? "/admin/v1/me" : undefined, version);
   useEffect(() => {
@@ -168,7 +179,10 @@ export default function App() {
     }
   }, [authenticated, adminPath]);
   useEffect(() => {
-    if (authenticated) window.sessionStorage.removeItem("unihub.return-view");
+    if (authenticated) {
+      window.sessionStorage.removeItem("unihub.return-view");
+      window.sessionStorage.removeItem("unihub.return-product");
+    }
   }, [authenticated]);
   const [profileOpen, setProfileOpen] = useState(false);
  const userManagement=useResource<{enabled:boolean;can_manage:boolean}>(authenticated?"/v1/user-management":undefined,version);
@@ -262,26 +276,25 @@ export default function App() {
           <span>归一 · 统一身份与账户中心</span>
         </a>
         <nav aria-label="主导航">
-          {navigation.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              className={page === id ? "active" : ""}
-              aria-current={page === id ? "page" : undefined}
-              onClick={() => {
-                setProfileOpen(false);
-                setPage(id);
-              }}
-            >
-              <Icon size={19} />
-              <span>{label}</span>
+          {navigation.filter(item => ["overview", "memberships", "wallets", "consumption", "bills"].includes(item.id)).map(({id, label, icon: Icon}) => (
+            <button key={id} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined} onClick={() => {setProfileOpen(false); setPage(id);}}>
+              <Icon size={19} /><span>{label}</span>
             </button>
           ))}
+          <details className="secondary-navigation" open={["billing", "credits", "addons", "members", "settings", "applications"].includes(page) || undefined}>
+            <summary>更多账户功能</summary>
+            {navigation.filter(item => ["billing", "credits", "addons", "members", "settings"].includes(item.id)).map(({id, label, icon: Icon}) => (
+              <button key={id} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined} onClick={() => {setProfileOpen(false); setPage(id);}}>
+                <Icon size={19} /><span>{id === "members" && account?.kind !== "team" ? "团队与邀请" : label}</span>
+              </button>
+            ))}
           <button className={page==="applications"?"active":""} onClick={()=>{setProfileOpen(false);setPage("applications")}}><Box size={19}/><span>我的应用</span></button>
+          </details>
           {userManagement.data?.can_manage && <button className={page==="user-management"?"active":""} onClick={()=>{setProfileOpen(false);setPage("user-management")}}><Users size={19}/><span>用户管理</span></button>}
-          <button
+          {!platform.loading && !platform.error && platform.data?.enabled === true && <button
             className={adminPath ? "active" : ""}
             aria-current={adminPath ? "page" : undefined}
-            title={platform.data?.enabled ? "打开系统维护与平台管理" : "当前账号需要平台管理员资格才能进入系统维护"}
+            title="打开系统维护与平台管理"
             onClick={() => {
               setProfileOpen(false);
               const path = "/admin/overview";
@@ -291,7 +304,7 @@ export default function App() {
           >
             <ShieldCheck size={19}/>
             <span>系统维护</span>
-          </button>
+          </button>}
         </nav>
         <span className="sidebar-footer">归一 UniHub · 统一身份与账户中心</span>
       </aside>
@@ -376,10 +389,11 @@ export default function App() {
             : <Panel title="用户管理"><Notice kind="error">当前账户没有 UniHub 用户管理权限。</Notice><p>个人或团队账户的所有者身份不等于平台管理员。请由已配置的 UniHub 用户管理员在用户管理中分配产品角色；LLMRouter 管理员角色不授予 UniHub 全局管理权限。</p><p>新用户通过归一注册并登录后，会自动获得产品的默认成员权限，无需在 LLMRouter 重复注册。</p><button onClick={() => setPage("applications")}>查看我的应用</button></Panel>
           ) : account ? (
             <AccountConsole
-              key={account.id}
+              key={`${account.id}/${account.role}`}
               account={account}
               session={session.data}
               page={page}
+              initialProductId={page === taskPage ? taskProduct : undefined}
               setPage={setPage}
               setBusy={setBusy}
               refreshAccounts={(accountId) => {
@@ -606,10 +620,12 @@ function AccountConsole({
   setPage,
   setBusy,
   refreshAccounts,
+  initialProductId,
 }: {
   account: Account;
   session: Session;
   page: Page;
+  initialProductId?: string;
   setPage: (p: Page) => void;
   setBusy: (v: boolean) => void;
   refreshAccounts: (accountId?: string) => void;
@@ -728,9 +744,9 @@ function AccountConsole({
     overview: "查看当前账户的会员、额度与资金。",
     billing: "集中查看当前方案、用量、钱包与账单。",
     memberships: "管理产品会员，查看已付期限与方案权益。",
-    credits: "模型额度仅用于模型服务，不是可退款现金。",
-    addons: "按需补充模型额度，独立有效期以商品规则为准。",
-    wallets: "统一钱包与产品钱包分开记账，资金始终归属当前账户。",
+    credits: "会员/加量包额度（CREDIT）独立记账，适用范围以产品规则为准。",
+    addons: "按需补充权益额度，适用产品与独立有效期以商品规则为准。",
+    wallets: "SuperWagie 托管模型调用使用 LLMRouter 人民币余额；会员购买使用 SuperWagie 余额。其他余额可展开查看。",
     bills: "核对会员订单、退款与钱包记账状态。",
     consumption: "按来源、产品实例与资产核对调用，结果以实际调用记录为准。",
     members: "管理当前团队的访问与角色。",
@@ -798,22 +814,12 @@ function AccountConsole({
       {finance && <OrderRecovery resource={orders} refresh={refresh} onBills={() => setPage("bills")} />}
       {page === "overview" && (
         <>
-          <section className="metrics">
-            <Metric
-              icon={<WalletIcon />}
-              label="统一钱包"
-              note={finance ? "账户可用余额（元）" : "仅财务角色可查看"}
-              value={
-                finance
-                  ? fixed(wallets.data?.find((w) => !w.product_id)?.amount)
-                  : "—"
-              }
-              error={wallets.error}
-            />
+          {finance ? <WalletBalances wallets={wallets} products={products.data || []} /> : <Notice>仅财务角色可查看</Notice>}
+          <section className="metrics metrics-benefits">
             <Metric
               icon={<Database />}
-              label="可用模型额度"
-              note="剩余有效额度"
+              label="权益额度（CREDIT）"
+              note="会员/加量包额度，非人民币"
               value={credits.loading ? "—" : fixed(available, 6)}
               error={credits.error}
             />
@@ -833,6 +839,7 @@ function AccountConsole({
               error={subscriptions.error}
             />
           </section>
+          <CreditApplicability products={products.data || []} />
           <div className="overview-split">
             <Panel
               title="产品会员"
@@ -869,7 +876,7 @@ function AccountConsole({
               <p>在归一（UniHub），一个账户即可管理多产品的会员、模型额度与资金。</p>
               <button onClick={() => setPage("credits")}>
                 <Database size={21} />
-                查看模型额度
+                查看权益额度
                 <ArrowRight size={16} />
               </button>
               <button onClick={() => setPage("wallets")}>
@@ -924,6 +931,7 @@ function AccountConsole({
           <Catalog
             {...shared}
             kind="membership"
+            initialProductId={initialProductId}
             offers={offers}
             subscriptions={subscriptions.data || []}
             capabilities={capabilities}
@@ -944,9 +952,10 @@ function AccountConsole({
           <section className="metrics">
             <Metric
               icon={<Database />}
-              label="可用模型额度"
-              note="可用于新的模型请求"
-              value={fixed(available, 6)}
+              label="权益额度（CREDIT）"
+              note="非人民币，适用范围见产品规则"
+              value={credits.loading || credits.error ? "—" : fixed(available, 6)}
+              error={credits.error}
             />
             <Metric
               icon={<Database />}
@@ -972,6 +981,7 @@ function AccountConsole({
               }
             />
           </section>
+          <CreditApplicability products={products.data || []} />
           <Panel title="额度批次">
             <ResourceState resource={credits} empty="暂无额度批次">
               {(data) => <BatchTable data={data} productName={productName} />}
@@ -981,11 +991,11 @@ function AccountConsole({
       )}
       {page === "wallets" &&
         (finance ? (
-          <Wallets {...shared} wallets={wallets} operations={operations} capabilities={capabilities} />
+          <Wallets {...shared} initialProductId={initialProductId || "llmrouter"} wallets={wallets} operations={operations} capabilities={capabilities} />
         ) : (
           <Notice>只有所有者和财务管理员可查看钱包与充值。</Notice>
         ))}
-      {page === "consumption" && <Consumption account={account} products={products.data || []} version={version} />}
+      {page === "consumption" && <Consumption account={account} products={products.data || []} initialProductId={initialProductId} version={version} />}
       {page === "bills" && <Panel title="模型消费"><p>核对托管模型和原生产品调用的来源、实例、资产与原付款账户。普通成员仅查看自己的调用。</p><button onClick={() => setPage("consumption")}>查看模型消费 <ArrowRight size={15} /></button></Panel>}
       {page === "bills" &&
         (finance ? (

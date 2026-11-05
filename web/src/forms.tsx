@@ -1,10 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
   Box,
   Crown,
   Plus,
-  Wallet as WalletIcon,
 } from "lucide-react";
 import { accountPath, idempotencyKey, request } from "./api";
 import type {
@@ -18,6 +17,7 @@ import type {
   Recharge,
   Subscription,
   Wallet,
+  Product,
 } from "./types";
 import { activeSubscription, date, financeRole, fixed, parseCash } from "./money";
 import type { Shared } from "./App";
@@ -40,8 +40,10 @@ export function Catalog({
   kind,
   offers,
   subscriptions,
+  initialProductId,
   capabilities = { loading: false },
 }: Shared & {
+  initialProductId?: string;
   kind: "membership" | "addon";
   offers: Resource<Offer[]>;
   subscriptions: Subscription[];
@@ -53,8 +55,11 @@ export function Catalog({
   }>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState("");
+  const [productFilter, setProductFilter] = useState<string>();
+  const selectedProduct = productFilter ?? (products.some(p => p.id === initialProductId) ? initialProductId : "");
   const eligible = (offers.data || []).filter(
     (o) =>
+      (!selectedProduct || o.product_id === selectedProduct) &&
       o.kind === kind &&
       o.status === "published" &&
       (o.account_kind === "both" || o.account_kind === account.kind) &&
@@ -158,6 +163,8 @@ export function Catalog({
   }
   return (
     <Panel title={kind === "addon" ? "可用加量包" : "会员方案"}>
+      <label>方案产品<select value={selectedProduct || ""} onChange={event => setProductFilter(event.target.value)}><option value="">全部产品</option>{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
+      <CreditApplicability products={products} />
       {error && <Notice kind="error">{error}</Notice>}
       {offers.loading ? (
         <p className="loading">正在加载商品…</p>
@@ -202,7 +209,7 @@ export function Catalog({
                     ) : (
                       <>
                         {kind === "addon" ? "包含" : "每月包含"}{" "}
-                        <strong>{fixed(o.monthly_credit, 6)}</strong> 模型额度
+                        <strong>{fixed(o.monthly_credit, 6)}</strong> 权益额度（CREDIT）
                       </>
                     )}
                   </p>
@@ -349,151 +356,98 @@ function OfferDetails({ offer, name, accountName }: { offer: Offer; name: string
     </dl>
   );
 }
-export function Wallets({
-  account,
-  session,
-  products,
-  act,
-  wallets,
-  operations,
-  refresh,
-  capabilities = { loading: false },
-}: Shared & {
+export function CreditApplicability({ products }: { products: Product[] }) {
+  const accepting = products.filter(product => product.billing_profile?.usage.enabled && product.billing_profile.usage.funding_modes.includes("credits"));
+  return <p className="muted credit-applicability">会员/加量包额度（CREDIT）是独立权益资产，非人民币。{accepting.length ? `当前产品规则允许 ${accepting.map(product => product.name).join("、")} 使用额度；具体适用范围以产品规则为准。` : "模型现金余额单独记账；额度的适用范围以产品规则为准。"}</p>;
+}
+export function WalletBalances({ wallets, products }: { wallets: Resource<Wallet[]>; products: Product[] }) {
+  const purpose = (id: string) => id === "llmrouter" ? "托管模型现金余额" : "会员购买余额";
+  const cash = (wallet: Wallet) => ["CNY/6", "CNY"].includes(wallet.asset);
+  if (wallets.loading) return <p role="status">正在加载钱包余额…</p>;
+  if (wallets.error) return <Notice kind="error">{wallets.error}</Notice>;
+  return <section aria-label="用途余额">
+    <div className="purpose-balances">
+      {["llmrouter", "superwagie"].map(id => {
+        const wallet = wallets.data?.find(value => value.product_id === id && cash(value));
+        return <div key={id}><h3>{purpose(id)}</h3><strong>{wallet ? `¥ ${fixed(wallet.amount)}` : "—"}</strong><small>{id === "llmrouter" ? "LLMRouter" : "SuperWagie"} · 人民币</small></div>;
+      })}
+    </div>
+    <details className="wallet-other-balances"><summary>统一钱包与其他产品余额</summary>
+      <div className="wallet-list">{wallets.data?.filter(wallet => !["llmrouter", "superwagie"].includes(wallet.product_id) || !cash(wallet)).map(wallet => <div key={`${wallet.product_id}/${wallet.asset}`} className="wallet-row">
+        <div><h3>{wallet.product_id ? products.find(product => product.id === wallet.product_id)?.name || wallet.product_id : "统一钱包"}</h3><small>{wallet.asset}</small></div>
+        <strong>{cash(wallet) ? `¥ ${fixed(wallet.amount)}` : wallet.amount}</strong>
+      </div>)}</div>
+      {!wallets.data?.length && <p>暂无钱包余额记录；未记录的余额显示为 —。</p>}
+    </details>
+  </section>;
+}
+type WalletsProps = Shared & {
+  initialProductId?: string;
   wallets: Resource<Wallet[]>;
   operations: Resource<Operation[]>;
   capabilities?: Resource<Capabilities>;
-}) {
+};
+export function Wallets(props: WalletsProps) {
+  return <AccountWallets key={`${props.account.id}/${props.account.role}`} {...props} />;
+}
+function AccountWallets({account, session, products, act, wallets, operations, refresh, initialProductId, capabilities = {loading: false}}: WalletsProps) {
   const [amount, setAmount] = useState("");
-  const [product, setProduct] = useState("");
+  const [product, setProduct] = useState<string | undefined>(initialProductId ? undefined : "");
+  const [transferProduct, setTransferProduct] = useState("");
+  const [transferAmount, setTransferAmount] = useState("");
   const [error, setError] = useState("");
   const [recharge, setRecharge] = useState<Recharge>();
   const rechargePresets = [100, 500, 1000];
+  useEffect(() => {
+    if (product === undefined && products.some(item => item.id === initialProductId)) setProduct(initialProductId);
+  }, [products, initialProductId, product]);
+  const targetValid = product !== undefined && (product === "" || products.some(item => item.id === product));
+  const canRecharge = session.sandbox && !capabilities.loading && !capabilities.error && capabilities.data?.product_wallet_recharge !== false;
   function prepare(kind: "recharge" | "transfer") {
     setError("");
     try {
-      const value = parseCash(amount);
-      if (kind === "transfer" && !product)
-        throw new Error("请选择要接收划拨的产品钱包。");
+      const target = kind === "transfer" ? transferProduct : product;
+      if (kind === "recharge" && (!canRecharge || !targetValid)) throw new Error("请明确选择可用的充值钱包。");
+      if (kind === "transfer" && (!target || !products.some(item => item.id === target))) throw new Error("请选择要接收划拨的产品钱包。");
+      const value = parseCash(kind === "transfer" ? transferAmount : amount);
       act({
         title: kind === "recharge" ? "创建测试充值单" : "确认钱包划拨",
-        path: accountPath(
-          account.id,
-          kind === "recharge" ? "recharges" : "transfers",
-        ),
-        body: { product_id: product, amount: value },
-        content: (
-          <>
-            <dl>
-              <Detail label="目标钱包">
-                {products.find((p) => p.id === product)?.name || "统一钱包"}
-              </Detail>
-              <Detail label="金额">¥ {fixed(value)}</Detail>
-            </dl>
-            <Notice>
-              {kind === "recharge"
-                ? "仅创建测试订单，尚未到账；随后须明确确认测试入账。不涉及真实支付。"
-                : "从当前账户的统一钱包划拨至该产品钱包，其他账户不会自动垫付。"}
-            </Notice>
-          </>
-        ),
-        onResult:
-          kind === "recharge"
-            ? (data) => setRecharge(data as Recharge)
-            : undefined,
+        path: accountPath(account.id, kind === "recharge" ? "recharges" : "transfers"),
+        body: {product_id: target, amount: value},
+        content: <><dl>
+          <Detail label="目标钱包">{products.find(item => item.id === target)?.name || "统一钱包"}</Detail>
+          <Detail label="金额">¥ {fixed(value)}</Detail>
+        </dl><Notice>{kind === "recharge" ? "仅创建测试订单，尚未到账；随后须明确确认测试入账。不涉及真实支付。" : "从当前账户的统一钱包划拨至该产品钱包，其他账户不会自动垫付。"}</Notice></>,
+        onResult: kind === "recharge" ? data => setRecharge(data as Recharge) : undefined,
       });
-    } catch (e) {
-      setError((e as Error).message);
-    }
+    } catch (e) {setError((e as Error).message);}
   }
-  return (
-    <>
-      <Panel title="现金钱包">
-        <ResourceState resource={wallets} empty="暂无钱包余额">
-          {(data) => (
-            <div className="wallet-list">
-              {data.map((w) => (
-                <div key={w.product_id} className="wallet-row">
-                  <WalletIcon size={21} />
-                  <div>
-                    <h3>
-                      {w.product_id
-                        ? products.find((p) => p.id === w.product_id)?.name ||
-                          w.product_id
-                        : "统一钱包"}
-                    </h3>
-                    <small>人民币 · 余额单位为元</small>
-                  </div>
-                  <strong>¥ {fixed(w.amount)}</strong>
-                </div>
-              ))}
-            </div>
-          )}
-        </ResourceState>
-      </Panel>
-      <Panel title={session.sandbox ? "测试充值与资金划拨" : "资金划拨"}>
-        {session.sandbox && capabilities.data?.product_wallet_recharge !== false && (
-          <Notice>测试充值仅用于验证流程，不涉及真实支付；充值单需要手动确认测试入账。</Notice>
-        )}
-        {!session.sandbox && (
-          <Notice>
-            真实支付渠道尚未开通。可将已有统一钱包余额划拨至产品钱包。
-          </Notice>
-        )}
-        {session.sandbox && capabilities.data?.product_wallet_recharge === false && (
-          <Notice>当前部署未开放产品钱包充值，请联系平台管理员。</Notice>
-        )}
-        <div className="inline-form">
-          <label>
-            目标钱包
-            <select
-              value={product}
-              onChange={(e) => setProduct(e.target.value)}
-            >
-              <option value="">统一钱包</option>
-              {products.map((p) => (
-                <option value={p.id} key={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            金额（元）
-            <input
-              aria-label="充值金额（元）"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-            />
-          </label>
-          {session.sandbox && capabilities.data?.product_wallet_recharge !== false && (
-            <div className="wallet-presets" aria-label="充值金额快捷选择">
-              <span>快捷金额</span>
-              {rechargePresets.map((preset) => (
-                <button key={preset} className="secondary" onClick={() => setAmount(String(preset))}>
-                  ¥ {preset}
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="form-buttons">
-            {session.sandbox && capabilities.data?.product_wallet_recharge !== false && (
-              <button onClick={() => prepare("recharge")}>
-                创建测试充值单
-              </button>
-            )}
-            <button
-              className="secondary"
-              disabled={!product}
-              onClick={() => prepare("transfer")}
-            >
-              从统一钱包划拨
-            </button>
-          </div>
-        </div>
-        {error && <Notice kind="error">{error}</Notice>}
-      </Panel>
+  return (<>
+    <Panel title="现金钱包"><WalletBalances wallets={wallets} products={products} /></Panel>
+    <Panel title={session.sandbox ? "测试充值" : "充值"}>
+      {session.sandbox ? <Notice>测试充值仅用于验证流程，不涉及真实支付；充值单需要手动确认测试入账。</Notice> : <Notice>真实支付渠道尚未开通。可在下方手动划拨已有统一钱包余额。</Notice>}
+      {capabilities.error && <Notice kind="error">{capabilities.error}</Notice>}
+      {session.sandbox && capabilities.data?.product_wallet_recharge === false && <Notice>当前部署未开放产品钱包充值，请联系平台管理员。</Notice>}
+      <div className="inline-form">
+        <label>充值目标钱包<select value={targetValid ? product : "__unconfirmed__"} onChange={event => setProduct(event.target.value)}>
+          {!targetValid && <option value="__unconfirmed__" disabled>请等待产品核验或明确选择钱包</option>}
+          <option value="">统一钱包</option>{products.map(item => <option value={item.id} key={item.id}>{item.name}{item.id === "llmrouter" ? " · 模型调用" : item.id === "superwagie" ? " · 会员购买" : ""}</option>)}
+        </select></label>
+        <label>充值金额（元）<input aria-label="充值金额（元）" inputMode="decimal" placeholder="0.00" value={amount} onChange={event => setAmount(event.target.value)} /></label>
+        {canRecharge && <div className="wallet-presets" aria-label="充值金额快捷选择"><span>快捷金额</span>{rechargePresets.map(preset => <button key={preset} className="secondary" onClick={() => setAmount(String(preset))}>¥ {preset}</button>)}</div>}
+        {canRecharge && <div className="form-buttons"><button disabled={!targetValid} onClick={() => prepare("recharge")}>创建测试充值单</button></div>}
+      </div>
+      {!targetValid && <p>链接中的产品尚未核验；不会自动改充其他钱包，请等待产品目录或明确选择。</p>}
+    </Panel>
+    {product === "llmrouter" && <Panel title="在 SuperWagie 配置模型连接"><p>返回 SuperWagie 的模型连接设置，登录 UniHub 后按界面指引预览并确认托管连接，再选择模型。钱包余额不能证明密钥已经配置或模型当前可调用。</p><p>LLMRouter 原生 API Key 继续在 LLMRouter 原生控制台管理；这里不创建或替换产品密钥。</p></Panel>}
+    <details className="wallet-transfer"><summary>手动划拨（可选）</summary><Panel title="从统一钱包划拨">
+      <p>只划拨当前账户已有人民币余额。会员购买与模型调用分别使用各自产品钱包，请核对目标。</p>
+      <div className="inline-form"><label>划拨目标钱包<select value={transferProduct} onChange={event => setTransferProduct(event.target.value)}><option value="">请选择产品钱包</option>{products.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>划拨金额（元）<input inputMode="decimal" value={transferAmount} onChange={event => setTransferAmount(event.target.value)} /></label>
+        <button className="secondary" disabled={!transferProduct} onClick={() => prepare("transfer")}>从统一钱包划拨</button>
+      </div>
+    </Panel></details>
+    {error && <Notice kind="error">{error}</Notice>}
       {recharge && (
         <Panel title="待确认的测试充值">
           <Notice>测试订单已创建，尚不能据此认定余额到账。</Notice>

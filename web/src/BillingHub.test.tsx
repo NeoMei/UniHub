@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
-import { expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, expect, it } from "vitest";
 import { BillingHub } from "./BillingHub";
 import type { Account, Batch, Capabilities, Offer, Order, Product, Subscription, Wallet } from "./types";
 import type { Resource } from "./useResource";
+
+afterEach(cleanup);
 
 const resource = <T,>(data: T): Resource<T> => ({ data, loading: false });
 const account: Account = { id: "A", name: "个人账户", kind: "personal", role: "owner" };
@@ -76,4 +78,18 @@ it("shows a clear empty-state path when the account has no active plan", () => {
   );
   expect(screen.getByText("还没有生效中的方案")).toBeDefined();
   expect(screen.getByRole("button", { name: "浏览会员方案" })).toBeDefined();
+});
+
+it("keeps failed finance resources distinct from valid zero and separates purpose wallets from CREDIT", () => {
+  const props = {account, session: {authenticated: true, sandbox: true}, products: [product], offers: resource<Offer[]>([]), subscriptions: resource<Subscription[]>([]), credits: resource<Batch[]>([]), wallets: resource<Wallet[]>([{product_id: "llmrouter", asset: "CNY/6", amount: "123456"}, {product_id: "superwagie", asset: "CNY/6", amount: "0"}]), orders: resource<Order[]>([]), capabilities: resource<Capabilities>({})};
+  const view = render(<BillingHub {...props} wallets={{...props.wallets, error: "wallet offline"}} subscriptions={{...props.subscriptions, error: "subscription offline"}} credits={{...props.credits, error: "credit offline"}} />);
+  expect(screen.getByText("wallet offline")).toBeDefined();
+  expect(screen.getByText("subscription offline")).toBeDefined();
+  expect(screen.getByText("credit offline")).toBeDefined();
+  expect(screen.queryByText("¥ 0.00")).toBeNull();
+  expect(screen.queryByText("还没有生效中的方案")).toBeNull();
+  view.rerender(<BillingHub {...props} />);
+  expect(screen.getByText("¥ 0.123456")).toBeDefined();
+  expect(screen.getByText("¥ 0.00")).toBeDefined();
+  expect(screen.getByText("0.000000")).toBeDefined();
 });

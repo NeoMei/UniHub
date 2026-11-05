@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { Consumption } from "./Consumption";
 
@@ -29,10 +29,10 @@ it("shows mixed-source calls with their original payer, exact independent assets
   expect(row.textContent).toContain("个人统一钱包");
   expect(row.textContent).toContain("客户费用：已释放");
   expect(screen.getByText(/供应商.*待核实/)).toBeDefined();
-  expect(screen.getByText("CNY/6 · 0.123456")).toBeDefined();
-  expect(screen.getByText("返还 CNY/6 · 0.876544")).toBeDefined();
-  expect(screen.getByText("CREDIT/6 · 2.000000")).toBeDefined();
-  expect(screen.getByText("LR_QUOTA/0 · 9,007,199,254,740,993")).toBeDefined();
+  expect(screen.getByText(/人民币 · 0.123456/)).toBeDefined();
+  expect(screen.getByText(/返还 人民币 · 0.876544/)).toBeDefined();
+  expect(screen.getByText(/权益额度 · 2.000000/)).toBeDefined();
+  expect(screen.getByText(/旧额度 · 9,007,199,254,740,993/)).toBeDefined();
 });
 
 it("keeps legacy managed-model cash funding distinct from native unified and native product wallets", async () => {
@@ -41,9 +41,9 @@ it("keeps legacy managed-model cash funding distinct from native unified and nat
     { ...call, call_id: "native-product", source_call_id: "native-product", funding_product_id: "notes", waiver: undefined },
   ])));
   render(<Consumption account={account} products={[{ id: "notes", name: "Notes" }]} />);
-  const managed = (await screen.findByText("managed")).closest("tr")!;
+  const managed = (await screen.findByText("managed", {selector: "span"})).closest("tr")!;
   expect(managed.textContent).toContain("llmrouter 产品钱包");
-  const nativeProduct = screen.getByText("native-product").closest("tr")!;
+  const nativeProduct = screen.getByText("native-product", {selector: "span"}).closest("tr")!;
   expect(nativeProduct.textContent).toContain("产品现金钱包 · Notes");
   expect(nativeProduct.textContent).not.toContain("个人统一钱包");
 });
@@ -119,4 +119,34 @@ it("renders an empty result and lets an errored query restart without a new muta
   fireEvent.click(screen.getByRole("button", { name: "重新查询" }));
   expect(await screen.findByText("当前条件下暂无模型消费")).toBeDefined();
   expect(methods.every(method => method === "GET")).toBe(true);
+});
+
+it("shows task columns and reveals full financial details on demand without losing exact assets", async () => {
+  vi.stubGlobal("fetch", fetchData());
+  render(<Consumption account={account} products={[{id: "notes", name: "Notes"}]} />);
+  await screen.findByText("native-call");
+  expect(screen.getAllByRole("columnheader").map(header => header.textContent)).toEqual(["时间", "模型", "产品", "扣费", "状态"]);
+  const details = screen.getByText("native-call").closest("details")!;
+  expect(details).not.toBeNull();
+  expect(details.open).toBe(false);
+  fireEvent.click(within(details).getByText("查看调用详情"));
+  expect(details.open).toBe(true);
+  expect(details.textContent).toContain("original-payer");
+  expect(details.textContent).toContain("个人统一钱包");
+  expect(details.textContent).toContain("CNY/6");
+  expect(details.textContent).toContain("预占");
+  expect(screen.getByLabelText("按资产列示实扣").textContent).toContain("0.123456");
+  expect(screen.getByLabelText("按资产列示实扣").textContent).toContain("9,007,199,254,740,993");
+});
+it("uses a consumption product hint only as origin and never as the funding wallet", async () => {
+  const paths: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+    paths.push(path);
+    return new Response(JSON.stringify(path.includes("usage/summary") ? summary : page()), {status: 200});
+  }));
+  render(<Consumption account={account} products={[{id: "notes", name: "Notes"}]} initialProductId="notes" />);
+  await screen.findByText("native-call");
+  expect((screen.getByLabelText("产品") as HTMLSelectElement).value).toBe("notes");
+  expect(paths.every(path => new URL(path, "http://local").searchParams.get("origin_product_id") === "notes")).toBe(true);
+  expect(paths.some(path => path.includes("funding_product_id"))).toBe(false);
 });
