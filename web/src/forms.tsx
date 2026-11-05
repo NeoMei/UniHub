@@ -383,6 +383,7 @@ export function WalletBalances({ wallets, products }: { wallets: Resource<Wallet
 }
 type WalletsProps = Shared & {
   initialProductId?: string;
+  productCatalog?: Resource<Product[]>;
   wallets: Resource<Wallet[]>;
   operations: Resource<Operation[]>;
   capabilities?: Resource<Capabilities>;
@@ -390,7 +391,7 @@ type WalletsProps = Shared & {
 export function Wallets(props: WalletsProps) {
   return <AccountWallets key={`${props.account.id}/${props.account.role}`} {...props} />;
 }
-function AccountWallets({account, session, products, act, wallets, operations, refresh, initialProductId, capabilities = {loading: false}}: WalletsProps) {
+function AccountWallets({account, session, products, act, wallets, operations, refresh, initialProductId, productCatalog = {loading: false}, capabilities = {loading: false}}: WalletsProps) {
   const [amount, setAmount] = useState("");
   const [product, setProduct] = useState<string | undefined>(initialProductId ? undefined : "");
   const [transferProduct, setTransferProduct] = useState("");
@@ -398,17 +399,18 @@ function AccountWallets({account, session, products, act, wallets, operations, r
   const [error, setError] = useState("");
   const [recharge, setRecharge] = useState<Recharge>();
   const rechargePresets = [100, 500, 1000];
+  const catalogReady = !productCatalog.loading && !productCatalog.error;
   useEffect(() => {
-    if (product === undefined && products.some(item => item.id === initialProductId)) setProduct(initialProductId);
-  }, [products, initialProductId, product]);
-  const targetValid = product !== undefined && (product === "" || products.some(item => item.id === product));
+    if (catalogReady && product === undefined && products.some(item => item.id === initialProductId)) setProduct(initialProductId);
+  }, [products, initialProductId, product, catalogReady]);
+  const targetValid = catalogReady && product !== undefined && (product === "" || products.some(item => item.id === product));
   const canRecharge = session.sandbox && !capabilities.loading && !capabilities.error && capabilities.data?.product_wallet_recharge !== false;
   function prepare(kind: "recharge" | "transfer") {
     setError("");
     try {
       const target = kind === "transfer" ? transferProduct : product;
       if (kind === "recharge" && (!canRecharge || !targetValid)) throw new Error("请明确选择可用的充值钱包。");
-      if (kind === "transfer" && (!target || !products.some(item => item.id === target))) throw new Error("请选择要接收划拨的产品钱包。");
+      if (kind === "transfer" && (!catalogReady || !target || !products.some(item => item.id === target))) throw new Error("请选择要接收划拨的产品钱包。");
       const value = parseCash(kind === "transfer" ? transferAmount : amount);
       act({
         title: kind === "recharge" ? "创建测试充值单" : "确认钱包划拨",
@@ -428,8 +430,9 @@ function AccountWallets({account, session, products, act, wallets, operations, r
       {session.sandbox ? <Notice>测试充值仅用于验证流程，不涉及真实支付；充值单需要手动确认测试入账。</Notice> : <Notice>真实支付渠道尚未开通。可在下方手动划拨已有统一钱包余额。</Notice>}
       {capabilities.error && <Notice kind="error">{capabilities.error}</Notice>}
       {session.sandbox && capabilities.data?.product_wallet_recharge === false && <Notice>当前部署未开放产品钱包充值，请联系平台管理员。</Notice>}
+      {productCatalog.loading ? <p role="status">正在加载产品目录…</p> : productCatalog.error && <Notice kind="error">产品目录加载失败：{productCatalog.error}<button className="text-button" onClick={refresh}>重新加载产品目录</button></Notice>}
       <div className="inline-form">
-        <label>充值目标钱包<select value={targetValid ? product : "__unconfirmed__"} onChange={event => setProduct(event.target.value)}>
+        <label>充值目标钱包<select disabled={!catalogReady} value={targetValid ? product : "__unconfirmed__"} onChange={event => setProduct(event.target.value)}>
           {!targetValid && <option value="__unconfirmed__" disabled>请等待产品核验或明确选择钱包</option>}
           <option value="">统一钱包</option>{products.map(item => <option value={item.id} key={item.id}>{item.name}{item.id === "llmrouter" ? " · 模型调用" : item.id === "superwagie" ? " · 会员购买" : ""}</option>)}
         </select></label>
@@ -437,14 +440,14 @@ function AccountWallets({account, session, products, act, wallets, operations, r
         {canRecharge && <div className="wallet-presets" aria-label="充值金额快捷选择"><span>快捷金额</span>{rechargePresets.map(preset => <button key={preset} className="secondary" onClick={() => setAmount(String(preset))}>¥ {preset}</button>)}</div>}
         {canRecharge && <div className="form-buttons"><button disabled={!targetValid} onClick={() => prepare("recharge")}>创建测试充值单</button></div>}
       </div>
-      {!targetValid && <p>链接中的产品尚未核验；不会自动改充其他钱包，请等待产品目录或明确选择。</p>}
+      {catalogReady && !targetValid && <p>链接中的产品尚未核验；不会自动改充其他钱包，请等待产品目录或明确选择。</p>}
     </Panel>
     {product === "llmrouter" && <Panel title="在 SuperWagie 配置模型连接"><p>返回 SuperWagie 的模型连接设置，登录 UniHub 后按界面指引预览并确认托管连接，再选择模型。钱包余额不能证明密钥已经配置或模型当前可调用。</p><p>LLMRouter 原生 API Key 继续在 LLMRouter 原生控制台管理；这里不创建或替换产品密钥。</p></Panel>}
     <details className="wallet-transfer"><summary>手动划拨（可选）</summary><Panel title="从统一钱包划拨">
       <p>只划拨当前账户已有人民币余额。会员购买与模型调用分别使用各自产品钱包，请核对目标。</p>
-      <div className="inline-form"><label>划拨目标钱包<select value={transferProduct} onChange={event => setTransferProduct(event.target.value)}><option value="">请选择产品钱包</option>{products.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <div className="inline-form"><label>划拨目标钱包<select disabled={!catalogReady} value={transferProduct} onChange={event => setTransferProduct(event.target.value)}><option value="">请选择产品钱包</option>{products.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>划拨金额（元）<input inputMode="decimal" value={transferAmount} onChange={event => setTransferAmount(event.target.value)} /></label>
-        <button className="secondary" disabled={!transferProduct} onClick={() => prepare("transfer")}>从统一钱包划拨</button>
+        <button className="secondary" disabled={!catalogReady || !transferProduct} onClick={() => prepare("transfer")}>从统一钱包划拨</button>
       </div>
     </Panel></details>
     {error && <Notice kind="error">{error}</Notice>}

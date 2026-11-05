@@ -636,7 +636,7 @@ function AccountConsole({
   const [actionError, setActionError] = useState("");
   const [message, setMessage] = useState("");
   const finance = financeRole(account.role);
-  const products = useResource<Product[]>("/v1/products");
+  const products = useResource<Product[]>("/v1/products", version);
   const capabilities = useResource<Capabilities>("/v1/capabilities");
   const offers = useResource<Offer[]>("/v1/catalog");
   const subscriptions = useResource<Subscription[]>(
@@ -991,7 +991,7 @@ function AccountConsole({
       )}
       {page === "wallets" &&
         (finance ? (
-          <Wallets {...shared} initialProductId={initialProductId || "llmrouter"} wallets={wallets} operations={operations} capabilities={capabilities} />
+          <Wallets {...shared} productCatalog={products} initialProductId={initialProductId || "llmrouter"} wallets={wallets} operations={operations} capabilities={capabilities} />
         ) : (
           <Notice>只有所有者和财务管理员可查看钱包与充值。</Notice>
         ))}

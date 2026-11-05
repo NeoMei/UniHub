@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -446,4 +447,37 @@ it("selects the catalog-confirmed model wallet for the normal model-balance navi
   fireEvent.click(within(screen.getByRole("navigation", {name: "主导航"})).getByRole("button", {name: "模型余额与充值"}));
   await waitFor(() => expect((screen.getByLabelText("充值目标钱包") as HTMLSelectElement).value).toBe("llmrouter"));
   expect(calls.every(call => call.method === "GET")).toBe(true);
+});
+
+it("shows a failed wallet catalog separately and recovers the confirmed target through a read-only retry", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&product=llmrouter");
+  const calls = settingsFixture();
+  const baseFetch = globalThis.fetch;
+  let catalogReads = 0;
+  let resolveRetry!: (value: Response) => void;
+  vi.stubGlobal("fetch", vi.fn((path: string, init?: RequestInit) => {
+    if (path !== "/v1/products") return baseFetch(path, init);
+    calls.push({path, method: init?.method || "GET"});
+    catalogReads++;
+    return catalogReads === 1
+      ? Promise.resolve(new Response(JSON.stringify({error: "catalog_unavailable"}), {status: 503}))
+      : new Promise<Response>(resolve => {resolveRetry = resolve;});
+  }));
+  render(<App />);
+  const failure = await screen.findByRole("alert");
+  expect(failure.textContent).toContain("产品目录");
+  expect(failure.textContent).toContain("503");
+  const target = () => screen.getByLabelText("充值目标钱包") as HTMLSelectElement;
+  expect(target().value).toBe("__unconfirmed__");
+  expect((screen.getByRole("button", {name: "创建测试充值单"}) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", {name: "重新加载产品目录"}));
+  await waitFor(() => expect(catalogReads).toBe(2));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByText("正在加载产品目录…")).toBeDefined();
+  expect(target().value).toBe("__unconfirmed__");
+  await act(async () => {resolveRetry(new Response(JSON.stringify([{id: "llmrouter", name: "LLMRouter"}]), {status: 200}));});
+  await waitFor(() => expect(target().value).toBe("llmrouter"));
+  expect((screen.getByRole("button", {name: "创建测试充值单"}) as HTMLButtonElement).disabled).toBe(false);
+  expect(calls.every(call => call.method === "GET")).toBe(true);
+  expect(catalogReads).toBe(2);
 });
