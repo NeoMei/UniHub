@@ -124,7 +124,7 @@ function initialAccount() {
 }
 // This public destination hint contains no identity or credentials. Authentication
 // and the live user-management permission check still guard the resulting page.
-const taskViews: Page[] = ["wallets", "memberships", "consumption", "bills", "user-management"];
+const taskViews: Page[] = ["billing", "addons", "wallets", "memberships", "consumption", "bills", "user-management"];
 function initialPage(): Page {
   const params = new URLSearchParams(window.location.search);
   const view = params.get("view");
@@ -276,14 +276,14 @@ export default function App() {
           <span>归一 · 统一身份与账户中心</span>
         </a>
         <nav aria-label="主导航">
-          {navigation.filter(item => ["overview", "memberships", "wallets", "consumption", "bills"].includes(item.id)).map(({id, label, icon: Icon}) => (
+          {navigation.filter(item => ["overview", "billing", "memberships", "wallets", "consumption", "bills"].includes(item.id)).map(({id, label, icon: Icon}) => (
             <button key={id} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined} onClick={() => {setProfileOpen(false); setPage(id);}}>
               <Icon size={19} /><span>{label}</span>
             </button>
           ))}
-          <details className="secondary-navigation" open={["billing", "credits", "addons", "members", "settings", "applications"].includes(page) || undefined}>
+          <details className="secondary-navigation" open={["credits", "addons", "members", "settings", "applications"].includes(page) || undefined}>
             <summary>更多账户功能</summary>
-            {navigation.filter(item => ["billing", "credits", "addons", "members", "settings"].includes(item.id)).map(({id, label, icon: Icon}) => (
+            {navigation.filter(item => ["credits", "addons", "members", "settings"].includes(item.id)).map(({id, label, icon: Icon}) => (
               <button key={id} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined} onClick={() => {setProfileOpen(false); setPage(id);}}>
                 <Icon size={19} /><span>{id === "members" && account?.kind !== "team" ? "团队与邀请" : label}</span>
               </button>
@@ -630,6 +630,8 @@ function AccountConsole({
   setBusy: (v: boolean) => void;
   refreshAccounts: (accountId?: string) => void;
 }) {
+  const [selectedOffer, setSelectedOffer] = useState<Offer>();
+  useEffect(() => {if (page !== "memberships") setSelectedOffer(undefined);}, [page]);
   const [version, setVersion] = useState(0);
   const [action, setAction] = useState<ActionSpec & { key: string }>();
   const [working, setWorking] = useState(false);
@@ -777,7 +779,7 @@ function AccountConsole({
   const available = credits.data ? spendable(credits.data) : undefined;
   return (
     <>
-      <div className="page-heading">
+      {page !== "billing" && <div className="page-heading">
         <div>
           <h1>{title}</h1>
           <p>{descriptions[page]}</p>
@@ -792,7 +794,7 @@ function AccountConsole({
           <RefreshCw size={15} />
           刷新
         </button>
-      </div>
+      </div>}
       {(page === "overview" || page === "credits") &&
         prepaidProducts.length > 0 && (
           <Notice>
@@ -918,7 +920,10 @@ function AccountConsole({
           wallets={wallets}
           orders={orders}
           capabilities={capabilities}
-          onNavigate={setPage}
+          initialProductId={initialProductId}
+          onRetry={refresh}
+          onSelectOffer={offer => {setSelectedOffer(offer); setPage("memberships");}}
+          onNavigate={page => {setSelectedOffer(undefined); setPage(page);}}
         />
       )}
       {page === "memberships" && (
@@ -931,7 +936,9 @@ function AccountConsole({
           <Catalog
             {...shared}
             kind="membership"
-            initialProductId={initialProductId}
+            key={selectedOffer?.id || "all"}
+            initialProductId={selectedOffer?.product_id || initialProductId}
+            initialOfferId={selectedOffer?.id}
             offers={offers}
             subscriptions={subscriptions.data || []}
             capabilities={capabilities}
@@ -942,6 +949,7 @@ function AccountConsole({
         <Catalog
           {...shared}
           kind="addon"
+          initialProductId={initialProductId}
           offers={offers}
           subscriptions={subscriptions.data || []}
           capabilities={capabilities}

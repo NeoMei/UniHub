@@ -118,7 +118,7 @@ it("shows an account-bound checkout summary before a purchase mutation", () => {
   );
   fireEvent.click(screen.getByRole("button", { name: "购买" }));
   render(<>{act.mock.calls[0][0].content}</>);
-  expect(screen.getByText("付费账户")).toBeDefined();
+  expect(act.mock.calls[0][0].path).toBe("/v1/accounts/A/orders");
   expect(screen.getByText("资金来源")).toBeDefined();
   expect(screen.getByText(/产品钱包优先/)).toBeDefined();
 });
@@ -263,4 +263,49 @@ it("derives CREDIT applicability from the enabled funding mode, including paid-a
   expect(screen.getByText(/AddonProduct/)).toBeDefined();
   view.rerender(<CreditApplicability products={[{id: "addon-only", name: "AddonProduct", billing_profile: {...profile, usage: {...profile.usage, funding_modes: ["prepaid_cash"]}}}]} />);
   expect(screen.queryByText(/AddonProduct/)).toBeNull();
+});
+
+it("hands off one selected eligible offer and requires a separate purchase confirmation", () => {
+  const act = vi.fn<(spec: ActionSpec) => void>();
+  const other = {...membership, id: "other", name: "另一个方案"};
+  render(<Catalog {...shared} act={act} kind="membership" initialOfferId={membership.id} initialProductId="product-a" offers={{data: [membership, other], loading: false}} subscriptions={[]} />);
+  expect(screen.queryByText("另一个方案")).toBeNull();
+  expect(act).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", {name: "购买"}));
+  expect(act).toHaveBeenCalledTimes(1);
+  expect(act.mock.calls[0][0].body).toEqual({offer_id: membership.id});
+  expect(act.mock.calls[0][0].path).toContain("/A/orders");
+  render(<>{act.mock.calls[0][0].content}</>);
+  expect(screen.getByText("产品 A / 功能年费")).toBeDefined();
+});
+
+it("keeps browsing, changing filters, and nonfinancial selection mutation-free", () => {
+  const act = vi.fn();
+  const fetch = vi.fn();
+  vi.stubGlobal("fetch", fetch);
+  const offers = {data: [membership, {...membership, id: "team", name: "仅团队可买", account_kind: "team"}, {...membership, id: "test", name: "仅测试商品", sandbox: true}, {...membership, id: "draft", name: "草稿商品", status: "draft"}], loading: false};
+  render(<Catalog {...shared} account={{...shared.account, role: "member"}} session={{...shared.session, sandbox: false}} act={act} kind="membership" offers={offers} subscriptions={[]} capabilities={{loading: false, data: {real_payments_configured: true}}} />);
+  expect(screen.queryByText("仅团队可买")).toBeNull();
+  expect(screen.queryByText("仅测试商品")).toBeNull();
+  expect(screen.queryByText("草稿商品")).toBeNull();
+  fireEvent.change(screen.getByRole("combobox", {name: "方案产品"}), {target: {value: "product-a"}});
+  fireEvent.click(screen.getByRole("button", {name: "购买"}));
+  expect(act).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("keeps an unknown product hint unresolved instead of exposing unrelated offers", () => {
+  render(<Catalog {...shared} kind="membership" initialProductId="missing-product" offers={{data: [membership], loading: false}} subscriptions={[]} />);
+  expect(screen.queryByRole("button", {name: "购买"})).toBeNull();
+  expect(screen.getByText("暂无已发布商品")).toBeDefined();
+});
+
+it("clears a selected offer when changing products without preparing a purchase", () => {
+  const act = vi.fn();
+  render(<Catalog {...shared} products={[...shared.products, {id: "product-b", name: "产品 B"}]} act={act} kind="membership" initialOfferId={membership.id} initialProductId="product-a" offers={{data: [membership, {...membership, id: "second-product", product_id: "product-b", name: "产品 B 方案"}], loading: false}} subscriptions={[]} />);
+  expect(screen.queryByText("产品 B 方案")).toBeNull();
+  fireEvent.change(screen.getByRole("combobox", {name: "方案产品"}), {target: {value: "product-b"}});
+  expect(screen.getByText("产品 B 方案")).toBeDefined();
+  expect(screen.queryByText("功能年费")).toBeNull();
+  expect(act).not.toHaveBeenCalled();
 });

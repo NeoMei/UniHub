@@ -32,7 +32,22 @@ import {
   ResourceState,
   Table,
 } from "./ui";
-export function Catalog({
+export function eligibleOffers(offers: Offer[], accountKind: string, sandbox: boolean, productId?: string) {
+  return offers.filter(offer => offer.status === "published" &&
+    (offer.account_kind === "both" || offer.account_kind === accountKind) &&
+    (!offer.sandbox || sandbox) && (!productId || offer.product_id === productId));
+}
+
+export function OfferEntitlements({offer}: {offer: Offer}) {
+  const labels: Record<string, string> = {seats: "席位数", workspace: "工作区"};
+  return <>{Object.entries(offer.entitlements || {}).filter(([key]) => labels[key] || /[\u3400-\u9fff]/.test(key)).map(([key, value]) =>
+    <small key={key}>{labels[key] || key}：{value === "enabled" ? "已包含" : value === "disabled" ? "未包含" : value}</small>)}</>;
+}
+
+export function Catalog(props: Parameters<typeof AccountCatalog>[0]) {
+  return <AccountCatalog key={`${props.account.id}/${props.account.role}/${props.kind}`} {...props} />;
+}
+function AccountCatalog({
   account,
   session,
   products,
@@ -41,9 +56,11 @@ export function Catalog({
   offers,
   subscriptions,
   initialProductId,
+  initialOfferId,
   capabilities = { loading: false },
 }: Shared & {
   initialProductId?: string;
+  initialOfferId?: string;
   kind: "membership" | "addon";
   offers: Resource<Offer[]>;
   subscriptions: Subscription[];
@@ -56,15 +73,10 @@ export function Catalog({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState("");
   const [productFilter, setProductFilter] = useState<string>();
-  const selectedProduct = productFilter ?? (products.some(p => p.id === initialProductId) ? initialProductId : "");
-  const eligible = (offers.data || []).filter(
-    (o) =>
-      (!selectedProduct || o.product_id === selectedProduct) &&
-      o.kind === kind &&
-      o.status === "published" &&
-      (o.account_kind === "both" || o.account_kind === account.kind) &&
-      (!o.sandbox || session.sandbox),
-  );
+  const selectedProduct = productFilter ?? initialProductId ?? "";
+  const [selectedOfferId, setSelectedOfferId] = useState(initialOfferId);
+  const eligible = eligibleOffers(offers.data || [], account.kind, session.sandbox, selectedProduct)
+    .filter(offer => offer.kind === kind && (!selectedOfferId || offer.id === selectedOfferId));
   const canBuy = financeRole(account.role);
   const commerceReady =
     session.sandbox ||
@@ -102,10 +114,7 @@ export function Catalog({
       confirm: "确认购买",
       content: (
         <>
-          <OfferDetails offer={offer} name={name(offer.product_id)} accountName={account.name} />
-          <Notice>
-            优先使用该产品钱包；统一钱包补足须有独立授权。请先核对钱包与自动设置。
-          </Notice>
+          <OfferDetails offer={offer} name={name(offer.product_id)} />
           {offer.sandbox && (
             <Notice>此商品为测试商品，不代表实际商业售价。</Notice>
           )}
@@ -127,6 +136,7 @@ export function Catalog({
       content: (
         <>
           <dl>
+            <Detail label="产品">{name(value.offer.product_id)}</Detail>
             <Detail label="目标方案">{value.offer.name}</Detail>
             <Detail label="本次补差">¥ {fixed(value.amount)}</Detail>
             {value.offer.monthly_credit === "0" ? (
@@ -163,7 +173,8 @@ export function Catalog({
   }
   return (
     <Panel title={kind === "addon" ? "可用加量包" : "会员方案"}>
-      <label>方案产品<select value={selectedProduct || ""} onChange={event => setProductFilter(event.target.value)}><option value="">全部产品</option>{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
+      <label>方案产品<select value={selectedProduct || ""} onChange={event => {setProductFilter(event.target.value); setSelectedOfferId(undefined);}}><option value="">全部产品</option>{selectedProduct && !products.some(product => product.id === selectedProduct) && <option value={selectedProduct}>未核验的产品</option>}{products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>
+      {selectedOfferId && <button className="text-button" onClick={() => setSelectedOfferId(undefined)}>查看该产品其他方案</button>}
       <CreditApplicability products={products} />
       {error && <Notice kind="error">{error}</Notice>}
       {offers.loading ? (
@@ -213,13 +224,7 @@ export function Catalog({
                       </>
                     )}
                   </p>
-                  {Object.entries(o.entitlements || {})
-                    .filter(([key]) => key !== "sandbox")
-                    .map(([key, value]) => (
-                      <small key={key}>
-                        {key}：{value}
-                      </small>
-                    ))}
+                  <OfferEntitlements offer={o} />
                 </div>
                 <div className="offer-price">
                   <strong>¥ {fixed(o.price)}</strong>
@@ -310,12 +315,11 @@ export function Catalog({
     </Panel>
   );
 }
-function OfferDetails({ offer, name, accountName }: { offer: Offer; name: string; accountName?: string }) {
+function OfferDetails({ offer, name }: { offer: Offer; name: string }) {
   const featureSubscription =
     offer.kind === "membership" && offer.monthly_credit === "0";
   return (
     <dl>
-      {accountName && <Detail label="付费账户">{accountName}</Detail>}
       <Detail label="产品 / 方案">
         {name} / {offer.name}
       </Detail>
@@ -340,7 +344,7 @@ function OfferDetails({ offer, name, accountName }: { offer: Offer; name: string
         <Detail label="订阅权益">纯功能订阅，不含模型额度</Detail>
       ) : (
         <Detail label={offer.kind === "addon" ? "本次额度" : "每月包含额度"}>
-          {fixed(offer.monthly_credit, 6)}
+          {fixed(offer.monthly_credit, 6)} CREDIT（账户共享）
         </Detail>
       )}
       {offer.kind === "membership" && !featureSubscription && (
@@ -348,11 +352,9 @@ function OfferDetails({ offer, name, accountName }: { offer: Offer; name: string
           按月发放，每月批次独立到期；年付不提前发放全年额度。
         </Detail>
       )}
-      {accountName && (
-        <Detail label="资金来源">
+      <Detail label="资金来源">
           产品钱包优先；统一钱包补足须有独立授权。
         </Detail>
-      )}
     </dl>
   );
 }

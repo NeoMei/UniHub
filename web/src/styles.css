@@ -1960,3 +1960,18 @@ td strong {
 .app-shell .page-heading p { color: #536976; }
 .app-shell h1 { font-size: 30px; }
 @media (max-width: 640px) { .app-shell h1 { font-size: 25px; } }
+
+/* Plans and cash remain separate from the account-wide CREDIT pool. */
+.billing-periods { display: flex; gap: 8px; margin-bottom: 12px; }
+.billing-summary-grid { grid-template-columns: 1fr; gap: 0; }
+.billing-summary-grid .panel { margin-bottom: 16px; }
+.billing-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 14px; }
+.billing-metrics > .billing-asset { display: grid; grid-template-columns: 1fr; gap: 6px; border: 0; align-content: start; }
+.billing-asset h3 { margin: 0; font-size: 14px; font-weight: 500; }
+.billing-asset strong { font-size: 26px; }
+.billing-asset small { color: var(--muted); }
+.billing-offer-card small { display: block; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .billing-metrics { grid-template-columns: 1fr; }
+  .billing-summary-actions { flex-wrap: wrap; }
+}

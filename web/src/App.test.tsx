@@ -481,3 +481,32 @@ it("shows a failed wallet catalog separately and recovers the confirmed target t
   expect(calls.every(call => call.method === "GET")).toBe(true);
   expect(catalogReads).toBe(2);
 });
+
+it("carries a chosen plan to account-bound confirmation and clears it when payer changes without submitting orders", async () => {
+  const mutations: string[] = [];
+  window.history.replaceState(null, "", "/?view=billing&product=notes");
+  const offer = {id: "chosen", name: "选中方案", product_id: "notes", account_kind: "both", kind: "membership", period: "month", price: "1000000", monthly_credit: "1000000", entitlements: {}, status: "published", sandbox: false, rank: 1, validity_months: 1};
+  vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
+    if (options?.method && options.method !== "GET") mutations.push(path);
+    const data = path === "/auth/session" ? {authenticated: true, sandbox: true, csrf_token: "csrf", user: {id: "owner", name: "Owner"}}
+      : path === "/v1/accounts" ? [{id: "A", name: "付款账户 A", kind: "personal", role: "owner"}, {id: "B", name: "付款账户 B", kind: "team", role: "member"}]
+      : path === "/v1/products" ? [{id: "notes", name: "笔记产品"}]
+      : path === "/v1/catalog" ? [offer, {...offer, id: "other", name: "另一个选择"}]
+      : path === "/v1/me/profile" ? {id: "owner", username: "owner", display_name: "Owner", email: "owner@example.test", version: "1"}
+      : path === "/admin/v1/me" ? {enabled: false, roles: [], permissions: []} : [];
+    return new Response(JSON.stringify(data), {status: 200});
+  }));
+  render(<App />);
+  const browse = await screen.findAllByRole("button", {name: "查看方案"});
+  fireEvent.click(browse[0]);
+  expect(screen.queryByText("另一个选择")).toBeNull();
+  expect(mutations).toEqual([]);
+  fireEvent.click(screen.getByRole("button", {name: "购买"}));
+  expect(screen.getByRole("dialog").textContent).toContain("付款账户 A");
+  expect(mutations).toEqual([]);
+  fireEvent.change(screen.getByRole("combobox", {name: "当前付费账户"}), {target: {value: "B"}});
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(await screen.findByText("另一个选择")).toBeDefined();
+  for (const button of screen.getAllByRole("button", {name: "购买"})) expect((button as HTMLButtonElement).disabled).toBe(true);
+  expect(mutations).toEqual([]);
+});

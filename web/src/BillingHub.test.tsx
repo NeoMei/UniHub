@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { BillingHub } from "./BillingHub";
 import type { Account, Batch, Capabilities, Offer, Order, Product, Subscription, Wallet } from "./types";
@@ -89,7 +89,32 @@ it("keeps failed finance resources distinct from valid zero and separates purpos
   expect(screen.queryByText("¥ 0.00")).toBeNull();
   expect(screen.queryByText("还没有生效中的方案")).toBeNull();
   view.rerender(<BillingHub {...props} />);
-  expect(screen.getByText("¥ 0.123456")).toBeDefined();
+  expect(screen.getAllByText("¥ 0.123456").length).toBeGreaterThan(0);
   expect(screen.getByText("¥ 0.00")).toBeDefined();
   expect(screen.getByText("0.000000")).toBeDefined();
+});
+
+it("filters account/product eligibility and hands off only the chosen offer", () => {
+  const selected: Offer[] = [];
+  render(<BillingHub account={account} session={{authenticated: true, sandbox: false}} products={[product]} initialProductId="notes" offers={resource([baseOffer, {...baseOffer, id: "team", name: "团队限定", account_kind: "team"}, {...baseOffer, id: "other", name: "其他产品", product_id: "other"}])} subscriptions={resource([])} credits={resource([])} wallets={resource([])} orders={resource([])} capabilities={resource({})} onSelectOffer={offer => selected.push(offer)} />);
+  expect(screen.queryByText("团队限定")).toBeNull();
+  expect(screen.queryByText("其他产品")).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "查看方案"}));
+  expect(selected).toEqual([baseOffer]);
+});
+
+it("shows paid-through and switches the visible billing period", () => {
+  const props = {account, session: {authenticated: true, sandbox: true}, products: [product], offers: resource([baseOffer, {...baseOffer, id: "annual", name: "年度方案", period: "year"}]), subscriptions: resource<Subscription[]>([{id: "sub", account_id: "A", product_id: "notes", offer: baseOffer, status: "active", anchor: "2026-01-01T00:00:00Z", paid_through: "2099-12-31T00:00:00Z", version: 1}]), credits: resource<Batch[]>([]), wallets: resource<Wallet[]>([]), orders: resource<Order[]>([]), capabilities: resource<Capabilities>({})};
+  render(<BillingHub {...props} />);
+  expect(screen.getByText(/已付费至.*2099/)).toBeDefined();
+  expect(screen.queryByText("年度方案")).toBeNull();
+  fireEvent.click(screen.getByRole("button", {name: "年付方案"}));
+  expect(screen.getByText("年度方案")).toBeDefined();
+  expect(screen.queryByText("基础方案")).toBeNull();
+});
+
+it("front-loads unified cash without claiming it is universally model-spendable", () => {
+  render(<BillingHub account={account} session={{authenticated: true, sandbox: true}} products={[product]} offers={resource([])} subscriptions={resource([])} credits={resource([])} wallets={resource([{product_id: "", asset: "CNY/6", amount: "25000000"}])} orders={resource([])} capabilities={resource({})} />);
+  expect(screen.getByRole("heading", {name: "统一钱包可用现金"})).toBeDefined();
+  expect(screen.getByText(/原生共享现金调用按接入规则使用统一钱包/)).toBeDefined();
 });
