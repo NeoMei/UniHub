@@ -578,7 +578,11 @@ it("refreshes authoritative payer roles from billing and clears stale commerce c
 });
 
 function walletDestinationFixture(authenticated = true, unifiedRecharge = true) {
-  const state = {authenticated};
+  const state = {authenticated, walletError: false, wallets: [
+    {product_id: "", asset: "CNY/6", amount: "0"},
+    {product_id: "llmrouter", asset: "CNY/6", amount: "300000000"},
+    {product_id: "superwagie", asset: "CNY/6", amount: "488000000"},
+  ]};
   const mutations: string[] = [];
   const reads: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
@@ -587,10 +591,12 @@ function walletDestinationFixture(authenticated = true, unifiedRecharge = true) 
       return new Response(JSON.stringify({error: "unexpected_mutation"}), {status: 405});
     }
     reads.push(path);
+    if (path.endsWith("/wallets") && state.walletError) return new Response(JSON.stringify({error: "service_unavailable"}), {status: 503});
     const data = path === "/auth/session" ? {authenticated: state.authenticated, sandbox: true, csrf_token: "csrf", user: {id: "owner", name: "Owner"}}
       : path === "/v1/accounts" ? [{id: "other", name: "另一个账户", kind: "personal", role: "owner"}, {id: "payer", name: "指定付款账户", kind: "team", role: "owner"}]
       : path === "/v1/products" ? [{id: "llmrouter", name: "LLMRouter"}, {id: "superwagie", name: "SuperWagie"}]
       : path === "/v1/capabilities" ? {sandbox: true, unified_wallet_recharge: unifiedRecharge, product_wallet_recharge: true}
+      : path.endsWith("/wallets") ? state.wallets
       : path === "/admin/v1/me" ? {enabled: false, roles: [], permissions: []} : [];
     return new Response(JSON.stringify(data), {status: 200});
   }));
@@ -681,5 +687,39 @@ it("honors disabled unified recharge separately from an enabled product wallet r
   expect(screen.queryByRole("button", {name: "创建测试充值单"})).toBeNull();
   fireEvent.change(target, {target: {value: "llmrouter"}});
   expect((screen.getByRole("button", {name: "创建测试充值单"}) as HTMLButtonElement).disabled).toBe(false);
+  expect(mutations).toEqual([]);
+});
+
+it("makes the unified target balance visible and follows a manual product-wallet selection without writes", async () => {
+  window.history.replaceState(null, "", "/?view=wallets&account=payer&wallet=unified");
+  const {mutations} = walletDestinationFixture();
+  render(<App />);
+  const unified = await screen.findByRole("heading", {name: "统一钱包现金余额"});
+  expect(within(unified.parentElement!).getByText("¥ 0.00")).toBeDefined();
+  expect(unified.closest("details")).toBeNull();
+  expect(screen.queryByRole("heading", {name: "托管模型现金余额"})).toBeNull();
+  const target = screen.getByRole("combobox", {name: "充值目标钱包"});
+  fireEvent.change(target, {target: {value: "llmrouter"}});
+  const product = screen.getByRole("heading", {name: "托管模型现金余额"});
+  expect(within(product.parentElement!).getByText("¥ 300.00")).toBeDefined();
+  expect(screen.queryByRole("heading", {name: "统一钱包现金余额"})).toBeNull();
+  fireEvent.change(target, {target: {value: ""}});
+  expect(within(screen.getByRole("heading", {name: "统一钱包现金余额"}).parentElement!).getByText("¥ 0.00")).toBeDefined();
+  expect(mutations).toEqual([]);
+});
+
+it.each(["missing", "failed"])("never fabricates zero for a %s unified-wallet balance", async (failure) => {
+  window.history.replaceState(null, "", "/?view=wallets&account=payer&wallet=unified");
+  const {state, mutations} = walletDestinationFixture();
+  if (failure === "missing") state.wallets = state.wallets.filter(wallet => wallet.product_id !== "");
+  else state.walletError = true;
+  render(<App />);
+  if (failure === "missing") {
+    const unified = await screen.findByRole("heading", {name: "统一钱包现金余额"});
+    expect(within(unified.parentElement!).getByText("—")).toBeDefined();
+  } else {
+    await screen.findByText("服务暂时不可用，请稍后重试。");
+  }
+  expect(screen.queryByText("¥ 0.00")).toBeNull();
   expect(mutations).toEqual([]);
 });

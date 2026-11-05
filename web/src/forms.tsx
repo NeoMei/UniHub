@@ -371,20 +371,21 @@ export function CreditApplicability({ products }: { products: Product[] }) {
   const accepting = products.filter(product => product.billing_profile?.usage.enabled && product.billing_profile.usage.funding_modes.includes("credits"));
   return <p className="muted credit-applicability">会员/加量包额度（CREDIT）是独立权益资产，非人民币。{accepting.length ? `当前产品规则允许 ${accepting.map(product => product.name).join("、")} 使用额度；具体适用范围以产品规则为准。` : "模型现金余额单独记账；额度的适用范围以产品规则为准。"}</p>;
 }
-export function WalletBalances({ wallets, products }: { wallets: Resource<Wallet[]>; products: Product[] }) {
-  const purpose = (id: string) => id === "llmrouter" ? "托管模型现金余额" : "会员购买余额";
+export function WalletBalances({ wallets, products, focusProductId }: { wallets: Resource<Wallet[]>; products: Product[]; focusProductId?: string }) {
+  const primaryProducts = focusProductId === "" ? [""] : ["llmrouter", "superwagie"];
+  const purpose = (id: string) => id === "" ? "统一钱包现金余额" : id === "llmrouter" ? "托管模型现金余额" : "会员购买余额";
   const cash = (wallet: Wallet) => ["CNY/6", "CNY"].includes(wallet.asset);
   if (wallets.loading) return <p role="status">正在加载钱包余额…</p>;
   if (wallets.error) return <Notice kind="error">{wallets.error}</Notice>;
   return <section aria-label="用途余额">
     <div className="purpose-balances">
-      {["llmrouter", "superwagie"].map(id => {
+      {primaryProducts.map(id => {
         const wallet = wallets.data?.find(value => value.product_id === id && cash(value));
-        return <div key={id}><h3>{purpose(id)}</h3><strong>{wallet ? `¥ ${fixed(wallet.amount)}` : "—"}</strong><small>{id === "llmrouter" ? "LLMRouter" : "SuperWagie"} · 人民币</small></div>;
+        return <div key={id}><h3>{purpose(id)}</h3><strong>{wallet ? `¥ ${fixed(wallet.amount)}` : "—"}</strong><small>{id === "" ? "LLMRouter 原生 Key 与原生套餐" : id === "llmrouter" ? "LLMRouter" : "SuperWagie"} · 人民币</small></div>;
       })}
     </div>
-    <details className="wallet-other-balances"><summary>统一钱包与其他产品余额</summary>
-      <div className="wallet-list">{wallets.data?.filter(wallet => !["llmrouter", "superwagie"].includes(wallet.product_id) || !cash(wallet)).map(wallet => <div key={`${wallet.product_id}/${wallet.asset}`} className="wallet-row">
+    <details className="wallet-other-balances"><summary>{focusProductId === "" ? "其他产品余额" : "统一钱包与其他产品余额"}</summary>
+      <div className="wallet-list">{wallets.data?.filter(wallet => !primaryProducts.includes(wallet.product_id) || !cash(wallet)).map(wallet => <div key={`${wallet.product_id}/${wallet.asset}`} className="wallet-row">
         <div><h3>{wallet.product_id ? products.find(product => product.id === wallet.product_id)?.name || wallet.product_id : "统一钱包"}</h3><small>{wallet.asset}</small></div>
         <strong>{cash(wallet) ? `¥ ${fixed(wallet.amount)}` : wallet.amount}</strong>
       </div>)}</div>
@@ -439,7 +440,7 @@ function AccountWallets({account, session, products, act, wallets, operations, r
     } catch (e) {setError((e as Error).message);}
   }
   return (<>
-    <Panel title="现金钱包"><WalletBalances wallets={wallets} products={products} /></Panel>
+    <Panel title="现金钱包"><WalletBalances wallets={wallets} products={products} focusProductId={product} /></Panel>
     <Panel title={session.sandbox ? "测试充值" : "充值"}>
       {session.sandbox ? <Notice>测试充值仅用于验证流程，不涉及真实支付；充值单需要手动确认测试入账。</Notice> : <Notice>真实支付渠道尚未开通。可在下方手动划拨已有统一钱包余额。</Notice>}
       {capabilities.error && <Notice kind="error">{capabilities.error}</Notice>}
