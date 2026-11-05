@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 	"unihub/internal/accounts"
@@ -40,7 +41,11 @@ func TestRuntimeCashRequiresExplicitServiceMandateForAllCallOperations(t *testin
 	if _, err = p.Exec(ctx, `INSERT INTO product_user_access(user_id,product_id,instance_id,roles,active,product_role,version) VALUES($1,'llmrouter','default','["member"]',true,1,1)`, u.ID); err != nil {
 		t.Fatal(err)
 	}
-	l := ledger.NewFormance("http://127.0.0.1:53068", fmt.Sprintf("runtime-cash-http-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
+	base := os.Getenv("UNIHUB_TEST_LEDGER_URL")
+	if base == "" {
+		base = "http://127.0.0.1:53068"
+	}
+	l := ledger.NewFormance(base, fmt.Sprintf("runtime-cash-http-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
 	if err = l.Ensure(ctx); err != nil {
 		t.Fatal(err)
 	}

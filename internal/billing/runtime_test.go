@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 	"unihub/internal/accounts"
@@ -36,7 +37,11 @@ func runtimeFixture(t *testing.T) (*Service, RuntimeScope, productusers.RuntimeB
 	if _, e = p.Exec(ctx, `INSERT INTO product_user_access(user_id,product_id,instance_id,roles,active,product_role,version) VALUES($1,'llmrouter','default','["member"]',true,100,1)`, u.ID); e != nil {
 		t.Fatal(e)
 	}
-	l := ledger.NewFormance("http://127.0.0.1:53068", fmt.Sprintf("runtime-test-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
+	base := os.Getenv("UNIHUB_TEST_LEDGER_URL")
+	if base == "" {
+		base = "http://127.0.0.1:53068"
+	}
+	l := ledger.NewFormance(base, fmt.Sprintf("runtime-test-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
 	if e = l.Ensure(ctx); e != nil {
 		t.Fatal(e)
 	}

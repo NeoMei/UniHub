@@ -53,7 +53,11 @@ func TestRuntimeTemplateDeliversVerifiedPaymentExactlyOnce(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	l := ledger.NewFormance("http://127.0.0.1:53068", fmt.Sprintf("runtime-template-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
+	base := os.Getenv("UNIHUB_TEST_LEDGER_URL")
+	if base == "" {
+		base = "http://127.0.0.1:53068"
+	}
+	l := ledger.NewFormance(base, fmt.Sprintf("runtime-template-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
 	if e = l.Ensure(ctx); e != nil {
 		t.Fatal(e)
 	}

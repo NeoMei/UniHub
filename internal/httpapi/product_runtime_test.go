@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,11 @@ func TestProductRuntimeHTTPKeepsFullNativeKeyAndPriceOutsideCentralCatalog(t *te
 	a := accounts.New(p)
 	reg := productusers.Registry{"llmrouter/default": {ProductID: "llmrouter", InstanceID: "default", Version: 1, DefaultRoles: []string{"member"}, Roles: []productusers.Role{{ID: "member", Permissions: []string{"product:use", "credit:adjust"}}}}}
 	users := productusers.New(p, reg, "https://runtime.test", nil)
-	l := ledger.NewFormance("http://127.0.0.1:53068", fmt.Sprintf("runtime-http-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
+	base := os.Getenv("UNIHUB_TEST_LEDGER_URL")
+	if base == "" {
+		base = "http://127.0.0.1:53068"
+	}
+	l := ledger.NewFormance(base, fmt.Sprintf("runtime-http-%d", time.Now().UnixNano()), &http.Client{Timeout: 10 * time.Second})
 	if e := l.Ensure(ctx); e != nil {
 		t.Fatal(e)
 	}

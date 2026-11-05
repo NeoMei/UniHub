@@ -51,11 +51,11 @@ func TestModelHTTPUsesBoundPayerAndOnlyServiceCanSettle(t *testing.T) {
 	if _, e = b.SeedSandbox(ctx); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = b.Purchase(ctx, u.ID, account, billing.PurchaseRequest{OfferID: "sandbox-sw-month-1", Key: "buy"}); e != nil {
+	rate := billing.Rate{ID: "test-rate-1", Model: "synthetic-model", Asset: billing.CreditAsset, Semantics: "exclusive_v1", Input: billing.Rational{Numerator: "1", Denominator: "2"}, Output: billing.Rational{Numerator: "1", Denominator: "2"}, CacheRead: billing.Rational{Numerator: "0", Denominator: "1"}, CacheWrite: billing.Rational{Numerator: "0", Denominator: "1"}, Reasoning: billing.Rational{Numerator: "0", Denominator: "1"}}
+	if _, e = b.PublishRate(ctx, u.ID, rate); e != nil {
 		t.Fatal(e)
 	}
-	rate := billing.Rate{ID: "test-rate-1", Model: "synthetic-model", Semantics: "exclusive_v1", Input: billing.Rational{Numerator: "1", Denominator: "2"}, Output: billing.Rational{Numerator: "1", Denominator: "2"}, CacheRead: billing.Rational{Numerator: "0", Denominator: "1"}, CacheWrite: billing.Rational{Numerator: "0", Denominator: "1"}, Reasoning: billing.Rational{Numerator: "0", Denominator: "1"}}
-	if _, e = b.PublishRate(ctx, u.ID, rate); e != nil {
+	if _, e = b.Purchase(ctx, u.ID, account, billing.PurchaseRequest{OfferID: "sandbox-sw-month-1", Key: "buy"}); e != nil {
 		t.Fatal(e)
 	}
 	const serviceKey = "test-only-router-service-credential-at-least-32-bytes"

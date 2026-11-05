@@ -591,6 +591,7 @@ func TestComposableBillingPureSubscriptionZeroCreditsHTTPAcceptance(t *testing.T
 func TestComposableBillingPaidHybridYearKeepsMonthlyGrantsAfterProfileChangeHTTP(t *testing.T) {
 	f := newBillingModesFixture(t)
 	f.profile("hybrid")
+	f.rate("annual-credit-rate", billing.CreditAsset, "2")
 	f.recharge("superwagie", "2000000", "annual-membership-cash")
 	f.offer("hybrid-year", "year", "100")
 	order := f.purchase("hybrid-year", "hybrid-year-buy")

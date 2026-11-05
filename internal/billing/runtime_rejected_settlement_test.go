@@ -112,7 +112,7 @@ func TestRuntimeRejectedSettlementRetainsFirstEvidence(t *testing.T) {
 					t.Fatal("private observation leaked into runtime response")
 				}
 			}
-			// Two independently constructed services exercise the shared database lock.
+			// Concurrent retries preserve the observation already retained above.
 			var wg sync.WaitGroup
 			errs := make(chan error, 8)
 			for i := 0; i < 8; i++ {
@@ -213,5 +213,84 @@ func TestRuntimeRejectedSettlementStorageFailureIsTruthful(t *testing.T) {
 	}
 	if err = s.pool.QueryRow(ctx, `SELECT to_jsonb(c)->'rejected_settlement' FROM product_runtime_calls c WHERE id=$1`, call.ID).Scan(&raw); err != nil || len(raw) == 0 || string(raw) == "null" {
 		t.Fatalf("storage repair failed: %s %v", raw, err)
+	}
+}
+
+// Two services racing to write the first observation must retain one complete
+// report, including its matching digest, without creating a settlement command.
+func TestRuntimeRejectedSettlementConcurrentFirstReports(t *testing.T) {
+	s, scope, binding := runtimeFixture(t)
+	ctx := context.Background()
+	address := runtimeCallAddress(scope, binding.PersonalAccountID, RuntimeAsset, "available")
+	if _, err := s.ledger.Post(ctx, ledger.Command{Reference: "first-report-funding", Postings: []ledger.Posting{{Source: "world", Destination: address, Asset: RuntimeAsset, Amount: 100}}}); err != nil {
+		t.Fatal(err)
+	}
+	in := RuntimeReserveRequest{CallID: "concurrent-first-reports", LocalUserID: "42", AccountID: binding.PersonalAccountID, RequestDigest: "request", Model: "native-model", Operation: "chat", Asset: RuntimeAsset, UnitVersion: RuntimeUnitVersion, PriceVersion: "v1", PricingDigest: "pricing", Amount: "10"}
+	call, err := s.RuntimeReserve(ctx, scope, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw json.RawMessage
+	if err = s.pool.QueryRow(ctx, `SELECT to_jsonb(c)->'rejected_settlement' FROM product_runtime_calls c WHERE id=$1`, call.ID).Scan(&raw); err != nil || (len(raw) > 0 && string(raw) != "null") {
+		t.Fatalf("observation must initially be empty: %v", err)
+	}
+	var before int
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM billing_commands WHERE account_id=$1`, in.AccountID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	other := New(s.pool, accounts.New(s.pool), s.ledger)
+	other.ConfigureProductUsers(s.productUsers)
+	reports := []RuntimeSettlementRequest{
+		{Amount: "11", PricingDigest: "pricing", Usage: json.RawMessage(`{"requests":1,"input_tokens":11}`)},
+		{Amount: "12", PricingDigest: "pricing", Usage: json.RawMessage(`{"requests":2,"output_tokens":12}`)},
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for i, service := range []*Service{s, other} {
+		go func(service *Service, report RuntimeSettlementRequest) {
+			<-start
+			_, err := service.RuntimeSettle(ctx, scope, in.CallID, report)
+			errs <- err
+		}(service, reports[i])
+	}
+	close(start)
+	for range reports {
+		if err = <-errs; !errors.Is(err, ErrConflict) {
+			t.Fatalf("overheld report must conflict: %v", err)
+		}
+	}
+	if err = s.pool.QueryRow(ctx, `SELECT rejected_settlement FROM product_runtime_calls WHERE id=$1`, call.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var proof runtimeRejectedSettlement
+	if err = json.Unmarshal(raw, &proof); err != nil {
+		t.Fatal(err)
+	}
+	matches := 0
+	for _, report := range reports {
+		var want, got map[string]int
+		if json.Unmarshal(report.Usage, &want) != nil || json.Unmarshal(proof.Usage, &got) != nil {
+			t.Fatal("invalid retained usage")
+		}
+		wantJSON, _ := json.Marshal(want)
+		gotJSON, _ := json.Marshal(got)
+		if proof.Amount == report.Amount && proof.PricingDigest == report.PricingDigest && proof.Digest == hash(report) && string(wantJSON) == string(gotJSON) {
+			matches++
+		}
+	}
+	if matches != 1 || proof.CallID != in.CallID || proof.AccountID != in.AccountID || proof.RuntimeScope != scope || proof.Asset != in.Asset || proof.UnitVersion != in.UnitVersion || proof.RequestDigest != in.RequestDigest || proof.Held != "10" || proof.Reason != "amount_exceeds_held" || proof.ObservedAt.IsZero() {
+		t.Fatal("first evidence is missing, mixed, or bound to the wrong call")
+	}
+	got, err := other.RuntimeGetCall(ctx, scope, in.CallID)
+	if err != nil || got.Status != "RESERVED" || got.Held != "10" || got.Charged != "0" || got.FinalDigest != "" || len(got.Usage) != 0 {
+		t.Fatalf("rejected reports changed accepted state: %v", err)
+	}
+	balance, err := s.ledger.Balance(ctx, address, RuntimeAsset)
+	if err != nil || balance != 90 {
+		t.Fatalf("rejected reports changed available balance: %d %v", balance, err)
+	}
+	var after int
+	if err = s.pool.QueryRow(ctx, `SELECT count(*) FROM billing_commands WHERE account_id=$1`, in.AccountID).Scan(&after); err != nil || after != before {
+		t.Fatalf("rejected reports created a financial command: before=%d after=%d err=%v", before, after, err)
 	}
 }

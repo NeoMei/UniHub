@@ -43,6 +43,13 @@ func TestComposableBillingActualGatewayAcceptance(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f := newBillingModesFixture(t)
 			cash := mode == "prepaid_without_membership"
+			for _, asset := range []string{billing.CreditAsset, billing.CashAsset} {
+				r := billing.Rate{ID: "gateway-credit", Model: "unihub-synthetic-model", Asset: asset, Semantics: "exclusive_v1", Input: billing.Rational{Numerator: "1", Denominator: "1"}, Output: billing.Rational{Numerator: "2", Denominator: "1"}, CacheRead: billing.Rational{Numerator: "1", Denominator: "2"}, CacheWrite: billing.Rational{Numerator: "0", Denominator: "1"}, Reasoning: billing.Rational{Numerator: "3", Denominator: "1"}}
+				if asset == billing.CashAsset {
+					r.ID, r.Input.Numerator, r.Output.Numerator, r.CacheRead, r.Reasoning.Numerator = "gateway-cash", "3", "5", billing.Rational{Numerator: "2", Denominator: "1"}, "7"
+				}
+				f.request("POST", "/ops/v1/rates", "alice", r, "", 201, nil)
+			}
 			if cash {
 				f.profile("prepaid")
 			} else {
@@ -54,13 +61,7 @@ func TestComposableBillingActualGatewayAcceptance(t *testing.T) {
 			f.recharge("superwagie", "1000000", "source-cash")
 			f.recharge("", "7000000", "unified-cash")
 			f.recharge("llmrouter", "1000000", "router-cash")
-			for _, asset := range []string{billing.CreditAsset, billing.CashAsset} {
-				r := billing.Rate{ID: "gateway-credit", Model: "unihub-synthetic-model", Asset: asset, Semantics: "exclusive_v1", Input: billing.Rational{Numerator: "1", Denominator: "1"}, Output: billing.Rational{Numerator: "2", Denominator: "1"}, CacheRead: billing.Rational{Numerator: "1", Denominator: "2"}, CacheWrite: billing.Rational{Numerator: "0", Denominator: "1"}, Reasoning: billing.Rational{Numerator: "3", Denominator: "1"}}
-				if asset == billing.CashAsset {
-					r.ID, r.Input.Numerator, r.Output.Numerator, r.CacheRead, r.Reasoning.Numerator = "gateway-cash", "3", "5", billing.Rational{Numerator: "2", Denominator: "1"}, "7"
-				}
-				f.request("POST", "/ops/v1/rates", "alice", r, "", 201, nil)
-			}
+
 			var grant modelaccess.Grant
 			path := "/v1/accounts/" + f.account
 			f.request("POST", path+"/model-credentials", "product-alice", modelaccess.Request{Models: []string{"unihub-synthetic-model"}, TaskID: "acceptance-task"}, "", 201, &grant)

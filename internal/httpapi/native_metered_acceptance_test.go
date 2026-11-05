@@ -23,7 +23,6 @@ func TestNativeMeteredUnitsAndAssetsHTTPAcceptance(t *testing.T) {
 				f.profile("hybrid")
 				f.recharge("superwagie", "3000000", "native-membership-cash")
 				f.offer("native-month", "month", "1000")
-				f.purchase("native-month", "native-membership")
 			}
 			cases := []struct {
 				name, operation, policy, key, unit, namespace, value string
@@ -44,6 +43,9 @@ func TestNativeMeteredUnitsAndAssetsHTTPAcceptance(t *testing.T) {
 					price := metering.Price{Version: "metered_v2", Operation: tc.operation, Policy: tc.policy, Terms: []metering.Term{{Key: tc.key, Unit: tc.unit, ProviderUnit: tc.namespace, Price: metering.Rational{Numerator: "2", Denominator: "1"}}}}
 					rate := billing.Rate{ID: "native-" + tc.name, Model: "acceptance-model", Asset: asset, Semantics: "metered_v2", Metered: &price}
 					f.request("POST", "/ops/v1/rates", "alice", rate, "", 201, nil)
+					if asset == billing.CreditAsset && tc.name == "chat" {
+						f.purchase("native-month", "native-membership")
+					}
 					grant := f.credential(mode)
 					id := "native-" + tc.name
 					usage := billing.Usage{Metered: &metering.Usage{Version: "metered_v2", Operation: tc.operation, State: "confirmed", Source: "supplier_fixture", Measurements: []metering.Measurement{{Key: tc.key, Unit: tc.unit, ProviderUnit: tc.namespace, Quantity: metering.Quantity{Value: tc.value, Scale: tc.scale}}}}}
