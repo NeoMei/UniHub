@@ -541,6 +541,7 @@ it("refreshes failed catalog and payment-capability reads before allowing purcha
 it("refreshes authoritative payer roles from billing and clears stale commerce confirmation on revocation", async () => {
   window.history.replaceState(null, "", "/?view=billing");
   let role = "owner";
+  const refreshedCatalog: Array<() => void> = [];
   const reads: Record<string, number> = {};
   const mutations: string[] = [];
   vi.stubGlobal("fetch", vi.fn(async (path: string, options?: RequestInit) => {
@@ -551,6 +552,7 @@ it("refreshes authoritative payer roles from billing and clears stale commerce c
       : path === "/v1/products" ? [{id: "notes", name: "笔记"}]
       : path === "/v1/catalog" ? [{id: "plan", name: "可选方案", product_id: "notes", account_kind: "both", kind: "membership", period: "month", price: "1000000", monthly_credit: "0", entitlements: {}, status: "published", sandbox: false, rank: 1, validity_months: 1}]
       : path === "/admin/v1/me" ? {enabled: false, roles: [], permissions: []} : [];
+    if (path === "/v1/catalog" && role === "member") await new Promise<void>(resolve => refreshedCatalog.push(resolve));
     return new Response(JSON.stringify(data), {status: 200});
   }));
   render(<App />);
@@ -565,7 +567,11 @@ it("refreshes authoritative payer roles from billing and clears stale commerce c
   expect(reads["/auth/session"]).toBe(2);
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(await screen.findByText("钱包仅财务角色可查看")).toBeDefined();
-  fireEvent.click(screen.getByRole("button", {name: "查看方案"}));
+  expect(within(screen.getByRole("heading", {name: "选择方案"}).closest(".panel") as HTMLElement).getByText("正在加载方案…")).toBeDefined();
+  expect(screen.queryByRole("button", {name: "查看方案"})).toBeNull();
+  // Role/account readiness does not imply that the independently refreshed catalog is ready.
+  await act(async () => { refreshedCatalog.forEach(resolve => resolve()); });
+  fireEvent.click(await screen.findByRole("button", {name: "查看方案"}));
   expect((screen.getByRole("button", {name: "购买"}) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole("button", {name: "确认购买"})).toBeNull();
   expect(mutations).toEqual([]);
