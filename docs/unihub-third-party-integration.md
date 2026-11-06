@@ -515,6 +515,8 @@ const grant = await hub.createAPIKey(accountId, {
 
 Key 会绑定当前用户、账户、产品、实例、模型和资产，服务端只保存摘要。撤销、用户停用、产品撤权或 Key 过期会阻止新的预占；已接受的在途调用仍按原付款方完成结算或释放。
 
+已有 Key 可用 `POST /v1/accounts/{account}/api-keys/{key}/models` 追加当前目录中的精确模型 ID，请求为 `{"models":["exact-model-id"],"origin_product_id":"superwagie","instance_id":"default"}`。产品客户端的产品和实例由已验证 registry 绑定，可省略这两个字段。请求和追加后的模型范围均不超过 32 个；重复追加幂等，模型只增加，原 token 和 ID 不变。响应为含完整 `models` 的安全 Key 元数据，不再返回 token。操作者须为 Key 本人或账户 owner/billing_admin，且操作者与持有人仍具有当前账户及产品使用权限；费率、资金资产及产品目录在事务内重新检查。完整契约见 [长期 API Key 与消费预算](headless-product-api.md#长期-api-key-与消费预算)。
+
 预算是独立于钱包余额的消费上限：
 
 ~~~ts

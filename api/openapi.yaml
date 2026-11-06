@@ -2542,6 +2542,14 @@
       "x-product-scopes": ["model-credentials:write"]
       "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}},{"name":"key","in":"path","required":true,"schema":{"type":"string"}},{"name":"product_id","in":"query","schema":{"type":"string"}},{"name":"instance_id","in":"query","schema":{"type":"string"}}]
       "responses": {"204":{"description":"Revoked"},"403":{"$ref":"#/components/responses/Error"},"404":{"$ref":"#/components/responses/Error"}}
+  "/v1/accounts/{account}/api-keys/{key}/models":
+    "post":
+      "operationId": "addAPIKeyModels"
+      "description": "Add exact current catalog model IDs to a live durable key. Members may expand their own keys; account owner/billing_admin may expand keys within the same account, verified product and instance. Both actor and holder must retain current membership and product:use permission. The union must have at most 32 models, each allowed by the current product policy and unambiguous published rates in the key's original asset. One transaction updates models and audits actual additions. Repeated/subset requests are idempotent. Token, ID, payer, holder, funding, expiry and budgets stay unchanged. Returns safe metadata without token or digest."
+      "x-product-scopes": ["model-credentials:write"]
+      "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}},{"name":"key","in":"path","required":true,"schema":{"type":"string"}}]
+      "requestBody": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ManagedAPIKeyModelsRequest"}}}}
+      "responses": {"200":{"description":"Key metadata with complete model union and no bearer","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ManagedAPIKey"}}}},"400":{"$ref":"#/components/responses/Error"},"403":{"$ref":"#/components/responses/Error"},"404":{"$ref":"#/components/responses/Error"}}
   "/v1/accounts/{account}/usage-budget":
     "get":
       "operationId": "usageBudget"
@@ -2838,6 +2846,14 @@
         "expires_at": {"type":"string","format":"date-time"}
         "max_total": {"type":"string","pattern":"^$|^(0|[1-9][0-9]{0,18})$"}
         "max_per_call": {"type":"string","pattern":"^$|^(0|[1-9][0-9]{0,18})$"}
+    "ManagedAPIKeyModelsRequest":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["models"]
+      "properties":
+        "origin_product_id": {"type":"string","description":"Required for console clients; product clients are bound by verified registry."}
+        "instance_id": {"type":"string","default":"default"}
+        "models": {"type":"array","minItems":1,"maxItems":32,"items":{"type":"string"}}
     "ManagedAPIKey":
       "type": "object"
       "properties":

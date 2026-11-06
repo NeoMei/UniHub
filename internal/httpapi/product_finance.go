@@ -24,6 +24,7 @@ var productFinanceRoutes = []string{
 	"GET /v1/accounts/{account}/recharges/{order}",
 	"POST /v1/accounts/{account}/recharges", "POST /v1/accounts/{account}/recharges/{order}/sandbox-settle",
 	"POST /v1/accounts/{account}/api-keys", "DELETE /v1/accounts/{account}/api-keys/{key}", "PUT /v1/accounts/{account}/usage-budget",
+	"POST /v1/accounts/{account}/api-keys/{key}/models",
 }
 
 // productFinanceWriteKey is set only by the verified runtime-service lane.

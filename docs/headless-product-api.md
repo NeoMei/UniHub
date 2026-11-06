@@ -71,7 +71,7 @@ SDK不持久化 token、不写 Cookie/localStorage。BFF 或产品后端必须�
 | `orders:read` / `orders:write` | 订单列表 / 购买、升级报价和接受 |
 | `settings:read` / `settings:write` / `refunds:write` | 统一钱包 funding/renewal 授权读取/变更 / 原订单退款 |
 | `usage:read` | 来源产品调用列表、明细、汇总和本实例预算读取 |
-| `model-credentials:write` | 本来源产品短期模型凭证签发/撤销；本产品实例长期 API Key 创建、列表和撤销 |
+| `model-credentials:write` | 本来源产品短期模型凭证签发/撤销；本产品实例长期 API Key 创建、列表、追加模型和撤销 |
 
 财务查询与命令仍须账户 owner 或 billing_admin。admin 管理普通成员不等于财务权限；新 owner 必须本人接受邀请；最后 owner 不可移除。邀请列表只含仍有效的待接受项，最多最近 100 条，没有通用分页。GET `/v1/invitations` 只看本人收件，GET `/v1/accounts/{account}/invitations` 仅团队 owner/admin 查看；DELETE `/v1/accounts/{account}/invitations/{invitation}` 用于撤销待处理邀请，admin 只能撤销普通成员邀请。
 
@@ -82,6 +82,14 @@ SDK不持久化 token、不写 Cookie/localStorage。BFF 或产品后端必须�
 `GET/POST /v1/accounts/{account}/api-keys` 和 `DELETE /v1/accounts/{account}/api-keys/{key}` 面向产品自己的密钥界面。创建请求包括 `name`、`models`，可选 `funding_mode`、`expires_at`、`max_total`、`max_per_call`。产品和实例取已验证的 client registry；请求不得覆盖其他产品或实例。控制台请求须明确产品。密钥绑定当前 UniHub 用户、付款账户、产品、实例、模型和资金资产，服务端只保存 SHA-256 摘要；完整 `uh_key_` bearer 只在创建响应出现一次，列表不含密钥或摘要。普通成员只看和撤销本人密钥，账户 owner/billing_admin 可管理本实例账户密钥。创建请求不自动重试；响应丢失时刷新列表并撤销不明的新密钥，再显式创建。
 
 不填到期时间表示长期有效，不受任务凭证十分钟期限限制。每次使用仍重新检查当前用户启用状态、账户成员关系、产品启用/计费政策、模型费率，以及已配置产品 manifest 的 `product:use` 权限。产品停用、角色撤权、用户停用、到期或密钥撤销都会阻止新增预占和追加预占。已发出的调用保留原费率和预占凭据，可继续完成一次结算或释放；到期或撤销的 bearer 也不能读取历史 receipt 或任务结果；可信服务使用已存调用完成对账，历史页面使用当前产品会话授权。
+
+`POST /v1/accounts/{account}/api-keys/{key}/models` 为已有长期 Key 追加模型。请求为 `{"models":["exact-model-id"],"origin_product_id":"superwagie","instance_id":"default"}`。产品客户端可省略产品和实例，服务端从已验证 registry 绑定；控制台必须指定产品。客户端需要 `model-credentials:write`。普通成员只能追加本人 Key，账户 owner/billing_admin 可管理同账户、产品和实例的 Key；操作者和 Key 持有人都必须仍有账户成员及产品使用权限。短期任务凭证、过期或撤销的 Key 不可追加。
+
+模型 ID 必须精确匹配当前产品目录和原资金资产下无歧义的已发布费率，不接受别名替换。请求含 1 至 32 个 ID，追加后最多 32 个不同模型；任一模型不合法则整次拒绝。服务端在同一事务内检查成员、产品权限、目录及费率，保存原模型与请求模型的并集，同时记录 `model_credential.models_added` 审计及 `added_models`、完整 `models`。重复或子集请求返回 200，不再写审计；并发追加保留所有成功追加的模型。
+
+响应是与列表相同的安全 Key 元数据，包含完整 `models`，不含 `token` 或摘要。原 Key ID、token、持有人、付款账户、产品、实例、资金模式、资产、原计费配置版本、到期时间和预算保持不变。接口不撤销、替换或重发 Key，不创建调用和账务记录。响应丢失时可以安全重试相同追加请求；每次仍重新检查当前权限。只追加设计不支持撤回模型，撤销整个 Key 使用既有 DELETE 接口。
+
+受信产品后端可使用对应的 `POST /internal/v1/product-finance/accounts/{account}/api-keys/{key}/models`。该路径复用相同业务检查，同时要求服务身份 `finance:write`、独立当前 actor 凭据和 registry `model-credentials:write`；只有服务凭据或只有 actor 凭据均不可用。
 
 `GET/PUT /v1/accounts/{account}/usage-budget?product_id=llmrouter&instance_id=default&funding_mode=prepaid_cash` 返回/修改账户、产品、实例和资产下的累计消费预算。读取和修改均需要账户 owner/billing_admin；产品读取还需要 registry `usage:read`，修改还需要 `settings:write`，部署必须显式配置对应 scope。`version` 使用比较交换，初始为 0；旧版本修改返回 409。未配置或空字符串上限表示不限，`"0"` 明确禁止新预占。金额是 `CNY/6` 或 `CREDIT/6` 精确整数字符串；该版本没有周期重置或跨资产转换。
 
