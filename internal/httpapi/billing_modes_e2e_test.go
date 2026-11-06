@@ -68,6 +68,7 @@ func newBillingModesFixture(t *testing.T) *billingModesFixture {
 	b.ConfigureOperators([]string{actor.ID})
 	b.ConfigureTrustedServices([]string{"llmrouter"})
 	w := wallet.New(p, a, l)
+	w.ConfigureSandboxRechargeUsers([]string{actor.ID})
 	clientPolicy := products.Client{
 		ClientID: "sw", ProductID: "superwagie", BillingProducts: []string{"superwagie", "llmrouter"},
 		Scopes: []string{"accounts:read", "catalog:read", "subscriptions:read", "credits:read", "wallets:read", "usage:read", "model-credentials:write", "recharges:read", "recharges:write", "operations:read", "orders:read", "orders:write", "refunds:write"},

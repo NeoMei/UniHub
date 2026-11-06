@@ -125,6 +125,38 @@ func TestProductFinanceSandboxLedgerReplayAndFreshActorIsolation(t *testing.T) {
 	}
 	first := actorFor("native-a", 1)
 	second := actorFor("native-b", 1)
+	walletService.ConfigureSandboxRechargeUsers([]string{first.Binding.UserID})
+	for _, actor := range []struct {
+		identity productauth.Identity
+		allowed  bool
+	}{{first, true}, {second, false}} {
+		r := httptest.NewRequest("GET", "/internal/v1/product-finance/capabilities", nil)
+		r.Header.Set("Authorization", "Bearer "+services["lr-recharge"].Token)
+		r.Header.Set("X-UniHub-Actor-Authorization", "Bearer "+actor.identity.ActorToken)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		var caps struct {
+			Sandbox  bool `json:"sandbox"`
+			Recharge bool `json:"product_wallet_recharge"`
+		}
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &caps) != nil || !caps.Sandbox || caps.Recharge != actor.allowed {
+			t.Fatalf("actor recharge capability: %d %s", w.Code, w.Body)
+		}
+	}
+	rechargeRequest := func(actor productauth.Identity, account, suffix, key string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", "/internal/v1/product-finance/accounts/"+account+"/recharges"+suffix, strings.NewReader(`{"product_id":"llmrouter","amount":"1000000"}`))
+		r.Header.Set("Authorization", "Bearer "+services["lr-recharge"].Token)
+		r.Header.Set("X-UniHub-Actor-Authorization", "Bearer "+actor.ActorToken)
+		if key != "" {
+			r.Header.Set("Idempotency-Key", key)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if denied := rechargeRequest(second, second.Binding.PersonalAccountID, "", "deny-other-actor"); denied.Code != 403 {
+		t.Fatalf("service credential bypassed actor allowlist: %d %s", denied.Code, denied.Body)
+	}
 	for _, tc := range []struct {
 		name  string
 		write bool
@@ -170,6 +202,32 @@ func TestProductFinanceSandboxLedgerReplayAndFreshActorIsolation(t *testing.T) {
 	}
 	if bytes.Contains(w.Body.Bytes(), []byte(first.ActorToken)) || bytes.Contains(w.Body.Bytes(), []byte(token)) {
 		t.Fatal("credentials leaked in response")
+	}
+	team, err := a.CreateTeam(ctx, first.Binding.UserID, "Finance recharge policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := a.Invite(ctx, first.Binding.UserID, team.ID, second.Binding.UserID, "billing_admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.AcceptInvitation(ctx, second.Binding.UserID, invite.ID); err != nil {
+		t.Fatal(err)
+	}
+	teamCreated := rechargeRequest(first, team.ID, "", "allow-team-actor")
+	var teamOrder wallet.Order
+	if teamCreated.Code != 201 || json.Unmarshal(teamCreated.Body.Bytes(), &teamOrder) != nil {
+		t.Fatalf("allowed team recharge: %d %s", teamCreated.Code, teamCreated.Body)
+	}
+	if denied := rechargeRequest(second, team.ID, "/"+teamOrder.ID+"/sandbox-settle", ""); denied.Code != 403 {
+		t.Fatalf("foreign finance actor settled allowed actor order: %d %s", denied.Code, denied.Body)
+	}
+	var receiptCount int
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM payment_receipts WHERE order_id=$1`, teamOrder.ID).Scan(&receiptCount); err != nil || receiptCount != 0 {
+		t.Fatalf("denied finance actor persisted receipt: count=%d err=%v", receiptCount, err)
+	}
+	if err := a.RemoveMember(ctx, first.Binding.UserID, team.ID, second.Binding.UserID); err != nil {
+		t.Fatal(err)
 	}
 	create := httptest.NewRequest("POST", "/internal/v1/product-finance/accounts/"+first.Binding.PersonalAccountID+"/recharges", bytes.NewBufferString(`{"product_id":"llmrouter","amount":"1000000"}`))
 	create.Header.Set("Authorization", "Bearer "+services["lr-recharge"].Token)

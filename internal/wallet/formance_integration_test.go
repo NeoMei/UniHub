@@ -38,6 +38,7 @@ func TestRealFormanceRechargeTransferRecovery(t *testing.T) {
 		t.Fatal(e)
 	}
 	s := New(p, a, l)
+	s.ConfigureSandboxRechargeUsers([]string{u.ID})
 	deposit(t, s, u, as[0])
 	x, e := s.Transfer(ctx, u.ID, as[0].ID, "superwagie", "80000000", "x")
 	if e != nil {

@@ -95,6 +95,7 @@ func run() error {
 		return platformAdmin.ImportLegacy(startup, "deployment-cli", c.UserAdminIDs, "explicit legacy user-management import")
 	}
 	w := wallet.New(pool, a, l)
+	w.ConfigureSandboxRechargeUsers(c.SandboxRechargeUserIDs)
 	b := billing.New(pool, a, l)
 	b.ConfigureProductUsers(productUsers)
 	b.ConfigureOperators(c.OperatorIDs)

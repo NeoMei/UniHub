@@ -92,7 +92,13 @@ func setup(t *testing.T) http.Handler {
 		t.Fatal(e)
 	}
 	a := accounts.New(p)
-	return New(verifier{}, a, wallet.New(p, a, noLedger{}), Options{Sandbox: true, Merchant: "sandbox", SigningKey: []byte("this-local-test-signing-key-is-at-least-32-bytes")})
+	actor, err := a.EnsureIdentity(context.Background(), accounts.Identity{Issuer: "https://test", Subject: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := wallet.New(p, a, noLedger{})
+	service.ConfigureSandboxRechargeUsers([]string{actor.ID})
+	return New(verifier{}, a, service, Options{Sandbox: true, Merchant: "sandbox", SigningKey: []byte("this-local-test-signing-key-is-at-least-32-bytes")})
 }
 func call(h http.Handler, method, path, token, body, key string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -253,6 +259,7 @@ func TestSandboxSettlementRequiresCurrentFinanceRole(t *testing.T) {
 				t.Fatal(err)
 			}
 			service := wallet.New(p, a, noLedger{})
+			service.ConfigureSandboxRechargeUsers([]string{owner.ID, member.ID})
 			order, err := service.CreateRecharge(ctx, owner.ID, team.ID, "", "1000000", "order-1", "sandbox")
 			if err != nil {
 				t.Fatal(err)
@@ -301,6 +308,7 @@ func TestOperationLookupScopesRecordAndAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := wallet.New(p, a, noLedger{})
+	service.ConfigureSandboxRechargeUsers([]string{alice.ID})
 	order, err := service.CreateRecharge(ctx, alice.ID, aliceAccounts[0].ID, "", "1000000", "private-order", "sandbox")
 	if err != nil {
 		t.Fatal(err)

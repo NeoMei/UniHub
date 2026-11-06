@@ -74,7 +74,9 @@ func fixture(t *testing.T) (*Service, *testLedger, accounts.User, accounts.Accou
 		t.Fatal(e)
 	}
 	l := &testLedger{tx: map[string]ledger.Transaction{}, balance: map[string]int64{}}
-	return New(p, a, l), l, u, as[0]
+	s := New(p, a, l)
+	s.ConfigureSandboxRechargeUsers([]string{u.ID})
+	return s, l, u, as[0]
 }
 func deposit(t *testing.T, s *Service, u accounts.User, a accounts.Account) Operation {
 	t.Helper()

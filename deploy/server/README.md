@@ -202,3 +202,20 @@ For a real recovery, first stop writes to this application's Go/dependency stack
 Keep the previous immutable release and a verified backup. Prepare the new release without changing `current`; `bootstrap.py up --release ...` changes only this project's stateless dependency definitions/overlay and preserves existing data/secrets. Review any dependency digest/config changes before doing so. Atomically switch `current`, restart `unihub`, then repeat public acceptance. Roll back binaries/static assets by atomically restoring `current` and restarting this one service. Database migrations may be forward-only; do not claim a binary rollback reverses schema/data changes. Recovering older data requires a reviewed restore to a new volume.
 
 The bootstrap's fixed domain, namespace, callbacks and ports are deliberate boundaries. It does not configure real merchants/model providers, an operator audience, public registration, TLS renewal, off-host backup retention or unattended restore. It never uses the local dev setup script as an imported module.
+
+## Sandbox recharge authorization
+
+`SANDBOX_RECHARGE_USER_IDS` is a comma-separated list of immutable central user UUIDs. The default empty list denies new sandbox recharge orders, settlements and ledger submissions. Use the authenticated identity provider mapping to select a central UUID; display names and email addresses do not grant permission. Existing account finance roles and product scopes still apply. This policy does not grant administrator access or change existing balances, purchases or historical reads.
+
+Configure the API and any separate wallet worker with the same list. Keep the policy in a dedicated environment file loaded after the installation's existing environment files. For systemd deployments, add a drop-in such as `unihub.service.d/zz-sandbox-recharge.conf`:
+
+```ini
+[Service]
+EnvironmentFile=/opt/unihub/billing-config/sandbox-recharge.env
+```
+
+Create the referenced file with root ownership and mode `0600`. Its only setting is `SANDBOX_RECHARGE_USER_IDS=<reviewed-central-user-uuid>`. Preserve existing environment files and drop-ins; do not clear `EnvironmentFile`. Reload systemd and restart only the UniHub service after checking the effective configuration. Bootstrap regenerates `shared/runtime.env`, so keep this installation policy in the separate file.
+
+Before enabling the restriction, inspect unpaid orders and pending wallet operations. An excluded user's unpaid order cannot accept a new receipt. Recovery may confirm an already submitted transaction with its original reference; it must not create a new ledger posting. Never restore a database snapshot or remove historical receipts to enforce the policy.
+
+If a deployment needs an older binary that lacks this restriction, disable sandbox payment routes with `PAYMENT_MODE=disabled` and verify there are no pending recharge commands before starting it. An old worker does not enforce the new allowlist. Do not reopen sandbox payments until a binary enforcing the restriction is running.

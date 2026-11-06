@@ -18,6 +18,7 @@ type config struct {
 	ProductUserManifests                                          productusers.Registry
 	ProductRuntime                                                map[string]httpapi.RuntimeService
 	UserAdminIDs                                                  []string
+	SandboxRechargeUserIDs                                        []string
 	Listen, DB, LedgerURL, LedgerName, Issuer, Audience, Merchant string
 	PublicURL, ClientSecret, StaticDir, ModelServiceToken         string
 	OperatorAudience                                              string
@@ -161,6 +162,19 @@ func readConfig(get func(string) string) (config, error) {
 				return c, fmt.Errorf("USER_ADMIN_IDS requires immutable central user UUIDs")
 			}
 			c.UserAdminIDs = append(c.UserAdminIDs, id)
+		}
+	}
+	if raw := strings.TrimSpace(get("SANDBOX_RECHARGE_USER_IDS")); raw != "" {
+		seen := map[string]bool{}
+		for _, value := range strings.Split(raw, ",") {
+			id := strings.ToLower(strings.TrimSpace(value))
+			if !adminID.MatchString(id) {
+				return c, fmt.Errorf("SANDBOX_RECHARGE_USER_IDS requires comma-separated central user UUIDs")
+			}
+			if !seen[id] {
+				c.SandboxRechargeUserIDs = append(c.SandboxRechargeUserIDs, id)
+				seen[id] = true
+			}
 		}
 	}
 	c.IdentityKey = []byte(get("HEADLESS_IDENTITY_KEY"))

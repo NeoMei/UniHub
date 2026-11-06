@@ -298,6 +298,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 	if o.Sandbox {
 		m.HandleFunc("POST /webhooks/sandbox", s.webhook)
 		add("POST /v1/accounts/{account}/recharges/{order}/sandbox-settle", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+			if e := s.wallet.RequireSandboxRecharge(r.Context(), u.ID, r.PathValue("account")); e != nil {
+				return e
+			}
 			order, e := s.wallet.GetOrder(r.Context(), u.ID, r.PathValue("account"), r.PathValue("order"))
 			if e != nil {
 				return e

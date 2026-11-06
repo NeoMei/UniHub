@@ -379,6 +379,7 @@ func TestRecoveryBlockedAccountCannotStarveOtherAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	s.ConfigureSandboxRechargeUsers([]string{u.ID, other.ID})
 	order, err := s.CreateRecharge(ctx, other.ID, all[0].ID, "", "1000000", "independent", "sandbox")
 	if err != nil {
 		t.Fatal(err)

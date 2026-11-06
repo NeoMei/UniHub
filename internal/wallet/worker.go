@@ -78,6 +78,21 @@ func (s *Service) Process(ctx context.Context, id string) error {
 	return nil
 }
 func (s *Service) processOne(ctx context.Context, c *pgxpool.Conn, account string, p pending) error {
+	if p.kind == "recharge" && p.status == "CREATED" && !s.CanSandboxRecharge(p.actor) {
+		// This command has never been submitted. Preserve that fact if the
+		// lookup fails, so a later confirmed absence can still cancel it.
+		existing, e := s.ledger.Find(ctx, p.command.Reference)
+		if e != nil {
+			if _, e = c.Exec(ctx, `UPDATE wallet_operations SET attempts=attempts+1,error_code='awaiting_ledger_confirmation',updated_at=now(),next_attempt_at=now()+interval '5 seconds' WHERE id=$1`, p.id); e != nil {
+				return e
+			}
+			return ErrPending
+		}
+		if existing != nil {
+			return s.applyFound(ctx, c, account, p, existing)
+		}
+		return s.finish(ctx, c, account, p, "CANCELED", "sandbox_recharge_forbidden", nil)
+	}
 	if p.status == "CREATED" && p.kind == "transfer" {
 		if e := s.finance(ctx, c, p.actor, account); e != nil {
 			if errors.Is(e, accounts.ErrForbidden) {
@@ -94,6 +109,10 @@ func (s *Service) processOne(ctx context.Context, c *pgxpool.Conn, account strin
 		return s.applyFound(ctx, c, account, p, existing)
 	}
 	if e != nil {
+		return s.markUnknown(ctx, c, p.id)
+	}
+	if p.kind == "recharge" && !s.CanSandboxRecharge(p.actor) {
+		// An earlier submission can still commit, so only check its result.
 		return s.markUnknown(ctx, c, p.id)
 	}
 	result, e := s.ledger.Post(ctx, p.command)

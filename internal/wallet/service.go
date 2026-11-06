@@ -28,9 +28,10 @@ var ErrPending = errors.New("operation unresolved")
 const Asset = "CNY/6"
 
 type Service struct {
-	pool     *pgxpool.Pool
-	accounts *accounts.Store
-	ledger   ledger.Ledger
+	pool                 *pgxpool.Pool
+	accounts             *accounts.Store
+	ledger               ledger.Ledger
+	sandboxRechargeUsers map[string]struct{}
 }
 type Operation struct {
 	ID            string    `json:"id"`
@@ -69,7 +70,7 @@ type Balance struct {
 }
 
 func New(pool *pgxpool.Pool, a *accounts.Store, l ledger.Ledger) *Service {
-	return &Service{pool, a, l}
+	return &Service{pool: pool, accounts: a, ledger: l}
 }
 func newID(prefix string) string {
 	var b [16]byte
@@ -273,6 +274,9 @@ func (s *Service) CreateRecharge(ctx context.Context, actor, account, product, a
 	if !errors.Is(e, accounts.ErrNotFound) {
 		return Order{}, e
 	}
+	if !s.CanSandboxRecharge(actor) {
+		return Order{}, accounts.ErrForbidden
+	}
 	o, e = scanOrder(tx.QueryRow(ctx, `INSERT INTO recharge_orders(id,account_id,actor_id,product_id,amount,currency,merchant,request_key,payload_hash) VALUES($1,$2,$3,NULLIF($4,''),$5,'CNY',$6,$7,$8) RETURNING id,account_id,COALESCE(product_id,''),amount::text,currency,merchant,operation_id,payload_hash`, newID("re_"), account, actor, product, n, merchant, key, h), &old)
 	if e != nil {
 		return Order{}, dbError(e)
@@ -329,6 +333,9 @@ func (s *Service) Receive(ctx context.Context, r Receipt) (Operation, error) {
 	}
 	if e = tx.QueryRow(ctx, `SELECT actor_id FROM recharge_orders WHERE id=$1`, o.ID).Scan(&actor); e != nil {
 		return Operation{}, e
+	}
+	if !s.CanSandboxRecharge(actor) {
+		return Operation{}, accounts.ErrForbidden
 	}
 	if _, e = tx.Exec(ctx, `INSERT INTO payment_receipts(merchant,transaction_id,order_id,payload_hash) VALUES($1,$2,$3,$4)`, r.Merchant, r.TransactionID, o.ID, h); e != nil {
 		return Operation{}, dbError(e)
