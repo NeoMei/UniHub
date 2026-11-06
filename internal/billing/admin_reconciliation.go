@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
 )
@@ -50,7 +49,7 @@ func (s *Service) AdminReconcile(ctx context.Context, authority AdminAuthority, 
 	if e = tx.Commit(ctx); e != nil {
 		return nil, e
 	}
-	runError := s.locked(ctx, account, func(c *pgxpool.Conn) error { return s.runLocked(ctx, c, id) })
+	runError := s.recoverCommand(ctx, id)
 	var transaction *string
 	if e = s.pool.QueryRow(ctx, `SELECT status,ledger_transaction_id FROM billing_commands WHERE id=$1`, id).Scan(&status, &transaction); e != nil {
 		return nil, e

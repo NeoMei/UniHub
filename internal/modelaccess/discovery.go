@@ -16,25 +16,32 @@ import (
 // Model is the public, capability-only model projection used by product
 // clients. It deliberately contains no credential or provider configuration.
 type Model struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	Operations       []string `json:"operations"`
-	InputModalities  []string `json:"input_modalities"`
-	OutputModalities []string `json:"output_modalities"`
-	Context          int64    `json:"context"`
-	MaxOutput        int64    `json:"max_output"`
-	Probe            bool     `json:"probe"`
-	RateID           string   `json:"rate_id"`
+	CapabilityMetadata json.RawMessage `json:"capability_metadata,omitempty"`
+	ID                 string          `json:"id"`
+	Name               string          `json:"name"`
+	Operations         []string        `json:"operations"`
+	InputModalities    []string        `json:"input_modalities"`
+	OutputModalities   []string        `json:"output_modalities"`
+	Context            int64           `json:"context"`
+	MaxOutput          int64           `json:"max_output"`
+	Probe              bool            `json:"probe"`
+	RateID             string          `json:"rate_id"`
 }
 
 // Discovery is safe to return to a trusted product client. Token material is
 // intentionally absent; callers may persist this response as public state.
 type Discovery struct {
-	AccountID       string    `json:"account_id"`
-	InstanceID      string    `json:"instance_id"`
-	OriginProductID string    `json:"origin_product_id"`
-	ExpiresAt       time.Time `json:"expires_at"`
-	Models          []Model   `json:"models"`
+	SchemaVersion     int       `json:"schema_version,omitempty"`
+	CatalogVersion    string    `json:"catalog_version,omitempty"`
+	CatalogSource     string    `json:"catalog_source,omitempty"`
+	ModelScope        string    `json:"model_scope,omitempty"`
+	PricingSource     string    `json:"pricing_source,omitempty"`
+	CredentialVersion int64     `json:"credential_version,omitempty"`
+	AccountID         string    `json:"account_id"`
+	InstanceID        string    `json:"instance_id"`
+	OriginProductID   string    `json:"origin_product_id"`
+	ExpiresAt         time.Time `json:"expires_at"`
+	Models            []Model   `json:"models"`
 }
 
 // ProjectCatalog projects an allowlisted model set against the published rate
@@ -124,7 +131,7 @@ func (s *Service) DiscoverAPIKey(ctx context.Context, token, expectedProduct, ex
 	var data []byte
 	var funding, asset string
 	var actor string
-	e := s.pool.QueryRow(ctx, `SELECT actor_id,account_id,origin_product_id,instance_id,models,expires_at,funding_mode,asset FROM model_credentials WHERE token_hash=$1 AND credential_kind='api_key' AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&actor, &out.AccountID, &out.OriginProductID, &out.InstanceID, &data, &out.ExpiresAt, &funding, &asset)
+	e := s.pool.QueryRow(ctx, `SELECT actor_id,account_id,origin_product_id,instance_id,models,expires_at,funding_mode,asset,model_scope,pricing_source,credential_version FROM model_credentials WHERE token_hash=$1 AND credential_kind='api_key' AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&actor, &out.AccountID, &out.OriginProductID, &out.InstanceID, &data, &out.ExpiresAt, &funding, &asset, &out.ModelScope, &out.PricingSource, &out.CredentialVersion)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return Discovery{}, ErrCredential
 	}
@@ -147,6 +154,12 @@ func (s *Service) DiscoverAPIKey(ctx context.Context, token, expectedProduct, ex
 	auth, e := s.authorize(ctx, actor, out.AccountID, out.OriginProductID, funding)
 	if e != nil || auth.Asset != asset {
 		return Discovery{}, ErrCredential
+	}
+	if out.ModelScope == ScopeLLMRouterAvailable {
+		if _, e := s.nativeAuthorityOn(ctx, s.pool, actor, out.AccountID, out.OriginProductID, out.InstanceID, funding); e != nil || asset != billing.CashAsset || out.PricingSource != PricingLLMRouterNative {
+			return Discovery{}, ErrCredential
+		}
+		return s.nativeDiscovery(ctx, actor, out)
 	}
 	var keyModels []string
 	if e = json.Unmarshal(data, &keyModels); e != nil {

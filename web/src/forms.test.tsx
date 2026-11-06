@@ -106,7 +106,7 @@ it("keeps zero-credit upgrade quotes and confirmations free of monthly grant pro
   await screen.findByText("会员升级报价");
   expect(screen.getByText("需人工核实权益使用情况")).toBeDefined();
   expect(screen.queryByText(/当前月增加额度|后续每月额度/)).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "核对并继续" }));
+  fireEvent.click(await screen.findByRole("button", { name: "核对并继续" }));
   render(<>{act.mock.calls[0][0].content}</>);
   expect(screen.getByText(/升级保持原服务期限，不发放模型额度/)).toBeDefined();
   expect(screen.queryByText(/立即增加额度|后续每月额度|当前额度账期/)).toBeNull();

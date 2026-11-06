@@ -320,7 +320,7 @@ func scanCallView(row pgx.Row, scope QueryScope, finance bool) (CallView, error)
 	out.Model = c.Rate.Model
 	out.Usage = c.Usage
 	if finance {
-		if out.Source == "managed_model" {
+		if out.Source == "managed_model" && c.NativePricing == nil {
 			out.Rate = &c.Rate
 		}
 		out.Refunded, out.PriceVersion = metadata.Refunded, metadata.PriceVersion

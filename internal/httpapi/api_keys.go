@@ -64,6 +64,22 @@ func (s *api) apiKeyRoutes(add func(string, action)) {
 		}
 		return respond(w, http.StatusOK, out)
 	})
+	add("POST /v1/accounts/{account}/api-keys/{key}/scope", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		var body modelaccess.APIKeyScopeRequest
+		if e := decode(w, r, &body); e != nil {
+			return e
+		}
+		var e error
+		body.OriginProductID, body.InstanceID, e = apiKeyScope(r, body.OriginProductID, body.InstanceID)
+		if e != nil {
+			return e
+		}
+		out, e := a.UpgradeAPIKeyScope(r.Context(), u.ID, r.PathValue("account"), r.PathValue("key"), body)
+		if e != nil {
+			return e
+		}
+		return respond(w, http.StatusOK, out)
+	})
 	add("POST /v1/accounts/{account}/api-keys/{key}/models", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body modelaccess.APIKeyModelsRequest
 		if e := decode(w, r, &body); e != nil {

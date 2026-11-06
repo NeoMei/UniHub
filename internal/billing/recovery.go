@@ -317,7 +317,7 @@ func (s *Service) Recover(ctx context.Context) (MaintenanceResult, error) {
 		return out, e
 	}
 	for _, x := range items {
-		e = s.locked(ctx, x.account, func(c *pgxpool.Conn) error { return s.runLocked(ctx, c, x.id) })
+		e = s.recoverCommand(ctx, x.id)
 		if errors.Is(e, ErrPending) {
 			out.Pending++
 			continue

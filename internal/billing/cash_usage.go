@@ -87,11 +87,15 @@ func (s *Service) authorizeUsageOn(ctx context.Context, q accounts.Querier, acto
 	return out, nil
 }
 
-func (s *Service) usageFundingOn(ctx context.Context, q accounts.Querier, credential, actor, account, origin, model string, now time.Time) (UsageAuthorization, error) {
+// Existing calls keep their frozen legacy pricing after an in-place Key scope
+// upgrade. Only their continuation may allow the upgraded scope; new legacy
+// reservations still require selected scope. Retained model history, ownership,
+// expiry, revocation and current product funding remain required in both cases.
+func (s *Service) usageFundingOn(ctx context.Context, q accounts.Querier, credential, actor, account, origin, model string, now time.Time, allowUpgradedKey bool) (UsageAuthorization, error) {
 	var mode, asset string
 	var version int64
 	if credential != "" {
-		e := q.QueryRow(ctx, `SELECT funding_mode,asset,billing_profile_version FROM model_credentials WHERE id=$1 AND actor_id=$2 AND account_id=$3 AND origin_product_id=$4 AND expires_at>$5 AND revoked_at IS NULL AND models ? $6`, credential, actor, account, origin, now, model).Scan(&mode, &asset, &version)
+		e := q.QueryRow(ctx, `SELECT funding_mode,asset,billing_profile_version FROM model_credentials WHERE id=$1 AND actor_id=$2 AND account_id=$3 AND origin_product_id=$4 AND expires_at>$5 AND revoked_at IS NULL AND (model_scope='selected' OR ($7 AND model_scope='llmrouter_available')) AND models ? $6`, credential, actor, account, origin, now, model, allowUpgradedKey).Scan(&mode, &asset, &version)
 		if errors.Is(e, pgx.ErrNoRows) {
 			return UsageAuthorization{}, accounts.ErrForbidden
 		}
@@ -137,8 +141,12 @@ func (s *Service) callFundingAllowed(ctx context.Context, q accounts.Querier, ca
 	if callAsset(call) == CashAsset && call.FundingProductID != "llmrouter" {
 		return accounts.ErrForbidden
 	}
+	if call.NativePricing != nil {
+		_, e = s.nativeUsageFundingOn(ctx, q, call, now)
+		return e
+	}
 	if call.CredentialID != "" {
-		auth, e = s.usageFundingOn(ctx, q, call.CredentialID, call.ActorID, call.AccountID, call.OriginProductID, call.Rate.Model, now)
+		auth, e = s.usageFundingOn(ctx, q, call.CredentialID, call.ActorID, call.AccountID, call.OriginProductID, call.Rate.Model, now, true)
 		if e != nil {
 			return e
 		}
@@ -174,6 +182,9 @@ func cashFinalPosts(call Call, charge int64) ([]ledger.Posting, error) {
 }
 func (s *Service) validateCashAllocation(ctx context.Context, q accounts.Querier, x command) error {
 	call := x.Effect.Call
+	if call != nil && call.NativePricing != nil && x.Kind == "reserve" && call.Held == "0" && call.NativePricing.MaxAmount == "0" && len(x.Ledger.Postings) == 0 && call.FundingProductID == "llmrouter" && callFundingMode(*call) == FundingPrepaidCash && callAsset(*call) == CashAsset && normalizedAsset(call.Rate.Asset) == CashAsset {
+		return validateNativeQuote(*call.NativePricing, call.WireOperation)
+	}
 	if call == nil || call.FundingProductID != "llmrouter" || callFundingMode(*call) != FundingPrepaidCash || normalizedAsset(call.Rate.Asset) != CashAsset || len(x.Ledger.Postings) != 1 {
 		return ErrInvalid
 	}

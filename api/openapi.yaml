@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.40"
+  "version": "0.4.41"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -2542,6 +2542,14 @@
       "x-product-scopes": ["model-credentials:write"]
       "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}},{"name":"key","in":"path","required":true,"schema":{"type":"string"}},{"name":"product_id","in":"query","schema":{"type":"string"}},{"name":"instance_id","in":"query","schema":{"type":"string"}}]
       "responses": {"204":{"description":"Revoked"},"403":{"$ref":"#/components/responses/Error"},"404":{"$ref":"#/components/responses/Error"}}
+  "/v1/accounts/{account}/api-keys/{key}/scope":
+    "post":
+      "operationId": "upgradeAPIKeyScope"
+      "description": "Atomically upgrade an existing registered SuperWagie prepaid CNY Key to the current LLMRouter model catalog and native pricing. Preserves bearer, ID, owner, payer, limits and expiry; increments credential_version once and audits the change. models becomes historical metadata. Repeated upgrades are idempotent."
+      "x-product-scopes": ["model-credentials:write"]
+      "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}},{"name":"key","in":"path","required":true,"schema":{"type":"string"}}]
+      "requestBody": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ManagedAPIKeyScopeRequest"}}}}
+      "responses": {"200":{"description":"Current Key metadata without bearer","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ManagedAPIKey"}}}},"400":{"$ref":"#/components/responses/Error"},"403":{"$ref":"#/components/responses/Error"},"404":{"$ref":"#/components/responses/Error"}}
   "/v1/accounts/{account}/api-keys/{key}/models":
     "post":
       "operationId": "addAPIKeyModels"
@@ -2659,12 +2667,13 @@
     "post":
       "operationId": "discoverAccountModels"
       "summary": "discoverAccountModels"
-      "description": "Signed-in SuperWagie product-client discovery. Product and instance derive from the verified client registry; the selected account's role, active access, usage policy and published rates are checked. No bearer or provider secret is returned."
+      "description": "Signed-in SuperWagie product-client discovery. Product and instance derive from the verified client registry; the selected account's role, active access, usage policy and published rates are checked. Dynamic scope uses the current LLMRouter catalog after account and prepaid eligibility checks; selected scope retains central tariffs. No bearer or provider secret is returned."
       "security":
         -
           "BearerAuth": []
       "x-product-scopes": ["catalog:read"]
       "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}}]
+      "requestBody": {"required":false,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":{"model_scope":{"enum":["selected","llmrouter_available"],"default":"selected"}}}}}}
       "responses":
         "200":
           "description": "Scoped account model metadata"
@@ -2807,6 +2816,7 @@
       "additionalProperties": false
       "required": ["id", "name", "operations", "input_modalities", "output_modalities", "context", "max_output", "probe", "rate_id"]
       "properties":
+        "capability_metadata": {"type":"object","description":"LLMRouter-owned model and operation capability metadata, preserved with its original field names."}
         "id": {"type": "string"}
         "name": {"type": "string"}
         "operations": {"type": "array", "items": {"type": "string"}}
@@ -2828,6 +2838,12 @@
       "additionalProperties": false
       "required": ["account_id", "instance_id", "origin_product_id", "expires_at", "models"]
       "properties":
+        "schema_version": {"type":"integer"}
+        "catalog_version": {"type":"string"}
+        "catalog_source": {"type":"string"}
+        "model_scope": {"enum":["selected","llmrouter_available"]}
+        "pricing_source": {"type":"string"}
+        "credential_version": {"type":"integer","minimum":1}
         "account_id": {"type": "string"}
         "instance_id": {"type": "string"}
         "origin_product_id": {"type": "string"}
@@ -2836,16 +2852,26 @@
     "ManagedAPIKeyRequest":
       "type": "object"
       "additionalProperties": false
-      "required": ["name","models"]
+      "required": ["name"]
+      "oneOf": [{"required":["model_scope"],"properties":{"model_scope":{"const":"llmrouter_available"}}},{"required":["models"],"properties":{"model_scope":{"const":"selected"},"models":{"minItems":1,"maxItems":32}}}]
       "properties":
+        "model_scope": {"enum":["selected","llmrouter_available"],"default":"selected"}
         "name": {"type":"string","minLength":1,"maxLength":128}
         "origin_product_id": {"type":"string"}
         "instance_id": {"type":"string","default":"default"}
-        "models": {"type":"array","minItems":1,"maxItems":32,"items":{"type":"string"}}
+        "models": {"type":"array","items":{"type":"string"},"description":"Finite permission set for selected scope; optional historical metadata for dynamic scope."}
         "funding_mode": {"$ref":"#/components/schemas/FundingMode"}
         "expires_at": {"type":"string","format":"date-time"}
         "max_total": {"type":"string","pattern":"^$|^(0|[1-9][0-9]{0,18})$"}
         "max_per_call": {"type":"string","pattern":"^$|^(0|[1-9][0-9]{0,18})$"}
+    "ManagedAPIKeyScopeRequest":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["model_scope"]
+      "properties":
+        "model_scope": {"const":"llmrouter_available"}
+        "origin_product_id": {"type":"string"}
+        "instance_id": {"type":"string","default":"default"}
     "ManagedAPIKeyModelsRequest":
       "type": "object"
       "additionalProperties": false
@@ -2857,6 +2883,9 @@
     "ManagedAPIKey":
       "type": "object"
       "properties":
+        "model_scope": {"enum":["selected","llmrouter_available"]}
+        "pricing_source": {"enum":["","llmrouter_native"]}
+        "credential_version": {"type":"integer","minimum":1}
         "id": {"type":"string"}
         "credential_kind": {"const":"api_key"}
         "name": {"type":"string"}

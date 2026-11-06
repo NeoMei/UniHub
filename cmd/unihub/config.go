@@ -21,6 +21,7 @@ type config struct {
 	SandboxRechargeUserIDs                                        []string
 	Listen, DB, LedgerURL, LedgerName, Issuer, Audience, Merchant string
 	PublicURL, ClientSecret, StaticDir, ModelServiceToken         string
+	ProviderCatalogURL, ProviderCatalogToken                      string
 	OperatorAudience                                              string
 	OperatorIDs                                                   []string
 	ProductClients                                                map[string]string
@@ -62,6 +63,11 @@ func readConfig(get func(string) string) (config, error) {
 		c.StaticDir = "web/dist"
 	}
 	c.ModelServiceToken = get("MODEL_SERVICE_TOKEN")
+	c.ProviderCatalogURL = get("LLMROUTER_PROVIDER_CATALOG_URL")
+	c.ProviderCatalogToken = get("LLMROUTER_PROVIDER_CATALOG_TOKEN")
+	if (c.ProviderCatalogURL == "") != (c.ProviderCatalogToken == "") {
+		return c, fmt.Errorf("provider catalog URL and credential must be configured together")
+	}
 	c.OperatorAudience = get("OPS_OIDC_AUDIENCE")
 	if c.OperatorAudience != "" && c.OperatorAudience == c.Audience {
 		return c, fmt.Errorf("OPS_OIDC_AUDIENCE must be a separate operator client")

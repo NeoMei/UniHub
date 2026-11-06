@@ -153,7 +153,7 @@ func (s *Service) ReserveWithWire(ctx context.Context, service string, r Reserve
 		if wire != "" && !RateMatchesWire(rate, wire) {
 			return accounts.ErrForbidden
 		}
-		auth, e := s.usageFundingOn(ctx, c, r.CredentialID, r.ActorID, r.AccountID, r.OriginProductID, rate.Model, now)
+		auth, e := s.usageFundingOn(ctx, c, r.CredentialID, r.ActorID, r.AccountID, r.OriginProductID, rate.Model, now, false)
 		if e != nil {
 			return e
 		}
@@ -259,7 +259,7 @@ func (s *Service) TopUp(ctx context.Context, service, callID, amount, key string
 	if e != nil || !keyOK(key) {
 		return out, ErrInvalid
 	}
-	e = s.locked(ctx, out.AccountID, func(c *pgxpool.Conn) error {
+	e = s.callLocked(ctx, out, func(c *pgxpool.Conn) error {
 		call, e := load[Call](ctx, c, `SELECT snapshot FROM billing_calls WHERE id=$1`, callID)
 		if e != nil {
 			return e
@@ -334,6 +334,9 @@ func (s *Service) Settle(ctx context.Context, service string, r SettlementReques
 	out, e := s.GetCall(ctx, service, r.CallID)
 	if e != nil {
 		return out, e
+	}
+	if out.NativePricing != nil {
+		return out, accounts.ErrForbidden
 	}
 	// Provider cost is an independent optional observation, never the charge.
 	// Preserve unknown as empty; known zero remains distinct in the final digest.

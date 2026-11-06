@@ -1,5 +1,9 @@
 # Native metering (`metered_v2`)
 
+The [dynamic managed-Key protocol](userkit/native-key-scope.md) uses LLMRouter's
+native price snapshots and quota conversion. This document describes the
+separate central `metered_v2` tariff contract retained for selected-scope Keys.
+
 UniHub supports explicit native units alongside the existing `exclusive_v1` token contract. A `Rate` with `semantics: "metered_v2"` carries a `metered` price; its final `Usage` carries only `metered` usage. Legacy counters and native measurements cannot be mixed. Existing rates retain their original semantics.
 
 Supported operations are `chat`, `responses`, `embedding`, `speech`, `transcription`, `image_generation`, `image_edit`, `ocr` and `video`. Units are `token`, `character`, `audio_second`, `image`, `request`, `video_second`, and `provider_unit`. Supplier units require an explicit namespace. OCR page units are rejected in this version.

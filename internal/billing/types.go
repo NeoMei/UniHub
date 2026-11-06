@@ -177,6 +177,9 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type Call struct {
+	NativePricing         *NativeQuote `json:"native_pricing,omitempty"`
+	NativeQuota           string       `json:"native_quota,omitempty"`
+	CredentialVersion     int64        `json:"credential_version,omitempty"`
 	WireOperation         string       `json:"wire_operation,omitempty"`
 	InstanceID            string       `json:"instance_id,omitempty"`
 	TaskID                string       `json:"task_id,omitempty"`

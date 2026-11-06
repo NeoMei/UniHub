@@ -31,7 +31,7 @@ import (
 )
 
 // Scope expansion needs real policy and credential state, but no ledger calls.
-func newAPIKeyModelsFixture(t *testing.T) *billingModesFixture {
+func newAPIKeyModelsFixture(t *testing.T, catalogs ...modelaccess.ProviderCatalog) *billingModesFixture {
 	t.Helper()
 	ctx := context.Background()
 	p := testutil.Database(t)
@@ -67,7 +67,11 @@ func newAPIKeyModelsFixture(t *testing.T) *billingModesFixture {
 	users := productusers.New(p, reg, "https://hub.test", nil)
 	policy := products.Client{ClientID: "sw", ProductID: "superwagie", InstanceID: "default", Scopes: []string{"accounts:read", "catalog:read", "model-credentials:write"}}
 	w := wallet.New(p, a, noLedger{})
-	server := httptest.NewServer(New(verifier{}, a, w, Options{Billing: b, ModelAccess: modelaccess.New(p, a, b), ServiceToken: billingModesServiceToken, ProductUsers: users, ProductVerifiers: map[string]auth.Verifier{"sw": anyProductVerifier{}}, ProductAccess: map[string]products.Client{"sw": policy}}))
+	access := modelaccess.New(p, a, b)
+	if len(catalogs) > 0 {
+		access.ConfigureProviderCatalog(catalogs[0])
+	}
+	server := httptest.NewServer(New(verifier{}, a, w, Options{Billing: b, ModelAccess: access, ServiceToken: billingModesServiceToken, ProductUsers: users, ProductVerifiers: map[string]auth.Verifier{"sw": anyProductVerifier{}}, ProductAccess: map[string]products.Client{"sw": policy}}))
 	t.Cleanup(server.Close)
 	return &billingModesFixture{t: t, pool: p, billing: b, wallet: w, server: server, client: server.Client(), actor: u, account: as[0].ID}
 }

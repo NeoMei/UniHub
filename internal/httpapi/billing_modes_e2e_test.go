@@ -20,6 +20,7 @@ import (
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
 	"unihub/internal/products"
+	"unihub/internal/productusers"
 	"unihub/internal/testutil"
 	"unihub/internal/wallet"
 
@@ -43,7 +44,7 @@ type billingModesFixture struct {
 	account string
 }
 
-func newBillingModesFixture(t *testing.T) *billingModesFixture {
+func newBillingModesFixture(t *testing.T, nativeCatalog ...modelaccess.ProviderCatalog) *billingModesFixture {
 	t.Helper()
 	base := os.Getenv("UNIHUB_TEST_LEDGER_URL")
 	if base == "" {
@@ -73,9 +74,16 @@ func newBillingModesFixture(t *testing.T) *billingModesFixture {
 		ClientID: "sw", ProductID: "superwagie", BillingProducts: []string{"superwagie", "llmrouter"},
 		Scopes: []string{"accounts:read", "catalog:read", "subscriptions:read", "credits:read", "wallets:read", "usage:read", "model-credentials:write", "recharges:read", "recharges:write", "operations:read", "orders:read", "orders:write", "refunds:write"},
 	}
+	access := modelaccess.New(p, a, b)
+	var users *productusers.Store
+	if len(nativeCatalog) > 0 {
+		access.ConfigureProviderCatalog(nativeCatalog[0])
+		registry := productusers.Registry{"superwagie/default": {ProductID: "superwagie", InstanceID: "default", Version: 1, DefaultRoles: []string{"member"}, Roles: []productusers.Role{{ID: "member", Name: "Member", Permissions: []string{"product:use"}}}}}
+		users = productusers.New(p, registry, "https://hub.test", nil)
+	}
 	server := httptest.NewServer(New(verifier{}, a, w, Options{
 		Sandbox: true, Merchant: "sandbox", SigningKey: []byte("acceptance-only-payment-signing-key-over-32-bytes"),
-		Billing: b, ModelAccess: modelaccess.New(p, a, b), ServiceToken: billingModesServiceToken,
+		Billing: b, ModelAccess: access, ServiceToken: billingModesServiceToken, ProductUsers: users,
 		OperatorVerifier: verifier{}, ProductVerifiers: map[string]auth.Verifier{"sw": anyProductVerifier{}}, ProductAccess: map[string]products.Client{"sw": clientPolicy},
 	}))
 	t.Cleanup(server.Close)

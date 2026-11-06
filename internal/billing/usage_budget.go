@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 
 	"github.com/jackc/pgx/v5"
@@ -175,6 +176,9 @@ func (s *Service) SetUsageBudget(ctx context.Context, actor, account, productID,
 	return out, e
 }
 
+// Keep legacy permission-error matching while distinguishing a proven limit denial.
+var errUsageBudgetExceeded = fmt.Errorf("%w: usage budget exceeded", accounts.ErrForbidden)
+
 func enforceUsageLimit(total, perCall, held, used string, additional, callTotal int64) error {
 	if perCall != "" {
 		cap, e := integer(perCall, false)
@@ -182,7 +186,7 @@ func enforceUsageLimit(total, perCall, held, used string, additional, callTotal 
 			return e
 		}
 		if callTotal > cap {
-			return accounts.ErrForbidden
+			return errUsageBudgetExceeded
 		}
 	}
 	if total != "" {
@@ -199,7 +203,7 @@ func enforceUsageLimit(total, perCall, held, used string, additional, callTotal 
 			return e
 		}
 		if h > cap || u > cap-h || additional > cap-h-u {
-			return accounts.ErrForbidden
+			return errUsageBudgetExceeded
 		}
 	}
 	return nil

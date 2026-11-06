@@ -125,6 +125,13 @@ func run() error {
 	}
 	modelAccess := modelaccess.New(pool, a, b)
 	modelAccess.ConfigureProductUsers(productUsers)
+	if c.ProviderCatalogURL != "" {
+		catalog, err := modelaccess.NewProviderCatalog(c.ProviderCatalogURL, c.ProviderCatalogToken)
+		if err != nil {
+			return errors.New("invalid provider catalog configuration")
+		}
+		modelAccess.ConfigureProviderCatalog(catalog)
+	}
 	productVerifiers := map[string]auth.Verifier{}
 	for product, audience := range c.ProductClients {
 		productVerifiers[product], e = auth.NewOIDC(startup, c.Issuer, audience)

@@ -7,9 +7,10 @@ package billing
 // the managed usage schema nor a safe customer-facing projection.
 const ReportCallsSQL = `
  SELECT 'managed_model:'||c.id AS id,c.account_id,c.created_at,c.time_source,
- c.snapshot||jsonb_build_object(
+ (CASE WHEN c.snapshot#>>'{native_pricing,pricing_version}'='lr-native-v1' AND NOT COALESCE(` + validLegacyUsageSQL + `,false) THEN c.snapshot-'usage' ELSE c.snapshot END)||jsonb_build_object(
    'query_call_id',c.id,'source','managed_model','source_call_id',c.id,
-   'price_owner','platform','price_version',COALESCE(c.snapshot#>>'{rate,id}',''),
+   'price_owner',CASE WHEN c.snapshot#>>'{native_pricing,pricing_version}'='lr-native-v1' THEN 'product' ELSE 'platform' END,
+   'price_version',COALESCE(c.snapshot#>>'{native_pricing,pricing_version}',c.snapshot#>>'{rate,id}',''),
    'operation',COALESCE(c.snapshot->>'wire_operation',''),'refunded','0',
    'waiver',(SELECT jsonb_build_object('case_id',w.case_id,'provider_state',w.provider_state,
       'customer_status',CASE WHEN release.status='APPLIED' AND c.snapshot->>'status'='RELEASED' THEN 'RELEASED' WHEN release.status='UNKNOWN' THEN 'UNKNOWN' ELSE 'PENDING' END)

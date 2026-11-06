@@ -35,6 +35,7 @@ func (s *Service) apiKeyProductActive(ctx context.Context, q accounts.Querier, a
 }
 
 type APIKeyRequest struct {
+	ModelScope      string     `json:"model_scope,omitempty"`
 	Name            string     `json:"name"`
 	OriginProductID string     `json:"origin_product_id,omitempty"`
 	InstanceID      string     `json:"instance_id"`
@@ -54,6 +55,9 @@ type APIKeyModelsRequest struct {
 // APIKey is safe to list. Token is populated only by CreateAPIKey and is never
 // recoverable from the stored SHA-256 digest.
 type APIKey struct {
+	ModelScope            string     `json:"model_scope"`
+	PricingSource         string     `json:"pricing_source"`
+	CredentialVersion     int64      `json:"credential_version"`
 	ID                    string     `json:"id"`
 	CredentialKind        string     `json:"credential_kind"`
 	Name                  string     `json:"name"`
@@ -84,6 +88,12 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor, account string, r API
 		return APIKey{}, e
 	}
 	r.Name = strings.TrimSpace(r.Name)
+	if r.ModelScope == ScopeLLMRouterAvailable {
+		return s.createNativeAPIKey(ctx, actor, account, r)
+	}
+	if r.ModelScope != "" && r.ModelScope != ScopeSelected {
+		return APIKey{}, billing.ErrInvalid
+	}
 	g, e := s.issue(ctx, actor, account, Request{OriginProductID: r.OriginProductID, Models: slices.Clone(r.Models), FundingMode: r.FundingMode}, &r)
 	if e != nil {
 		return APIKey{}, e
@@ -96,13 +106,13 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor, account string, r API
 	return key, nil
 }
 
-const apiKeyColumns = `id,credential_kind,name,actor_id,account_id,origin_product_id,instance_id,models,funding_mode,asset,billing_profile_version,expires_at,created_at,revoked_at,max_total,max_per_call`
+const apiKeyColumns = `id,credential_kind,name,actor_id,account_id,origin_product_id,instance_id,models,funding_mode,asset,billing_profile_version,expires_at,created_at,revoked_at,max_total,max_per_call,model_scope,pricing_source,credential_version`
 
 func scanAPIKey(row pgx.Row) (APIKey, error) {
 	var key APIKey
 	var models []byte
 	var expires time.Time
-	e := row.Scan(&key.ID, &key.CredentialKind, &key.Name, &key.ActorID, &key.AccountID, &key.OriginProductID, &key.InstanceID, &models, &key.FundingMode, &key.Asset, &key.BillingProfileVersion, &expires, &key.CreatedAt, &key.RevokedAt, &key.MaxTotal, &key.MaxPerCall)
+	e := row.Scan(&key.ID, &key.CredentialKind, &key.Name, &key.ActorID, &key.AccountID, &key.OriginProductID, &key.InstanceID, &models, &key.FundingMode, &key.Asset, &key.BillingProfileVersion, &expires, &key.CreatedAt, &key.RevokedAt, &key.MaxTotal, &key.MaxPerCall, &key.ModelScope, &key.PricingSource, &key.CredentialVersion)
 	if e != nil {
 		return key, e
 	}

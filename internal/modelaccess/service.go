@@ -38,10 +38,11 @@ type BillingUsageEligibilityOn interface {
 	AuthorizeUsageOn(context.Context, accounts.Querier, string, string, string, string) (billing.UsageAuthorization, error)
 }
 type Service struct {
-	pool         *pgxpool.Pool
-	accounts     *accounts.Store
-	eligibility  Eligibility
-	productUsers *productusers.Store
+	pool            *pgxpool.Pool
+	accounts        *accounts.Store
+	eligibility     Eligibility
+	productUsers    *productusers.Store
+	providerCatalog ProviderCatalog
 }
 type Request struct {
 	FundingMode     string   `json:"funding_mode,omitempty"`
@@ -50,6 +51,9 @@ type Request struct {
 	TaskID          string   `json:"task_id"`
 }
 type Claims struct {
+	ModelScope            string              `json:"model_scope"`
+	PricingSource         string              `json:"pricing_source"`
+	CredentialVersion     int64               `json:"credential_version"`
 	Operations            map[string][]string `json:"operations,omitempty"`
 	CredentialKind        string              `json:"credential_kind,omitempty"`
 	InstanceID            string              `json:"instance_id,omitempty"`
@@ -266,12 +270,19 @@ func (s *Service) VerifyKnowledgeDispatchForInstance(ctx context.Context, token,
 }
 
 func (s *Service) verifyWireForInstance(ctx context.Context, token, model, instance, wire string, receipt, knowledgeDispatch bool) (Claims, error) {
-	if wire == "" || model == "" || billing.WireBillingOperation(wire) == "" {
+	if strings.TrimSpace(wire) == "" || len(wire) > 128 || strings.TrimSpace(model) == "" || len(model) > 256 {
 		return Claims{}, ErrCredential
 	}
 	c, err := s.verifyScoped(ctx, token, model, instance, !receipt, knowledgeDispatch)
 	if err != nil {
 		return Claims{}, err
+	}
+	if c.ModelScope == ScopeLLMRouterAvailable {
+		c.Operations = map[string][]string{model: {wire}}
+		return c, nil
+	}
+	if billing.WireBillingOperation(wire) == "" {
+		return Claims{}, ErrCredential
 	}
 	if !receipt {
 		rates, err := s.eligibility.Rates(ctx)
@@ -378,7 +389,7 @@ func (s *Service) verifyScoped(ctx context.Context, token, model, instance strin
 	}
 	var c Claims
 	var data []byte
-	e := s.pool.QueryRow(ctx, `SELECT id,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,instance_id FROM model_credentials WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&c.ID, &c.ActorID, &c.AccountID, &c.OriginProductID, &data, &c.TaskID, &c.ExpiresAt, &c.FundingMode, &c.Asset, &c.BillingProfileVersion, &c.CredentialKind, &c.InstanceID)
+	e := s.pool.QueryRow(ctx, `SELECT id,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,instance_id,model_scope,pricing_source,credential_version FROM model_credentials WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&c.ID, &c.ActorID, &c.AccountID, &c.OriginProductID, &data, &c.TaskID, &c.ExpiresAt, &c.FundingMode, &c.Asset, &c.BillingProfileVersion, &c.CredentialKind, &c.InstanceID, &c.ModelScope, &c.PricingSource, &c.CredentialVersion)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return c, ErrCredential
 	}
@@ -405,6 +416,19 @@ func (s *Service) verifyScoped(ctx context.Context, token, model, instance strin
 	}
 	if e = json.Unmarshal(data, &c.Models); e != nil {
 		return c, e
+	}
+	if c.ModelScope == ScopeLLMRouterAvailable {
+		if c.CredentialKind != "api_key" || c.PricingSource != PricingLLMRouterNative {
+			return Claims{}, ErrCredential
+		}
+		if _, e := s.nativeAuthorityOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID, c.FundingMode); e != nil {
+			return Claims{}, ErrCredential
+		}
+		if c.Asset != billing.CashAsset {
+			return Claims{}, ErrCredential
+		}
+		c.Audience = "llmrouter"
+		return c, nil
 	}
 	if model != "" && !slices.Contains(c.Models, model) {
 		return Claims{}, ErrCredential

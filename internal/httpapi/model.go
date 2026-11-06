@@ -21,6 +21,7 @@ type modelCredentialVerificationResponse struct {
 
 func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 	s.apiKeyRoutes(add)
+	s.nativeCallRoutes(m)
 	a := s.options.ModelAccess
 	add("POST /v1/accounts/{account}/model-discovery", s.modelDiscoveryRoute)
 	add("GET /v1/products/{product}/model-consistency", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {

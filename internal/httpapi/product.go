@@ -50,6 +50,7 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 		"POST /v1/accounts/{account}/model-credentials":     "model-credentials:write", "DELETE /v1/accounts/{account}/model-credentials/{credential}": "model-credentials:write",
 		"GET /v1/accounts/{account}/api-keys": "model-credentials:write", "POST /v1/accounts/{account}/api-keys": "model-credentials:write", "DELETE /v1/accounts/{account}/api-keys/{key}": "model-credentials:write",
 		"POST /v1/accounts/{account}/api-keys/{key}/models": "model-credentials:write",
+		"POST /v1/accounts/{account}/api-keys/{key}/scope":  "model-credentials:write",
 		"GET /v1/accounts/{account}/usage-budget":           "usage:read", "PUT /v1/accounts/{account}/usage-budget": "settings:write",
 		"GET /v1/accounts/{account}/calls": "usage:read", "GET /v1/accounts/{account}/calls/{call}": "usage:read", "GET /v1/accounts/{account}/usage/summary": "usage:read",
 	}[pattern]

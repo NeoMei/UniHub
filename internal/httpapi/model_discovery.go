@@ -71,7 +71,15 @@ func (s *api) modelDiscoveryRoute(w http.ResponseWriter, r *http.Request, u acco
 	if instance == "" {
 		instance = "default"
 	}
-	discovery, e := s.options.ModelAccess.DiscoverAccount(r.Context(), u.ID, r.PathValue("account"), "superwagie", instance)
+	var body struct {
+		ModelScope string `json:"model_scope"`
+	}
+	if r.ContentLength != 0 {
+		if e := decode(w, r, &body); e != nil {
+			return e
+		}
+	}
+	discovery, e := s.options.ModelAccess.DiscoverAccountWithScope(r.Context(), u.ID, r.PathValue("account"), "superwagie", instance, body.ModelScope)
 	if e != nil {
 		return e
 	}
