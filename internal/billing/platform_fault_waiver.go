@@ -63,7 +63,7 @@ func ParsePlatformFaultWaiverApproval(raw []byte, expectedSHA string) (PlatformF
 		return a, ErrInvalid
 	}
 	n, err := integer(a.Held, true)
-	if err != nil || str(n) != a.Held || a.Schema != 1 || strings.TrimSpace(a.ApprovalStatement) == "" || len(a.ApprovalStatement) > 16000 || !keyOK(a.CaseID) || !keyOK(a.CallID) || !keyOK(a.OperatorID) || !keyOK(a.ActorID) || !keyOK(a.AccountID) || strings.TrimSpace(a.Reason) == "" || len(a.Reason) > 2000 || a.OriginProductID != "llmrouter" || a.InstanceID == "" || a.Asset != CashAsset || a.ProviderState != "PROVIDER_UNRESOLVED" {
+	if err != nil || str(n) != a.Held || a.Schema != 1 || strings.TrimSpace(a.ApprovalStatement) == "" || len(a.ApprovalStatement) > 16000 || !keyOK(a.CaseID) || !keyOK(a.CallID) || !keyOK(a.OperatorID) || !keyOK(a.ActorID) || !keyOK(a.AccountID) || strings.TrimSpace(a.Reason) == "" || len(a.Reason) > 2000 || (a.OriginProductID != "llmrouter" && a.OriginProductID != "superwagie") || a.InstanceID == "" || a.Asset != CashAsset || a.ProviderState != "PROVIDER_UNRESOLVED" {
 		return a, ErrInvalid
 	}
 	for _, v := range []string{a.ApprovalSourceSHA256, a.OriginalEvidenceSHA256, a.FollowupEvidenceSHA256} {
@@ -223,14 +223,38 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 	}
 	var gateway struct {
 		Digest, CredentialID, TaskID, WireOperation, Model, RateID, RateSnapshot string
-		BillingProfileVersion                                                    int64
+		PricingSource, NativeQuoteJSON, NativePriceSnapshot                      string
+		BillingProfileVersion, CredentialVersion                                 int64
 	}
 	if json.Unmarshal(a.GatewayCall, &gateway) != nil || gateway.Digest != out.RequestDigest || gateway.CredentialID != out.CredentialID || gateway.TaskID != out.TaskID || gateway.WireOperation != out.WireOperation || gateway.Model != out.Rate.Model || gateway.RateID != out.Rate.ID || gateway.BillingProfileVersion != out.BillingProfileVersion {
 		return out, ErrConflict
 	}
-	var gatewayRate Rate
-	if json.Unmarshal([]byte(gateway.RateSnapshot), &gatewayRate) != nil || !reflect.DeepEqual(gatewayRate, out.Rate) {
-		return out, ErrConflict
+	if out.NativePricing != nil {
+		var quote NativeQuote
+		// NativeQuoteJSON is a JSON string inside the approval. The outer
+		// duplicate-key guard cannot inspect it, so validate its own shape.
+		decoder := json.NewDecoder(strings.NewReader(gateway.NativeQuoteJSON))
+		decoder.UseNumber()
+		if waiverUniqueValue(decoder) != nil {
+			return out, ErrConflict
+		}
+		if _, err := decoder.Token(); err != io.EOF {
+			return out, ErrConflict
+		}
+		decoder = json.NewDecoder(strings.NewReader(gateway.NativeQuoteJSON))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&quote) != nil {
+			return out, ErrConflict
+		}
+		priceDigest := sha256.Sum256([]byte(gateway.NativePriceSnapshot))
+		if gateway.PricingSource != "llmrouter_native" || gateway.RateSnapshot != "" || gateway.CredentialVersion != out.CredentialVersion || gateway.CredentialVersion <= 0 || gateway.NativePriceSnapshot == "" || !reflect.DeepEqual(quote, *out.NativePricing) || validateNativeQuote(quote, out.WireOperation) != nil || quote.PricingDigest != hex.EncodeToString(priceDigest[:]) || quote.MaxAmount != out.Held {
+			return out, ErrConflict
+		}
+	} else {
+		var gatewayRate Rate
+		if gateway.PricingSource == "llmrouter_native" || gateway.NativeQuoteJSON != "" || gateway.NativePriceSnapshot != "" || json.Unmarshal([]byte(gateway.RateSnapshot), &gatewayRate) != nil || !reflect.DeepEqual(gatewayRate, out.Rate) {
+			return out, ErrConflict
+		}
 	}
 	// clear accepts the same account connection through the caller transaction.
 	var pending bool
