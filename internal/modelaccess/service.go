@@ -262,7 +262,7 @@ func (s *Service) VerifyWireForInstance(ctx context.Context, token, model, insta
 // on an existing task credential. It does not issue or reserve anything.
 func (s *Service) VerifyKnowledgeDispatchForInstance(ctx context.Context, token, model, instance, wire string) (Claims, error) {
 	if instance == "" || !strings.HasPrefix(token, "uh_model_") ||
-		!((model == "unihub-text-embedding-v4" && wire == "embeddings.create") ||
+		!((model == "text-embedding-v4" && wire == "embeddings.create") ||
 			(model == "qwen3-rerank" && wire == "rerank.create")) {
 		return Claims{}, ErrCredential
 	}

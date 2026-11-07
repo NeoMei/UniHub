@@ -28,10 +28,11 @@ func TestKnowledgeDispatchUnavailableAuthorityAndScopeGuards(t *testing.T) {
 		name, token, model, instance, wire string
 		want                               int
 	}{
-		{"embedding authority unavailable", "uh_model_" + strings.Repeat("a", 64), "unihub-text-embedding-v4", "default", "embeddings.create", 503},
+		{"embedding authority unavailable", "uh_model_" + strings.Repeat("a", 64), "text-embedding-v4", "default", "embeddings.create", 503},
 		{"rerank authority unavailable", "uh_model_" + strings.Repeat("a", 64), "qwen3-rerank", "default", "rerank.create", 503},
-		{"api key", "uh_key_" + strings.Repeat("a", 64), "unihub-text-embedding-v4", "default", "embeddings.create", 403},
-		{"empty instance", "uh_model_" + strings.Repeat("a", 64), "unihub-text-embedding-v4", "", "embeddings.create", 403},
+		{"api key", "uh_key_" + strings.Repeat("a", 64), "text-embedding-v4", "default", "embeddings.create", 403},
+		{"empty instance", "uh_model_" + strings.Repeat("a", 64), "text-embedding-v4", "", "embeddings.create", 403},
+		{"retired UniHub model alias", "uh_model_" + strings.Repeat("a", 64), "unihub-text-embedding-v4", "default", "embeddings.create", 403},
 		{"wrong model", "uh_model_" + strings.Repeat("a", 64), "other", "default", "embeddings.create", 403},
 		{"crossed wire", "uh_model_" + strings.Repeat("a", 64), "qwen3-rerank", "default", "embeddings.create", 403},
 		{"metering operation is not wire", "uh_model_" + strings.Repeat("a", 64), "qwen3-rerank", "default", "rerank", 403},

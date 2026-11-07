@@ -32,9 +32,13 @@ func TestResultReadRequiresLiveProductAccessToken(t *testing.T) {
 	testTaskActorVerification(t, "result_read", "x", "embeddings.create", "embedding")
 }
 
+func TestHistoricalEmbeddingAliasResultReadRequiresLiveProductAccessToken(t *testing.T) {
+	testTaskActorVerification(t, "result_read", "unihub-text-embedding-v4", "embeddings.create", "embedding")
+}
+
 func TestKnowledgeDispatchRequiresCurrentPaidProductAccess(t *testing.T) {
 	for _, tc := range []struct{ model, wire, operation string }{
-		{"unihub-text-embedding-v4", "embeddings.create", "embedding"},
+		{"text-embedding-v4", "embeddings.create", "embedding"},
 		{"qwen3-rerank", "rerank.create", "rerank"},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
