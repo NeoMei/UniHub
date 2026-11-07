@@ -120,6 +120,34 @@ class HeadlessDeploymentTests(unittest.TestCase):
         self.assertNotIn('UPDATE application',sql)
         self.assertNotIn('DELETE FROM',sql)
 
+    def test_refresh_enabled_seed_matches_thirty_day_family_lifetime(self):
+        bundle.stage_headless(self.root,[{**self.registry[0],'refresh_tokens':True}])
+        bundle.prepare(self.root,self.release,{})
+        seed=json.loads((self.root/'shared/casdoor/conf/init_data.json').read_text())
+        app=next(a for a in seed['applications'] if a['name']=='app-superwagie-headless')
+        self.assertEqual(app.get('refreshExpireInHours'),720)
+        self.assertEqual(app['expireInHours'],1)
+        self.assertEqual(app['grantTypes'],['authorization_code','refresh_token'])
+
+    def test_refresh_lifetime_is_verified_only_for_enabled_clients(self):
+        for enabled in [None,False,True]:
+            with self.subTest(refresh_tokens=enabled):
+                client=dict(self.registry[0])
+                if enabled is not None:client['refresh_tokens']=enabled
+                bundle.stage_headless(self.root,[client])
+                credentials=json.loads((self.root/'shared/credentials.json').read_text())
+                sql=bundle.headless_applications_sql(credentials)
+                app=bundle.headless_product_application(client,'private-fixture')
+                self.assertEqual(app['expireInHours'],1)
+                if enabled:
+                    self.assertIn('"refresh_expire_in_hours": 720',sql)
+                    self.assertIn('refresh_expire_in_hours IS NOT DISTINCT FROM 720',sql)
+                else:
+                    self.assertNotIn('refresh_expire_in_hours',sql)
+                    self.assertNotIn('refreshExpireInHours',app)
+                    self.assertEqual(app['grantTypes'],['authorization_code'])
+                self.assertNotIn('UPDATE application',sql)
+
     def test_seed_product_is_compatible_with_generic_managed_policy_readback(self):
         module=HERE.parents[1]/'scripts/product_client.py'
         spec=importlib.util.spec_from_file_location('managed_product_policy',module)
@@ -131,6 +159,7 @@ class HeadlessDeploymentTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('psql') and os.environ.get('UNIHUB_TEST_DATABASE_URL'),'isolated PostgreSQL test URL unavailable')
     def test_provisioner_sql_creates_only_scoped_apps_and_rejects_changed_owner(self):
+        self.registry[0]['refresh_tokens']=True
         bundle.stage_headless(self.root,self.registry)
         credentials=json.loads((self.root/'shared/credentials.json').read_text())
         uri=urllib.parse.urlsplit(os.environ['UNIHUB_TEST_DATABASE_URL'])
@@ -145,15 +174,20 @@ class HeadlessDeploymentTests(unittest.TestCase):
             prefix='SET search_path='+schema+';\n'
             sql(prefix+'''CREATE TABLE application(owner text,name text,organization text,is_shared boolean,client_id text,client_secret text,disable_signin boolean,enable_password boolean,enable_sign_up boolean,grant_types varchar(1000),redirect_uris varchar(1000),PRIMARY KEY(owner,name));
 INSERT INTO application VALUES('admin','app-unihub','unihub',false,'unihub-console','fixture',false,true,false,'["authorization_code"]','["https://unihub.quukk.com/auth/callback"]');''')
-            sql(prefix+'''ALTER TABLE application ADD COLUMN display_name text, ADD COLUMN description text, ADD COLUMN cert text, ADD COLUMN category text, ADD COLUMN type text, ADD COLUMN disable_self_signup boolean, ADD COLUMN enable_signin_session boolean, ADD COLUMN enable_auto_signin boolean, ADD COLUMN default_group text, ADD COLUMN default_tag text, ADD COLUMN providers text, ADD COLUMN signin_methods text, ADD COLUMN signin_items text, ADD COLUMN signup_items text, ADD COLUMN token_format text, ADD COLUMN token_signing_method text, ADD COLUMN expire_in_hours double precision, ADD COLUMN cookie_expire_in_hours bigint, ADD COLUMN failed_signin_limit integer, ADD COLUMN failed_signin_frozen_time integer;''')
+            sql(prefix+'''ALTER TABLE application ADD COLUMN display_name text, ADD COLUMN description text, ADD COLUMN cert text, ADD COLUMN category text, ADD COLUMN type text, ADD COLUMN disable_self_signup boolean, ADD COLUMN enable_signin_session boolean, ADD COLUMN enable_auto_signin boolean, ADD COLUMN default_group text, ADD COLUMN default_tag text, ADD COLUMN providers text, ADD COLUMN signin_methods text, ADD COLUMN signin_items text, ADD COLUMN signup_items text, ADD COLUMN token_format text, ADD COLUMN token_signing_method text, ADD COLUMN expire_in_hours double precision, ADD COLUMN refresh_expire_in_hours double precision DEFAULT 0, ADD COLUMN cookie_expire_in_hours bigint, ADD COLUMN failed_signin_limit integer, ADD COLUMN failed_signin_frozen_time integer;''')
             statement=bundle.headless_applications_sql(credentials)
             sql(prefix+statement);sql(prefix+statement)
             count=sql(prefix+"SELECT count(*) FROM application WHERE organization='unihub' AND is_shared=false;")
             self.assertEqual(count,'3')
             policy=sql(prefix+"SELECT disable_signin::text||':'||enable_password::text||':'||enable_sign_up::text||':'||grant_types FROM application WHERE name='"+bundle.PROVISIONER_APPLICATION+"';")
             self.assertEqual(policy,'true:false:false:[]')
-            product=json.loads(sql(prefix+"SELECT json_build_object('enabled',enable_sign_up,'description',description,'items',signup_items::json,'methods',signin_methods::json) FROM application WHERE name='app-superwagie-headless';"))
+            product=json.loads(sql(prefix+"SELECT json_build_object('enabled',enable_sign_up,'description',description,'items',signup_items::json,'methods',signin_methods::json,'refreshTTL',refresh_expire_in_hours,'accessTTL',expire_in_hours) FROM application WHERE name='app-superwagie-headless';"))
             self.assertTrue(product['enabled']);self.assertEqual(product['description'],'UniHub managed product: superwagie')
+            self.assertEqual(product['refreshTTL'],720);self.assertEqual(product['accessTTL'],1)
+            sql(prefix+"UPDATE application SET refresh_expire_in_hours=0 WHERE name='app-superwagie-headless';")
+            sql(prefix+statement,ok=False)
+            self.assertEqual(sql(prefix+"SELECT refresh_expire_in_hours FROM application WHERE name='app-superwagie-headless';"),'0')
+            sql(prefix+"UPDATE application SET refresh_expire_in_hours=720 WHERE name='app-superwagie-headless';")
             email=next(x for x in product['items'] if x['name']=='Email')
             self.assertFalse(email['required']);self.assertEqual(email['rule'],'No verification')
             self.assertEqual(product['methods'],[{'name':'Password','displayName':'Password','rule':'All'}])

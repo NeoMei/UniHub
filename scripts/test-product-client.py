@@ -43,11 +43,22 @@ class ProductClientTests(unittest.TestCase):
   self.assertTrue(headless['enablePassword']);self.assertFalse(headless['enableSigninSession'])
   for change in [{'browser_sso':'true'},{'instance_id':'../escape'},{'instance_id':''}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
- def test_refresh_tokens_is_explicit_and_adds_only_refresh_grant(self):
+ def test_refresh_tokens_is_explicit_and_has_thirty_day_upstream_lifetime(self):
   client=self.client(refresh_tokens=True)
   self.m.validate_client(client)
   app=self.m.application(client,'cert-built-in')
   self.assertEqual(app['grantTypes'],['authorization_code','refresh_token'])
+  self.assertEqual(app.get('refreshExpireInHours'),720)
+  self.assertEqual(app['expireInHours'],1)
+  self.m.compare_readback(app,app)
+  with self.assertRaises(self.m.PolicyError):self.m.compare_readback(dict(app,refreshExpireInHours=0),app)
+  missing=dict(app);missing.pop('refreshExpireInHours')
+  with self.assertRaises(self.m.PolicyError):self.m.compare_readback(missing,app)
+  for disabled in [self.client(),self.client(refresh_tokens=False)]:
+   legacy=self.m.application(disabled,'cert-built-in')
+   self.assertEqual(legacy['grantTypes'],['authorization_code'])
+   self.assertEqual(legacy['expireInHours'],1)
+   self.assertNotIn('refreshExpireInHours',legacy)
   for change in [{'refresh_tokens':'true'},{'refresh_tokens':1}]:
    with self.assertRaises(self.m.PolicyError):self.m.validate_client(self.client(**change))
  def test_policy_rejects_secret_wildcards_unknown_scope_and_global_org(self):

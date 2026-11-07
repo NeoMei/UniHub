@@ -240,3 +240,103 @@ func TestProfileSelectsConfiguredProviderAmongCanonicalAliases(t *testing.T) {
 		t.Fatal("profile selected a product alias instead of configured provider", id, e)
 	}
 }
+
+func TestPasswordMutationKeepsPendingWhenSessionDeleteFails(t *testing.T) {
+	p := testutil.Database(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	var passwordCalled atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/get-user":
+			json.NewEncoder(w).Encode(map[string]any{"status": "ok", "data": map[string]string{"id": "subject", "name": "login", "email": ""}})
+		case "/api/get-organization":
+			json.NewEncoder(w).Encode(map[string]any{"status": "ok", "data": map[string]any{"name": "unihub", "passwordType": "bcrypt", "passwordObfuscatorType": "None", "passwordOptions": []string{}, "masterPassword": "", "masterVerificationCode": "", "defaultPassword": ""}})
+		case "/api/set-password":
+			passwordCalled.Store(true)
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		}
+	}))
+	defer upstream.Close()
+	u, err := accounts.New(p).EnsureIdentity(ctx, accounts.Identity{Issuer: upstream.URL, Subject: "subject"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at) VALUES('pending-delete',$1,'subject','Login','','csrf',$2)`, upstream.URL, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Exec(ctx, `CREATE FUNCTION deny_profile_session_delete() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected session delete failure'; END $$; CREATE TRIGGER deny_profile_session_delete BEFORE DELETE ON browser_sessions FOR EACH ROW EXECUTE FUNCTION deny_profile_session_delete();`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{pool: p, opts: Options{Issuer: upstream.URL, ManagementClientID: "m", ManagementClientSecret: "s", SigningKey: bytes.Repeat([]byte{1}, 32)}, client: upstream.Client()}
+	if err = s.ChangePassword(ctx, u.ID, "old", "NewSecretPassword9!"); err != ErrUnavailable {
+		t.Fatalf("session delete failure: %v", err)
+	}
+	if !passwordCalled.Load() {
+		t.Fatal("password provider was not reached")
+	}
+	var pending, sessions int
+	if err = p.QueryRow(ctx, `SELECT count(*) FROM identity_revocations WHERE issuer=$1 AND subject='subject' AND pending`, upstream.URL).Scan(&pending); err != nil || pending != 1 {
+		t.Fatalf("pending row: %d %v", pending, err)
+	}
+	if err = p.QueryRow(ctx, `SELECT count(*) FROM browser_sessions WHERE id_hash='pending-delete'`).Scan(&sessions); err != nil || sessions != 1 {
+		t.Fatalf("injected delete failure did not retain the session: %d %v", sessions, err)
+	}
+	if s.BrowserSessionAllowed(ctx, u.ID) {
+		t.Fatal("pending password mutation allowed browser claims")
+	}
+}
+
+func TestPasswordMutationKeepsPendingWhenCutoffFinalizeFails(t *testing.T) {
+	p := testutil.Database(t)
+	ctx := context.Background()
+	if err := database.Migrate(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	var passwordCalled atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/get-user":
+			json.NewEncoder(w).Encode(map[string]any{"status": "ok", "data": map[string]string{"id": "subject", "name": "login", "email": ""}})
+		case "/api/get-organization":
+			json.NewEncoder(w).Encode(map[string]any{"status": "ok", "data": map[string]any{"name": "unihub", "passwordType": "bcrypt", "passwordObfuscatorType": "None", "passwordOptions": []string{}, "masterPassword": "", "masterVerificationCode": "", "defaultPassword": ""}})
+		case "/api/set-password":
+			passwordCalled.Store(true)
+			json.NewEncoder(w).Encode(map[string]string{"status": "error", "msg": "provider commit uncertain"})
+		}
+	}))
+	defer upstream.Close()
+	u, err := accounts.New(p).EnsureIdentity(ctx, accounts.Identity{Issuer: upstream.URL, Subject: "subject"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = p.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at) VALUES('pending-finalize',$1,'subject','Login','','csrf',$2)`, upstream.URL, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Exec(ctx, `CREATE FUNCTION deny_profile_revocation_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected revocation update failure'; END $$; CREATE TRIGGER deny_profile_revocation_update BEFORE UPDATE ON identity_revocations FOR EACH ROW EXECUTE FUNCTION deny_profile_revocation_update();`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{pool: p, opts: Options{Issuer: upstream.URL, ManagementClientID: "m", ManagementClientSecret: "s", SigningKey: bytes.Repeat([]byte{1}, 32)}, client: upstream.Client()}
+	if err = s.ChangePassword(ctx, u.ID, "old", "NewSecretPassword9!"); err != ErrUnavailable {
+		t.Fatalf("cutoff finalize failure: %v", err)
+	}
+	if !passwordCalled.Load() {
+		t.Fatal("password provider was not reached")
+	}
+	var pending, sessions int
+	if err = p.QueryRow(ctx, `SELECT count(*) FROM identity_revocations WHERE issuer=$1 AND subject='subject' AND pending`, upstream.URL).Scan(&pending); err != nil || pending != 1 {
+		t.Fatalf("pending row: %d %v", pending, err)
+	}
+	if err = p.QueryRow(ctx, `SELECT count(*) FROM browser_sessions WHERE id_hash='pending-finalize'`).Scan(&sessions); err != nil || sessions != 0 {
+		t.Fatalf("session cleanup did not precede cutoff failure: %d %v", sessions, err)
+	}
+	if s.BrowserSessionAllowed(ctx, u.ID) {
+		t.Fatal("pending password mutation allowed browser claims")
+	}
+}

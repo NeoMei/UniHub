@@ -360,7 +360,7 @@ def headless_product_application(c, secret):
             {'name':'Display name','visible':True,'required':False,'rule':'All'},
             {'name':'Email','visible':True,'required':False,'rule':'No verification'}],
         'grantTypes':['authorization_code'] + (['refresh_token'] if c.get('refresh_tokens',False) else []),'redirectUris':c['redirect_uris'],'tokenFormat':'JWT-Standard','tokenSigningMethod':'RS256',
-        'expireInHours':1,'cookieExpireInHours':1,'failedSigninLimit':5,'failedSigninFrozenTime':15}
+        'expireInHours':1,**({'refreshExpireInHours':720} if c.get('refresh_tokens',False) else {}),'cookieExpireInHours':1,'failedSigninLimit':5,'failedSigninFrozenTime':15}
 
 
 def prepare(root, release, inventory):
@@ -675,6 +675,7 @@ def headless_applications_sql(credentials):
                 'signinMethods':'signin_methods','signinItems':'signin_items','signupItems':'signup_items','tokenFormat':'token_format',
                 'tokenSigningMethod':'token_signing_method','expireInHours':'expire_in_hours','cookieExpireInHours':'cookie_expire_in_hours',
                 'failedSigninLimit':'failed_signin_limit','failedSigninFrozenTime':'failed_signin_frozen_time'}
+            if 'refreshExpireInHours' in app:mapping['refreshExpireInHours']='refresh_expire_in_hours'
             for source,target in mapping.items():
                 value=app[source]
                 if isinstance(value,list):
