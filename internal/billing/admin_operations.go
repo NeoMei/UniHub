@@ -38,7 +38,14 @@ func (s *Service) Administer(ctx context.Context, authority AdminAuthority, acto
 	if authority == nil || !keyOK(r.Reason) {
 		return nil, ErrInvalid
 	}
-	tx, e := s.pool.Begin(ctx)
+	if r.Action == "refund.review" && r.Decision == "approve" {
+		return s.approveExternalRefund(ctx, authority, actor, r)
+	}
+	return s.administer(ctx, authority, actor, r, s.pool.Begin)
+}
+
+func (s *Service) administer(ctx context.Context, authority AdminAuthority, actor string, r AdminOperation, begin func(context.Context) (pgx.Tx, error)) (any, error) {
+	tx, e := begin(ctx)
 	if e != nil {
 		return nil, e
 	}
@@ -220,7 +227,7 @@ func (s *Service) Administer(ctx context.Context, authority AdminAuthority, acto
 		}
 		out = old
 	case "refund.review":
-		if r.Decision != "reject" {
+		if r.Decision != "reject" && r.Decision != "approve" {
 			return nil, ErrUnsupported
 		}
 		if e = database.LockAccountTx(ctx, tx, r.AccountID); e != nil {
@@ -257,18 +264,51 @@ func (s *Service) Administer(ctx context.Context, authority AdminAuthority, acto
 		if err != nil {
 			return nil, err
 		}
+		eventName := "refund.review_rejected"
 		order.RefundStatus = "REJECTED"
+		if r.Decision == "approve" {
+			if order.PaymentSource != "external" {
+				return nil, ErrUnsupported
+			}
+			order.RefundStatus = "FROZEN"
+			eventName = "refund.review_approved"
+		}
+		if order.PaymentSource == "external" {
+			// A paid, unfulfilled liability still needs fulfillment or the
+			// original refund. Rejection cannot release its commercial block.
+			if r.Decision == "reject" && order.FulfillmentStatus != "FULFILLED" {
+				return nil, ErrPending
+			}
+			x, err := readCheckout(ctx, tx, r.AccountID, order.CheckoutID)
+			if err != nil {
+				return nil, err
+			}
+			if x.OrderID != order.ID || x.RefundStatus != "REVIEW" || x.RefundReceipt != nil {
+				return nil, ErrConflict
+			}
+			x.RefundStatus = "REJECTED"
+			x.ErrorCode = ""
+			if r.Decision == "approve" {
+				x.RefundStatus = "PENDING"
+				x.RefundApprovedBy = actor
+			}
+			if _, e = tx.Exec(ctx, `UPDATE billing_checkouts SET snapshot=$2 WHERE id=$1`, x.ID, encode(x)); e != nil {
+				return nil, e
+			}
+		}
 		order.RefundReason = r.Reason
 		e = saveOrder(ctx, tx, order)
 		for _, b := range batches {
 			if e != nil {
 				break
 			}
-			b.Frozen = false
+			if r.Decision == "reject" {
+				b.Frozen = false
+			}
 			e = saveBatch(ctx, tx, b)
 		}
 		if e == nil {
-			e = event(ctx, tx, r.AccountID, actor, r.ID, "refund.review_rejected", map[string]string{"reason": r.Reason})
+			e = event(ctx, tx, r.AccountID, actor, r.ID, eventName, map[string]string{"reason": r.Reason})
 		}
 		out = order
 	default:

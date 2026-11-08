@@ -93,7 +93,7 @@ func TestPlatformFinanceScopedWritesAndOriginalAllowlist(t *testing.T) {
 	if e = pool.QueryRow(ctx, `SELECT count(*) FROM account_members WHERE account_id=$1 AND user_id=$2`, account, ids["finance_admin"]).Scan(&owners); e != nil || owners != 0 {
 		t.Fatal("admin added to payer", e)
 	}
-	if _, e = s.Administer(ctx, authority, ids["finance_admin"], billing.AdminOperation{Action: "refund.review", AccountID: account, ID: "missing", Decision: "approve", Reason: "test"}); !errors.Is(e, billing.ErrUnsupported) {
+	if _, e = s.Administer(ctx, authority, ids["finance_admin"], billing.AdminOperation{Action: "refund.review", AccountID: account, ID: "missing", Decision: "partial", Reason: "test"}); !errors.Is(e, billing.ErrUnsupported) {
 		t.Fatalf("approval accepted %v", e)
 	}
 	offer := billing.Offer{ID: "admin-draft", ProductID: "agentwiki", Name: "Pure service", AccountKind: "both", Kind: "membership", Period: "month", Price: "1000000", MonthlyCredit: "1000000"}

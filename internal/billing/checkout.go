@@ -170,6 +170,9 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 		if e = lockBillingProduct(ctx, tx, offer.ProductID); e != nil {
 			return e
 		}
+		if e = s.requireAddonSubscriptionOn(ctx, tx, offer, account, s.now().UTC()); e != nil {
+			return e
+		}
 		if e = s.offerForSaleOn(ctx, tx, offer); e != nil {
 			return e
 		}

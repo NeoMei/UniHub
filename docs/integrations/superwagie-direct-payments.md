@@ -116,3 +116,9 @@ Configure the approved versioned native CREDIT rational and membership policy se
 ## SuperWagie recovery limit
 
 The local commerce journal preserves original intents across a normal restart. After an ungraceful process exit, its existing writer lock can remain and refuse reopening with `platform_commerce_store_busy`. Follow the owning platform-account documentation: stop all writers, preserve `state.json`, and remove only the stale lock before reopening. This implementation does not promise automatic recovery of that local lock. Server-side provider receipts and ledger commands retain their independent durable recovery.
+
+## Manual full-refund decisions
+
+An empty/manual `refund_rule` stays manual. The existing central finance route `POST /admin/v1/accounts/{account}/orders/{order}/refund-review` accepts `decision=approve` only for an external order whose original receipt exists, batches are frozen, ledger consumption and reservation are zero, and financial commands are settled. Service-only orders, upgrades and changed subscriptions remain outside this action. The request includes the current order `version` and a required `reason`; no amount, provider or refund identifier can be supplied.
+
+Platform authority and account session locks protect ledger inspection outside a SQL transaction. Fresh finance authority, order CAS, the durable approval and audit then commit together. The worker performs original-channel recovery after commit using the existing refund ID. Provider submission alone never proves success. For fulfilled orders, a rejected decision updates the checkout and order together, releases only this order's batches and preserves the original request identity on replay. A paid but unfulfilled external liability refuses rejection and stays in review until fulfillment or the original refund resolves it. Repeated or conflicting decisions return conflict. The legacy wallet refund approval policy is unchanged.

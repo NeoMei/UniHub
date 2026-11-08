@@ -90,7 +90,7 @@ func (s *Service) RefundCheckout(ctx context.Context, actor, account, checkout, 
 	if e != nil {
 		return x.Checkout, e
 	}
-	if x.RefundStatus == "SUCCEEDED" || x.RefundStatus == "REVIEW" {
+	if x.RefundStatus == "SUCCEEDED" || x.RefundStatus == "REVIEW" || x.RefundStatus == "REJECTED" {
 		return s.checkoutView(ctx, x)
 	}
 	return s.recoverCheckoutRefund(ctx, account, checkout)
@@ -128,7 +128,7 @@ func (s *Service) prepareCheckoutRefund(ctx context.Context, account, checkout s
 		manual := ""
 		// Received-but-unfulfilled late payments have no service or points to revoke.
 		if o.FulfillmentStatus == "FULFILLED" {
-			if o.Offer.RefundRule != "unused_only_v1" {
+			if o.Offer.RefundRule != "unused_only_v1" && x.RefundApprovedBy == "" {
 				manual = "refund_policy_not_configured"
 			}
 			if o.Offer.Kind == "membership" && o.Offer.MonthlyCredit == "0" {

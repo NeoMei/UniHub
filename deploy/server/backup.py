@@ -35,7 +35,19 @@ def systemd_snapshot():
             raise DeploymentError('Cannot read effective UniHub service configuration; backup remains incomplete.')
         return result.stdout
     show = command(['show', 'unihub.service', '--property=LoadState,FragmentPath,DropInPaths,Environment,EnvironmentFiles,UnsetEnvironment,PassEnvironment'])
-    properties = dict(line.split('=', 1) for line in show.splitlines() if '=' in line)
+    properties = {}
+    for line in show.splitlines():
+        if '=' not in line:
+            continue
+        name, value = line.split('=', 1)
+        # systemctl emits one EnvironmentFiles record per file on some versions.
+        # Keep every record in order so later files retain override precedence.
+        if name in properties and name in {'EnvironmentFiles', 'Environment', 'DropInPaths', 'UnsetEnvironment', 'PassEnvironment'}:
+            properties[name] += ' ' + value
+        elif name in properties:
+            raise DeploymentError('Repeated singleton systemd property; backup remains incomplete.')
+        else:
+            properties[name] = value
     if properties.get('LoadState') == 'not-found':
         return None
     if properties.get('LoadState') != 'loaded':

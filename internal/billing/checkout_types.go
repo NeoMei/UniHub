@@ -37,18 +37,19 @@ type Checkout struct {
 }
 type checkoutRecord struct {
 	Checkout
-	ActorID         string                 `json:"actor_id"`
-	MerchantID      string                 `json:"merchant_id"`
-	MerchantVersion string                 `json:"merchant_version"`
-	RequestDigest   string                 `json:"request_digest"`
-	Order           Order                  `json:"order"`
-	Quote           *Quote                 `json:"quote,omitempty"`
-	Receipt         *payments.Result       `json:"receipt,omitempty"`
-	RefundID        string                 `json:"refund_id,omitempty"`
-	RefundKey       string                 `json:"refund_key,omitempty"`
-	RefundReason    string                 `json:"refund_reason,omitempty"`
-	RefundReceipt   *payments.RefundResult `json:"refund_receipt,omitempty"`
-	CloseRequested  bool                   `json:"close_requested,omitempty"`
+	ActorID          string                 `json:"actor_id"`
+	MerchantID       string                 `json:"merchant_id"`
+	MerchantVersion  string                 `json:"merchant_version"`
+	RequestDigest    string                 `json:"request_digest"`
+	Order            Order                  `json:"order"`
+	Quote            *Quote                 `json:"quote,omitempty"`
+	Receipt          *payments.Result       `json:"receipt,omitempty"`
+	RefundID         string                 `json:"refund_id,omitempty"`
+	RefundKey        string                 `json:"refund_key,omitempty"`
+	RefundReason     string                 `json:"refund_reason,omitempty"`
+	RefundReceipt    *payments.RefundResult `json:"refund_receipt,omitempty"`
+	RefundApprovedBy string                 `json:"refund_approved_by,omitempty"`
+	CloseRequested   bool                   `json:"close_requested,omitempty"`
 }
 
 func (s *Service) ConfigurePayments(providers []payments.Provider) {

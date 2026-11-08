@@ -122,3 +122,44 @@ test('profile conflict preserves the displayed version and cannot report success
  expect((await screen.findByRole('alert')).textContent).toContain('状态已变化');
  expect(screen.getByRole('dialog')).toBeTruthy(); expect(writes).toBe(1);
 });
+
+test("manual external refund requires an explicit reason and original full-refund decision", async () => {
+  const submissions: { body: unknown; csrf: string | null }[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (init?.method === "POST") {
+      expect(url.pathname).toBe("/admin/v1/accounts/original-account/orders/original-order/refund-review");
+      submissions.push({ body: JSON.parse(String(init.body)), csrf: new Headers(init.headers).get("X-CSRF-Token") });
+      return json({ refund_status: "FROZEN" });
+    }
+    return json({ items: [{ id: "original-order", account_id: "original-account", payment_source: "external", checkout_id: "original-checkout", fulfillment_status: "FULFILLED", refund_status: "MANUAL_REVIEW", version: "original-version", amount: "9800000" }], total: 1 });
+  }));
+  render(<Operations resource="refunds" principal={principal} csrf="csrf" />);
+  fireEvent.click(await screen.findByRole("button", { name: "批准未使用订单全额原路退款" }));
+  expect(submissions).toHaveLength(0);
+  fireEvent.change(screen.getByLabelText("操作原因"), { target: { value: "确认未使用且无预留" } });
+  fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
+  await waitFor(() => expect(submissions).toHaveLength(1));
+  expect(submissions[0]).toEqual({ body: { decision: "approve", version: "original-version", reason: "确认未使用且无预留" }, csrf: "csrf" });
+});
+
+test.each(["wallet", "external"])("read-only finance cannot approve %s refund", async (source) => {
+  vi.stubGlobal("fetch", vi.fn(async () => json({ items: [{ id: "order", account_id: "account", payment_source: source, refund_status: "MANUAL_REVIEW", version: "v1" }], total: 1 })));
+  render(<Operations resource="refunds" principal={{ ...principal, permissions: ["finance:read"] }} csrf="csrf" />);
+  await screen.findByText("MANUAL_REVIEW");
+  expect(screen.queryByRole("button", { name: "批准未使用订单全额原路退款" })).toBeNull();
+});
+
+test("legacy wallet refund does not expose original-channel approval", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => json({ items: [{ id: "order", account_id: "account", payment_source: "wallet", refund_status: "MANUAL_REVIEW", version: "v1" }], total: 1 })));
+  render(<Operations resource="refunds" principal={principal} csrf="csrf" />);
+  await screen.findByRole("button", { name: "拒绝退款申请" });
+  expect(screen.queryByRole("button", { name: "批准未使用订单全额原路退款" })).toBeNull();
+});
+
+test("paid unfulfilled liability stays in review without a reject action", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => json({ items: [{ id: "order", account_id: "account", payment_source: "external", fulfillment_status: "REVIEW", refund_status: "MANUAL_REVIEW", version: "v1" }], total: 1 })));
+  render(<Operations resource="refunds" principal={principal} csrf="csrf" />);
+  await screen.findByText(/已收款但尚未履约/);
+  expect(screen.queryByRole("button", { name: "拒绝退款申请" })).toBeNull();
+});

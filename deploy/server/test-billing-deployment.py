@@ -528,9 +528,12 @@ class BillingDeploymentTests(unittest.TestCase):
         extra_env.write_bytes(payload.replace('\n', newline).encode('utf-8'))
         extra_env.chmod(0o600)
         dropin.write_text('[Service]\nEnvironmentFile=' + str(extra_env) + '\n')
+        later_env = host / 'later.env'
+        later_env.write_text('EXTRA_IDENTITY_SECRET=later override\n')
+        later_env.chmod(0o600)
         show = ('LoadState=loaded\nFragmentPath=' + str(unit) + '\nDropInPaths=' + str(dropin) +
                 '\nEnvironment=UNIT_IDENTITY_SECRET=unit-fixture\nEnvironmentFiles=' +
-                str(runtime_path) + ' (ignore_errors=no) ' + str(extra_env) + ' (ignore_errors=no)\n')
+                str(runtime_path) + ' (ignore_errors=no)\nEnvironmentFiles=' + str(extra_env) + ' (ignore_errors=no)\nEnvironmentFiles=' + str(later_env) + ' (ignore_errors=no)\n')
         effective_unit = '# ' + str(unit) + '\n' + unit.read_text() + '# ' + str(dropin) + '\n' + dropin.read_text()
         def commands(command, **kwargs):
             if command[:2] == ['systemctl', 'show']:
@@ -559,7 +562,7 @@ class BillingDeploymentTests(unittest.TestCase):
         mapping = json.loads((restored / 'host-configuration/files.json').read_text())
         self.assertIn(str(effective_key), mapping, 'backup omitted actual spaced key path')
         self.assertNotIn(str(decoy_key), mapping, 'backup silently selected the truncated decoy')
-        for source in [unit, dropin, extra_env, runtime_key, effective_key]:
+        for source in [unit, dropin, extra_env, later_env, runtime_key, effective_key]:
             restored_path = restored / mapping[str(source)]
             self.assertEqual(restored_path.read_bytes(), source.read_bytes())
             self.assertEqual(stat.S_IMODE(restored_path.stat().st_mode), 0o600)
@@ -568,7 +571,7 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(effective['PAYMENT_CONFIG_KEY_FILE'], str(effective_key))
         self.assertEqual(effective['PAYMENT_MODE'], 'direct')
         self.assertEqual(effective['UNIT_IDENTITY_SECRET'], 'unit-fixture')
-        self.assertEqual(effective['EXTRA_IDENTITY_SECRET'], 'private  fixture value')
+        self.assertEqual(effective['EXTRA_IDENTITY_SECRET'], 'later override')
         self.assertEqual(effective['IDENTITY_LITERAL'], 'prefix"quote" #literal; $no_expand')
         self.assertEqual(effective['IDENTITY_SINGLE'], '  first' + newline + 'second \\ $literal  ')
         self.assertEqual(effective['IDENTITY_DOUBLE'], 'quote " and \\ and \\q and $literal')
