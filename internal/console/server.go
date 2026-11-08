@@ -177,6 +177,10 @@ func (s *Server) Handler(api http.Handler) http.Handler {
 				s.api(api, w, r)
 				return
 			}
+			if r.Method == http.MethodPost && (p == "/payments/wechat/notify" || p == "/payments/alipay/notify") {
+				api.ServeHTTP(w, r)
+				return
+			}
 			if p == "/healthz" || p == "/webhooks/sandbox" || p == "/internal" || strings.HasPrefix(p, "/internal/") {
 				api.ServeHTTP(w, r)
 				return

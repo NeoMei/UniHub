@@ -6,6 +6,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import pwd
 from pathlib import Path
 import secrets
 import re
@@ -126,18 +127,35 @@ def validate_billing_profiles(items):
         require(product not in seen)
         seen.add(product)
         require(type(item.get('version')) is int and 1 <= item['version'] <= 9223372036854775807)
+        conversion_fields = {'native_credit_conversion'} if 'native_credit_conversion' in item else set()
+        conversion = item.get('native_credit_conversion')
+        if conversion is not None:
+            exact(conversion, {'version', 'numerator', 'denominator', 'rounding'})
+            require(product == 'superwagie')
+            require(isinstance(conversion['version'], str)
+                    and re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}', conversion['version']) is not None
+                    and conversion['version'] != 'lr-quota-usd-cny-v1')
+            require(conversion['rounding'] == 'lr-cumulative-ceil-v1')
+            for name in ['numerator', 'denominator']:
+                value = conversion[name]
+                require(isinstance(value, str) and re.fullmatch(r'[1-9][0-9]{0,18}', value) is not None
+                        and int(value) <= 9223372036854775807)
         if 'preset' in item:
-            exact(item, {'product_id', 'version', 'preset'})
+            exact(item, {'product_id', 'version', 'preset'} | conversion_fields)
             require(item['preset'] in ('hybrid', 'prepaid', 'subscription'))
+            require(conversion is None or item['preset'] == 'hybrid')
             continue
-        exact(item, {'product_id', 'version', 'subscription', 'included_credits', 'addons', 'usage'})
+        exact(item, {'product_id', 'version', 'subscription', 'included_credits', 'addons', 'usage'} | conversion_fields)
         for name in ['subscription', 'included_credits', 'addons']:
             exact(item[name], {'enabled'})
             require(type(item[name]['enabled']) is bool)
         usage = item['usage']
         usage_fields = {'enabled', 'require_subscription', 'funding_modes', 'default_funding_mode'}
-        require(isinstance(usage, dict) and set(usage) in (usage_fields, usage_fields | {'models'}))
+        require(isinstance(usage, dict) and usage_fields <= set(usage)
+                and set(usage) <= usage_fields | {'models', 'require_subscription_for_credits'})
         require(type(usage['enabled']) is bool and type(usage['require_subscription']) is bool)
+        credit_subscription = usage.get('require_subscription_for_credits', False)
+        require(type(credit_subscription) is bool)
         if 'models' in usage:
             models = usage['models']
             require(models is None or (isinstance(models, list) and len(models) <= 32
@@ -149,8 +167,10 @@ def validate_billing_profiles(items):
         if usage['enabled']:
             require(bool(modes) and usage['default_funding_mode'] in modes)
         else:
-            require(not modes and usage['default_funding_mode'] == '' and not usage['require_subscription'])
-        require(not usage['require_subscription'] or item['subscription']['enabled'])
+            require(not modes and usage['default_funding_mode'] == '' and not usage['require_subscription'] and not credit_subscription)
+        require(not credit_subscription or 'credits' in modes)
+        require(not (usage['require_subscription'] or credit_subscription) or item['subscription']['enabled'])
+        require(conversion is None or (usage['enabled'] and 'credits' in modes))
         require(not item['included_credits']['enabled'] or (item['subscription']['enabled'] and 'credits' in modes))
         require(not item['addons']['enabled'] or 'credits' in modes)
     return items
@@ -181,6 +201,45 @@ def read_billing_profiles(path):
         return validate_billing_profiles(json.loads(raw.decode('utf-8'), object_pairs_hook=unique_object))
     except (OSError, ValueError, UnicodeError, TypeError, RecursionError):
         raise DeploymentError('Billing profiles are unavailable or invalid; no configuration contents were printed.') from None
+
+
+def protected_payment_file(raw, *, key=False, secret=True):
+    """Check an existing credential file without creating or changing it."""
+    path = Path(raw)
+    if not path.is_absolute():
+        raise DeploymentError('Payment configuration requires an absolute protected file path.')
+    no_symlink(path)
+    owners = {0, os.geteuid()}
+    try:
+        owners.add(pwd.getpwnam('unihub').pw_uid)
+    except KeyError:
+        pass
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0))
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                    or secret and (info.st_uid not in owners or stat.S_IMODE(info.st_mode) & 0o077)
+                    or info.st_mode & 0o7000
+                    or not info.st_mode & stat.S_IRUSR
+                    or (key and info.st_size != 32) or info.st_size > 1 << 20):
+                raise DeploymentError('Existing payment credential file is unsafe or invalid; restore it without rotating secrets.')
+            if key and len(stream.read(33)) != 32:
+                raise DeploymentError('Existing payment configuration key is invalid; restore the original key.')
+    except OSError:
+        raise DeploymentError('Existing payment credential file is unavailable; restore it without rotating secrets.') from None
+    return path
+
+
+def validate_payment_runtime(values):
+    key = values.get('PAYMENT_CONFIG_KEY_FILE', '')
+    providers = values.get('PAYMENT_PROVIDERS_FILE', '')
+    if key and (providers or values.get('PAYMENT_MODE') != 'direct'):
+        raise DeploymentError('Managed payment configuration requires direct mode and excludes the static providers file.')
+    if key:
+        protected_payment_file(key, key=True)
+    if providers:
+        protected_payment_file(providers, secret=False)
 
 
 def staged_billing_path(root):
@@ -380,9 +439,11 @@ def prepare(root, release, inventory):
     runtime_path = shared / 'runtime.env'
     if runtime_path.exists():
         try:
+            no_symlink(runtime_path)
             previous_runtime = read_env(runtime_path)
         except (OSError, ValueError):
             raise DeploymentError('Existing runtime configuration is invalid; refusing to rewrite it.') from None
+    validate_payment_runtime(previous_runtime)
     credential_path = shared / 'credentials.json'
     no_symlink(credential_path)
     if not credential_path.exists():
@@ -419,11 +480,7 @@ def prepare(root, release, inventory):
         'BILLING_OPERATOR_IDS': '', 'OPS_OIDC_AUDIENCE': '', 'PAYMENT_MODE': 'sandbox',
         'PAYMENT_MERCHANT': 'unihub-sandbox', 'PAYMENT_SIGNING_KEY': credentials['payment_signing_key'],
         'HEADLESS_TRUST_LOOPBACK_PROXY': 'true', 'HEADLESS_AUDIT_REDACTION_VERIFIED': 'false'}
-    for key in ['ADMIN_IDENTITY_DEPLOYMENT_VERIFIED', 'ADMIN_PASSWORD_RESET_VERIFIED',
-                'ADMIN_SESSION_REVOCATION_VERIFIED', 'RECOVERY_SMTP_ADDR',
-                'RECOVERY_SMTP_FROM', 'RECOVERY_SMTP_USERNAME', 'RECOVERY_SMTP_PASSWORD']:
-        if key in previous_runtime:
-            runtime[key] = previous_runtime[key]
+    runtime.update(previous_runtime)
     configure_headless_runtime(root, credentials, runtime)
     if billing_path is not None:
         runtime['PRODUCT_BILLING_FILE'] = str(billing_path)

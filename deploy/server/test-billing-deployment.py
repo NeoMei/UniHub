@@ -131,10 +131,153 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(before, {name: (self.root / name).read_bytes() for name in tracked})
         self.assertEqual(bundle.read_env(self.root / 'shared/runtime.env')['HEADLESS_AUDIT_REDACTION_VERIFIED'], 'true')
 
+    def native_profile(self):
+        return {'product_id': 'superwagie', 'version': 3,
+                'subscription': {'enabled': True}, 'included_credits': {'enabled': True},
+                'addons': {'enabled': True},
+                'usage': {'enabled': True, 'require_subscription': True,
+                          'require_subscription_for_credits': True,
+                          'funding_modes': ['credits', 'prepaid_cash'],
+                          'default_funding_mode': 'prepaid_cash'},
+                'native_credit_conversion': {'version': 'sw-native-cny10-20261109-v1',
+                                             'numerator': '146', 'denominator': '1',
+                                             'rounding': 'lr-cumulative-ceil-v1'}}
+
+    def test_native_conversion_and_credit_subscription_roundtrip(self):
+        profile = self.native_profile()
+        self.stage([profile])
+        self.assertEqual(json.loads(self.public.read_text()), [profile])
+        # A hybrid preset also supplies the subscription and credits policy.
+        preset = {'product_id': 'superwagie', 'version': 4, 'preset': 'hybrid',
+                  'native_credit_conversion': profile['native_credit_conversion']}
+        self.stage([preset])
+        self.assertEqual(json.loads(self.public.read_text()), [preset])
+
+    def test_native_conversion_and_credit_subscription_are_strict(self):
+        valid = self.native_profile()
+        rejected = []
+        for name in ['version', 'numerator', 'denominator', 'rounding']:
+            bad = copy.deepcopy(valid)
+            del bad['native_credit_conversion'][name]
+            rejected.append(bad)
+        for key, values in {
+            'version': ['', 'lr-quota-usd-cny-v1', 'a' * 129, 'x/y', 1, None],
+            'numerator': ['0', '-1', '+1', '01', '1.0', ' 1', '9223372036854775808', 1, True, None],
+            'denominator': ['0', '-1', '01', '9223372036854775808', 1, None],
+            'rounding': ['', 'ceil', None], 'secret': ['PRIVATE_MARKER'],
+        }.items():
+            for value in values:
+                bad = copy.deepcopy(valid)
+                bad['native_credit_conversion'][key] = value
+                rejected.append(bad)
+        for value in [[], 'conversion']:
+            rejected.append({**valid, 'native_credit_conversion': value})
+        rejected.append({**valid, 'product_id': 'other'})
+        for changes in [{'require_subscription_for_credits': 1},
+                        {'funding_modes': ['prepaid_cash']},
+                        {'enabled': False, 'funding_modes': [], 'default_funding_mode': '',
+                         'require_subscription': False}]:
+            bad = copy.deepcopy(valid)
+            bad.pop('native_credit_conversion')
+            bad['included_credits']['enabled'] = False
+            bad['addons']['enabled'] = False
+            bad['usage'].update(changes)
+            rejected.append(bad)
+        bad = copy.deepcopy(valid)
+        bad['subscription']['enabled'] = False
+        bad['included_credits']['enabled'] = False
+        bad['usage']['require_subscription'] = False
+        rejected.append(bad)
+        self.stage()
+        before = self.public.read_bytes()
+        for item in rejected:
+            with self.subTest(item=item):
+                with self.assertRaises(bundle.DeploymentError):
+                    bundle.stage_billing(self.root, self.write([item]))
+                self.assertEqual(before, self.public.read_bytes())
+
+    def direct_runtime(self, key=True):
+        path = self.root / 'shared/runtime.env'
+        values = bundle.read_env(path)
+        values.update({'APP_ENV': 'production', 'PAYMENT_MODE': 'direct',
+                       'SANDBOX_CATALOG': 'false', 'EXISTING_IDENTITY_SECRET': 'fixture retained'})
+        protected = Path(self.temp.name).resolve() / 'merchant.key'
+        if key:
+            protected.write_bytes(bytes(range(32)))
+            protected.chmod(0o600)
+            values['PAYMENT_CONFIG_KEY_FILE'] = str(protected)
+        else:
+            protected.write_text('{"fixture": true}')
+            protected.chmod(0o600)
+            values['PAYMENT_PROVIDERS_FILE'] = str(protected)
+        bundle.atomic_write(path, bundle.env_text(values))
+        return path, values, protected
+
+    def test_prepare_preserves_direct_mode_key_static_paths_and_unrelated_secrets(self):
+        for key in [True, False]:
+            path, values, protected = self.direct_runtime(key)
+            values.pop('PAYMENT_PROVIDERS_FILE' if key else 'PAYMENT_CONFIG_KEY_FILE', None)
+            bundle.atomic_write(path, bundle.env_text(values))
+            original = protected.read_bytes()
+            bundle.prepare(self.root, self.release, {})
+            actual = bundle.read_env(path)
+            for name, value in values.items():
+                self.assertEqual(actual[name], value, name)
+            self.assertEqual(protected.read_bytes(), original)
+
+    def test_managed_key_accepts_service_owner_and_rejects_unrelated_owner(self):
+        _, _, protected = self.direct_runtime()
+        actual = protected.stat()
+        def owned(uid):
+            fields = list(actual)
+            fields[4] = uid
+            return os.stat_result(fields)
+        with patch.object(bundle.os, 'geteuid', return_value=0), \
+                patch('pwd.getpwnam', return_value=SimpleNamespace(pw_uid=65431)):
+            with patch.object(bundle.os, 'fstat', return_value=owned(65431)):
+                self.assertEqual(bundle.protected_payment_file(str(protected), key=True), protected)
+            with patch.object(bundle.os, 'fstat', return_value=owned(65432)):
+                with self.assertRaises(bundle.DeploymentError):
+                    bundle.protected_payment_file(str(protected), key=True)
+
+    def test_prepare_refuses_missing_unsafe_or_conflicting_managed_key_without_rotation(self):
+        path, values, protected = self.direct_runtime()
+        before = path.read_bytes()
+        secret = protected.read_bytes()
+        for unsafe in ['missing', 'short', 'public', 'symlink', 'hardlink']:
+            protected.unlink(missing_ok=True)
+            link = protected.with_suffix('.target')
+            link.unlink(missing_ok=True)
+            if unsafe == 'symlink':
+                link.write_bytes(secret)
+                link.chmod(0o600)
+                protected.symlink_to(link)
+            elif unsafe == 'hardlink':
+                link.write_bytes(secret)
+                link.chmod(0o600)
+                os.link(link, protected)
+            elif unsafe != 'missing':
+                protected.write_bytes(b'short' if unsafe == 'short' else secret)
+                protected.chmod(0o644 if unsafe == 'public' else 0o600)
+            with self.subTest(unsafe=unsafe), self.assertRaises(bundle.DeploymentError):
+                bundle.prepare(self.root, self.release, {})
+            self.assertEqual(path.read_bytes(), before)
+            if unsafe == 'missing':
+                self.assertFalse(protected.exists())
+        protected.unlink()
+        protected.write_bytes(secret)
+        protected.chmod(0o600)
+        for changes in [{'PAYMENT_PROVIDERS_FILE': str(protected)}, {'PAYMENT_MODE': 'sandbox'}]:
+            bundle.atomic_write(path, bundle.env_text({**values, **changes}))
+            with self.assertRaises(bundle.DeploymentError):
+                bundle.prepare(self.root, self.release, {})
+            self.assertEqual(protected.read_bytes(), secret)
+
     def test_presets_and_complete_compositions_are_accepted(self):
         for preset in ['hybrid', 'prepaid', 'subscription']:
             self.stage([{'product_id': 'my-product', 'version': 2, 'preset': preset}])
-        for example in sorted((HERE.parents[1] / 'examples/billing').glob('*.json')):
+        for name in ['dual-assets', 'hybrid', 'prepaid', 'subscription-cash', 'subscription']:
+            example = HERE.parents[1] / 'examples/billing' / (name + '.json')
             with self.subTest(example=example.name):
                 bundle.stage_billing(self.root, example)
                 bundle.prepare(self.root, self.release, {})
@@ -263,6 +406,93 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(bundle.read_env(self.root / 'shared/runtime.env')['PRODUCT_BILLING_FILE'], str(self.public))
         self.assertNotIn('PRIVATE_MARKER', output.getvalue())
 
+    def test_static_manifest_backup_keeps_referenced_credential_files(self):
+        runtime, values, manifest = self.direct_runtime(key=False)
+        private = manifest.with_name('signing.pem')
+        private.write_text('private signing fixture')
+        private.chmod(0o600)
+        public = manifest.with_name('public.pem')
+        public.write_text('public verification fixture')
+        public.chmod(0o644)
+        api_key = manifest.with_name('api-v3.key')
+        api_key.write_bytes(bytes(range(32)))
+        api_key.chmod(0o600)
+        manifest.write_text(json.dumps({'wechat': {'private_key_file': str(private),
+                                                  'api_v3_key_file': str(api_key),
+                                                  'platform_key_files': {'serial': str(public)}},
+                                       'alipay': {'private_key_file': str(private),
+                                                  'public_key_file': str(public)}}))
+        manifest.chmod(0o644)
+        bundle.prepare(self.root, self.release, {})
+        self.assertEqual(bundle.read_env(runtime)['PAYMENT_PROVIDERS_FILE'], str(manifest))
+        sources, effective = backup_bundle.recovery_configuration(self.root, None)
+        self.assertEqual(set(sources), {manifest, private, public, api_key})
+        self.assertEqual(effective['PAYMENT_MODE'], 'direct')
+
+    def test_systemd_environment_excludes_inactive_runtime_values_and_honors_unset(self):
+        self.direct_runtime()
+        properties = {'Environment': 'PAYMENT_MODE=disabled IDENTITY_SECRET=fixture',
+                      'UnsetEnvironment': 'IDENTITY_SECRET', 'EnvironmentFiles': ''}
+        _, effective = backup_bundle.recovery_configuration(self.root, {'properties': properties})
+        self.assertEqual(effective, {'PAYMENT_MODE': 'disabled'})
+
+    def test_backup_restores_effective_unit_dropins_environment_and_merchant_key_privately(self):
+        runtime_path, _, runtime_key = self.direct_runtime()
+        host = Path(self.temp.name).resolve() / 'host-systemd'
+        host.mkdir()
+        unit = host / 'unihub.service'
+        unit.write_text('[Service]\nEnvironmentFile=' + str(runtime_path) + '\n')
+        dropin = host / 'commerce.conf'
+        effective_key = host / 'effective.key'
+        effective_key.write_bytes(bytes(reversed(range(32))))
+        effective_key.chmod(0o600)
+        extra_env = host / 'commerce.env'
+        extra_env.write_text(bundle.env_text({'PAYMENT_CONFIG_KEY_FILE': str(effective_key),
+                                             'EXTRA_IDENTITY_SECRET': 'private fixture'}))
+        extra_env.chmod(0o600)
+        dropin.write_text('[Service]\nEnvironmentFile=' + str(extra_env) + '\n')
+        show = ('LoadState=loaded\nFragmentPath=' + str(unit) + '\nDropInPaths=' + str(dropin) +
+                '\nEnvironment=UNIT_IDENTITY_SECRET=unit-fixture\nEnvironmentFiles=' +
+                str(runtime_path) + ' (ignore_errors=no) ' + str(extra_env) + ' (ignore_errors=no)\n')
+        effective_unit = '# ' + str(unit) + '\n' + unit.read_text() + '# ' + str(dropin) + '\n' + dropin.read_text()
+        def commands(command, **kwargs):
+            if command[:2] == ['systemctl', 'show']:
+                return SimpleNamespace(returncode=0, stdout=show)
+            if command[:2] == ['systemctl', 'cat']:
+                return SimpleNamespace(returncode=0, stdout=effective_unit)
+            self.assertEqual(command[:3], ['docker', 'exec', 'unihub-server-postgres'])
+            kwargs['stdout'].write(b'isolated backup fixture')
+            return SimpleNamespace(returncode=0)
+        destination = self.root / 'backups/test-effective-config'
+        inventory = {'container:unihub-server-postgres': {'State': {'Running': True}}}
+        with patch.object(backup_bundle, 'inventory_resources', return_value=inventory), \
+                patch.object(backup_bundle, 'validate_resources'), \
+                patch('shutil.which', return_value='/fixture/systemctl'), \
+                patch.object(backup_bundle.subprocess, 'run', side_effect=commands):
+            backup_bundle.backup(self.root, destination)
+        self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o700)
+        for path in destination.iterdir():
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        restored = Path(self.temp.name).resolve() / 'isolated-restore'
+        restored.mkdir(mode=0o700)
+        with tarfile.open(destination / 'configuration.tar') as archive:
+            self.assertTrue(all(not Path(item.name).is_absolute() and '..' not in Path(item.name).parts for item in archive))
+            archive.extractall(restored, filter='data')
+        self.assertTrue((restored / 'host-configuration/files.json').is_file(), 'backup omitted merchant/unit recovery mapping')
+        mapping = json.loads((restored / 'host-configuration/files.json').read_text())
+        for source in [unit, dropin, extra_env, runtime_key, effective_key]:
+            restored_path = restored / mapping[str(source)]
+            self.assertEqual(restored_path.read_bytes(), source.read_bytes())
+            self.assertEqual(stat.S_IMODE(restored_path.stat().st_mode), 0o600)
+        self.assertEqual((restored / 'host-configuration/effective-unit.conf').read_text(), effective_unit)
+        effective = bundle.read_env(restored / 'host-configuration/effective.env')
+        self.assertEqual(effective['PAYMENT_CONFIG_KEY_FILE'], str(effective_key))
+        self.assertEqual(effective['PAYMENT_MODE'], 'direct')
+        self.assertEqual(effective['UNIT_IDENTITY_SECRET'], 'unit-fixture')
+        self.assertEqual(effective['EXTRA_IDENTITY_SECRET'], 'private fixture')
+        manifest = json.loads((destination / 'manifest.json').read_text())
+        self.assertEqual(manifest['files']['configuration.tar'], backup_bundle.sha256(destination / 'configuration.tar'))
+
     def test_backup_archive_includes_staged_billing_configuration(self):
         self.stage()
         inventory = {'container:unihub-server-postgres': {'State': {'Running': True}}}
@@ -271,7 +501,7 @@ class BillingDeploymentTests(unittest.TestCase):
             return SimpleNamespace(returncode=0)
         destination = self.root / 'backups/test-billing'
         with patch.object(backup_bundle, 'inventory_resources', return_value=inventory), \
-                patch.object(backup_bundle, 'validate_resources'), patch.object(backup_bundle.subprocess, 'run', side_effect=basebackup):
+                patch.object(backup_bundle, 'validate_resources'), patch.object(backup_bundle, 'systemd_snapshot', return_value=None), patch.object(backup_bundle.subprocess, 'run', side_effect=basebackup):
             backup_bundle.backup(self.root, destination)
         with tarfile.open(destination / 'configuration.tar') as archive:
             self.assertEqual(archive.extractfile('billing-config/products.json').read(), self.public.read_bytes())

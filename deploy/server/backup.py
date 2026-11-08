@@ -3,14 +3,18 @@
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import shlex
+import shutil
+import re
 import sys
 import tarfile
 
-from bootstrap import DeploymentError, IMAGES, atomic_write, identity_pin, inventory_resources, no_symlink, private_directory, read_env, validate_resources
+from bootstrap import DeploymentError, IMAGES, atomic_write, identity_pin, inventory_resources, no_symlink, private_directory, protected_payment_file, read_env, env_text, validate_payment_runtime, validate_resources
 
 
 def sha256(path):
@@ -19,6 +23,105 @@ def sha256(path):
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def systemd_snapshot():
+    """Read effective service definitions. No daemon reload or service action."""
+    if shutil.which('systemctl') is None:
+        return None
+    def command(args):
+        result = subprocess.run(['systemctl', *args, '--no-pager'], text=True, capture_output=True)
+        if result.returncode:
+            raise DeploymentError('Cannot read effective UniHub service configuration; backup remains incomplete.')
+        return result.stdout
+    show = command(['show', 'unihub.service', '--property=LoadState,FragmentPath,DropInPaths,Environment,EnvironmentFiles,UnsetEnvironment,PassEnvironment'])
+    properties = dict(line.split('=', 1) for line in show.splitlines() if '=' in line)
+    if properties.get('LoadState') == 'not-found':
+        return None
+    if properties.get('LoadState') != 'loaded':
+        raise DeploymentError('Effective UniHub service configuration is unavailable.')
+    return {'properties': properties, 'show': show, 'unit': command(['cat', 'unihub.service'])}
+
+
+def recovery_configuration(root, snapshot):
+    runtime = read_env(root / 'shared/runtime.env')
+    effective = dict(runtime) if snapshot is None else {}
+    sources = []
+    def source(raw):
+        path = Path(raw)
+        if not path.is_absolute():
+            raise DeploymentError('Recovery configuration requires absolute host paths.')
+        no_symlink(path)
+        info = path.stat()
+        if not path.is_file() or info.st_nlink != 1 or info.st_size > 1 << 20:
+            raise DeploymentError('Recovery configuration requires bounded, unlinked regular files.')
+        if path not in sources:
+            sources.append(path)
+    if snapshot is not None:
+        properties = snapshot['properties']
+        if properties.get('PassEnvironment'):
+            raise DeploymentError('PassEnvironment requires an explicit private recovery snapshot before backup.')
+        for raw in shlex.split(properties.get('FragmentPath', '')) + shlex.split(properties.get('DropInPaths', '')):
+            source(raw)
+        # systemd applies Environment first, then EnvironmentFile entries in
+        # their listed order. Preserve the resulting values privately.
+        effective.update(dict(item.split('=', 1) for item in shlex.split(properties.get('Environment', ''))))
+        raw_files = properties.get('EnvironmentFiles', '')
+        files = re.findall(r'(\S+) \(ignore_errors=(yes|no)\)', raw_files)
+        if re.sub(r'\S+ \(ignore_errors=(?:yes|no)\)', '', raw_files).strip():
+            raise DeploymentError('Unsupported systemd EnvironmentFile format; collect recovery configuration explicitly.')
+        for raw, optional in files:
+            path = Path(raw)
+            if not path.exists() and optional == 'yes':
+                continue
+            source(raw)
+            effective.update(read_env(path))
+        for assignment in shlex.split(properties.get('UnsetEnvironment', '')):
+            name, separator, value = assignment.partition('=')
+            if not separator or effective.get(name) == value:
+                effective.pop(name, None)
+    # Both runtime.env and service overrides may contain durable credentials.
+    for values in [runtime, effective]:
+        validate_payment_runtime(values)
+        for name in ['PAYMENT_CONFIG_KEY_FILE', 'PAYMENT_PROVIDERS_FILE']:
+            if values.get(name):
+                source(values[name])
+        manifest = values.get('PAYMENT_PROVIDERS_FILE')
+        if manifest:
+            try:
+                providers = json.loads(Path(manifest).read_text())
+                if not isinstance(providers, dict):
+                    raise ValueError()
+                for name in ['wechat', 'alipay']:
+                    provider = providers.get(name)
+                    if provider is None:
+                        continue
+                    if not isinstance(provider, dict):
+                        raise ValueError()
+                    files = [(provider.get('private_key_file'), True)]
+                    if name == 'wechat':
+                        files.append((provider.get('api_v3_key_file'), True))
+                        keys = provider.get('platform_key_files', {})
+                        if not isinstance(keys, dict):
+                            raise ValueError()
+                        files.extend((value, False) for value in keys.values())
+                    else:
+                        files.append((provider.get('public_key_file'), False))
+                    for path, secret in files:
+                        if not isinstance(path, str) or not path:
+                            raise ValueError()
+                        protected_payment_file(path, secret=secret)
+                        source(path)
+            except (ValueError, TypeError):
+                raise DeploymentError('Static payment credential references are invalid; backup was not completed.') from None
+    return sources, effective
+
+
+def archive_private_text(archive, name, content):
+    raw = content.encode('utf-8')
+    info = tarfile.TarInfo(name)
+    info.size, info.mode = len(raw), 0o600
+    archive.addfile(info, io.BytesIO(raw))
 
 
 def backup(root, destination):
@@ -36,6 +139,8 @@ def backup(root, destination):
     release = Path(read_env(root / 'shared/compose.env')['RELEASE_DIR'])
     if release.parent != root / 'releases' or not release.is_dir():
         raise DeploymentError('Configured release is outside the dedicated releases tree.')
+    snapshot = systemd_snapshot()
+    recovery_sources, effective = recovery_configuration(root, snapshot)
     private_directory(root / 'backups')
     private_directory(destination)
     atomic_write(destination / 'INCOMPLETE', 'Do not restore until manifest.json is present and checksums verify.\n')
@@ -52,7 +157,8 @@ def backup(root, destination):
         raise DeploymentError('Physical backup failed; partial backup retained privately, command output withheld.')
     (destination / '.basebackup-stderr').unlink()
     config = destination / 'configuration.tar'
-    with tarfile.open(config, 'x') as archive:
+    fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'wb') as output, tarfile.open(fileobj=output, mode='w') as archive:
         for relative in ['shared/credentials.json', 'shared/runtime.env', 'shared/compose.env', 'shared/casdoor/conf']:
             source = root / relative
             no_symlink(source)
@@ -62,6 +168,20 @@ def backup(root, destination):
             if source.exists():
                 no_symlink(source)
                 archive.add(source,arcname=relative,recursive=True)
+        mapping = {}
+        for index, source in enumerate(recovery_sources):
+            name = 'host-configuration/files/' + str(index)
+            mapping[str(source)] = name
+            def private_member(info):
+                info.mode, info.uid, info.gid = 0o600, 0, 0
+                info.uname = info.gname = ''
+                return info
+            archive.add(source, arcname=name, recursive=False, filter=private_member)
+        archive_private_text(archive, 'host-configuration/files.json', json.dumps(mapping, indent=2) + '\n')
+        archive_private_text(archive, 'host-configuration/effective.env', env_text(effective))
+        if snapshot is not None:
+            archive_private_text(archive, 'host-configuration/systemd-show.txt', snapshot['show'])
+            archive_private_text(archive, 'host-configuration/effective-unit.conf', snapshot['unit'])
         archive.add(release / 'deploy/server', arcname='release/deploy/server', recursive=True)
         for name in ['manifest.json', 'release-manifest.json', 'headless-release-manifest.json', 'REVISION',
                      'products.approved.json', 'identity/image-context/source-manifest.json']:
