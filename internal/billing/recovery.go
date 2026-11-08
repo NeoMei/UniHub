@@ -344,7 +344,7 @@ func (s *Service) Recover(ctx context.Context) (MaintenanceResult, error) {
 			out.Processed++
 		}
 	}
-	refunds, e := list[Order](ctx, s.pool, `SELECT snapshot FROM billing_orders WHERE snapshot->>'refund_status'='FROZEN' ORDER BY id LIMIT 500`)
+	refunds, e := list[Order](ctx, s.pool, `SELECT snapshot FROM billing_orders WHERE snapshot->>'refund_status'='FROZEN' AND COALESCE(snapshot->>'payment_source','')<>'external' ORDER BY id LIMIT 500`)
 	if e != nil {
 		return out, e
 	}

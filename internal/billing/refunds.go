@@ -27,6 +27,9 @@ func (s *Service) RequestRefund(ctx context.Context, actor, account, orderID, ke
 			return e
 		}
 		out = o
+		if o.PaymentSource == "external" {
+			return ErrUnsupported
+		}
 		if o.RefundStatus == "REJECTED" {
 			return nil
 		}
@@ -190,6 +193,9 @@ func (s *Service) ResolveRefundReview(ctx context.Context, operator, account, or
 		o, e := load[Order](ctx, c, `SELECT snapshot FROM billing_orders WHERE id=$1 AND account_id=$2`, orderID, account)
 		if e != nil {
 			return e
+		}
+		if o.PaymentSource == "external" {
+			return ErrUnsupported
 		}
 		if o.RefundStatus == "REJECTED" {
 			out = o

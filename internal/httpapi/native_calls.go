@@ -29,7 +29,7 @@ func (s *api) nativeCallRoutes(m *http.ServeMux) {
 		if e != nil {
 			return e
 		}
-		if grant.CredentialKind != "api_key" || grant.ModelScope != modelaccess.ScopeLLMRouterAvailable || grant.PricingSource != modelaccess.PricingLLMRouterNative {
+		if grant.CredentialKind != "api_key" || grant.ModelScope != modelaccess.ScopeLLMRouterAvailable || (grant.PricingSource != modelaccess.PricingLLMRouterNative && grant.PricingSource != modelaccess.PricingLLMRouterNativeCredit) {
 			return accounts.ErrForbidden
 		}
 		out, e := s.options.Billing.ReserveNative(r.Context(), "llmrouter", billing.NativeReserveRequest{ReserveRequest: billing.ReserveRequest{CredentialID: grant.ID, CallID: body.CallID, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, RequestDigest: body.RequestDigest}, Model: body.Model, WireOperation: body.WireOperation, InstanceID: grant.InstanceID, TaskID: body.TaskID, CredentialVersion: grant.CredentialVersion, Quote: body.Quote})

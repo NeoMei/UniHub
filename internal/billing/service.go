@@ -14,6 +14,7 @@ import (
 	"unihub/internal/accounts"
 	"unihub/internal/database"
 	"unihub/internal/ledger"
+	"unihub/internal/payments"
 	"unihub/internal/productusers"
 )
 
@@ -26,6 +27,8 @@ type Service struct {
 	operators, trusted map[string]bool
 	sandbox            bool
 	productUsers       *productusers.Store
+	paymentProviders   map[string]payments.Provider
+	checkoutReadiness  func(context.Context, string, string, string) (NativeCreditReadiness, error)
 }
 
 func New(p *pgxpool.Pool, a *accounts.Store, l ledger.Ledger) *Service {

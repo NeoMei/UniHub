@@ -97,6 +97,7 @@ func run() error {
 	w := wallet.New(pool, a, l)
 	w.ConfigureSandboxRechargeUsers(c.SandboxRechargeUserIDs)
 	b := billing.New(pool, a, l)
+	b.ConfigurePayments(c.PaymentProviders)
 	b.ConfigureProductUsers(productUsers)
 	b.ConfigureOperators(c.OperatorIDs)
 	b.ConfigureTrustedServices([]string{"llmrouter"})
@@ -115,6 +116,18 @@ func run() error {
 			return e
 		}
 	}
+	modelAccess := modelaccess.New(pool, a, b)
+	modelAccess.ConfigureProductUsers(productUsers)
+	b.ConfigureCheckoutReadiness(func(ctx context.Context, actor, account, product string) (billing.NativeCreditReadiness, error) {
+		return modelAccess.NativeCreditsRuntimeReadiness(ctx, product)
+	})
+	if c.ProviderCatalogURL != "" {
+		catalog, err := modelaccess.NewProviderCatalog(c.ProviderCatalogURL, c.ProviderCatalogToken)
+		if err != nil {
+			return errors.New("invalid provider catalog configuration")
+		}
+		modelAccess.ConfigureProviderCatalog(catalog)
+	}
 	if mode == "worker" {
 		work(ctx, w, b)
 		return nil
@@ -123,15 +136,7 @@ func run() error {
 	if e != nil {
 		return e
 	}
-	modelAccess := modelaccess.New(pool, a, b)
-	modelAccess.ConfigureProductUsers(productUsers)
-	if c.ProviderCatalogURL != "" {
-		catalog, err := modelaccess.NewProviderCatalog(c.ProviderCatalogURL, c.ProviderCatalogToken)
-		if err != nil {
-			return errors.New("invalid provider catalog configuration")
-		}
-		modelAccess.ConfigureProviderCatalog(catalog)
-	}
+
 	productVerifiers := map[string]auth.Verifier{}
 	for product, audience := range c.ProductClients {
 		productVerifiers[product], e = auth.NewOIDC(startup, c.Issuer, audience)
@@ -177,7 +182,7 @@ func run() error {
 		productAuth = productauth.New(pool, a, productUsers, c.PublicURL)
 		productAuth.ConfigureBrowserClients(c.ProductAccess)
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir})
 		if err != nil {
@@ -234,15 +239,33 @@ func work(ctx context.Context, w *wallet.Service, b *billing.Service) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			run, cancel := context.WithTimeout(ctx, 30*time.Second)
-			walletErr := w.Recover(run)
-			_, billingErr := b.Recover(run)
-			_, maintenanceErr := b.Maintain(run, time.Now().UTC())
-			cancel()
-			e := errors.Join(walletErr, billingErr, maintenanceErr)
+			e := runRecoveryCycle(ctx, 30*time.Second, b.RecoverCheckouts, func(run context.Context) error {
+				walletErr := w.Recover(run)
+				_, billingErr := b.Recover(run)
+				_, maintenanceErr := b.Maintain(run, time.Now().UTC())
+				return errors.Join(walletErr, billingErr, maintenanceErr)
+			})
 			if e != nil && !errors.Is(e, context.Canceled) {
 				log.Print("UniHub recovery cycle incomplete; durable commands will be retried")
 			}
 		}
 	}
+}
+
+// Gateway latency must not consume the recovery budget of model usage/wallet
+// commands. Each branch owns its deadline and both finish before the next tick.
+func runRecoveryCycle(ctx context.Context, timeout time.Duration, branches ...func(context.Context) error) error {
+	results := make(chan error, len(branches))
+	for _, branch := range branches {
+		go func(recover func(context.Context) error) {
+			run, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			results <- recover(run)
+		}(branch)
+	}
+	var result error
+	for range branches {
+		result = errors.Join(result, <-results)
+	}
+	return result
 }

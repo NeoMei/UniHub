@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	ScopeSelected           = "selected"
-	ScopeLLMRouterAvailable = "llmrouter_available"
-	PricingLLMRouterNative  = "llmrouter_native"
+	ScopeSelected                = "selected"
+	ScopeLLMRouterAvailable      = "llmrouter_available"
+	PricingLLMRouterNative       = "llmrouter_native"
+	PricingLLMRouterNativeCredit = billing.NativeCreditPricingSource
 )
 
 type APIKeyScopeRequest struct {
@@ -27,7 +28,7 @@ type APIKeyScopeRequest struct {
 }
 
 func (s *Service) nativeAuthorityOn(ctx context.Context, q accounts.Querier, actor, account, product, instance, funding string) (billing.UsageAuthorization, error) {
-	if product != "superwagie" || !instanceID.MatchString(instance) || s.productUsers == nil || !s.productUsers.Managed(product, instance) || funding != "" && funding != billing.FundingPrepaidCash {
+	if product != "superwagie" || !instanceID.MatchString(instance) || s.productUsers == nil || !s.productUsers.Managed(product, instance) || funding != "" && funding != billing.FundingPrepaidCash && funding != billing.FundingCredits {
 		return billing.UsageAuthorization{}, accounts.ErrForbidden
 	}
 	policy, ok := s.eligibility.(BillingUsageEligibilityOn)
@@ -47,8 +48,13 @@ func (s *Service) nativeAuthorityOn(ctx context.Context, q accounts.Querier, act
 	if e != nil {
 		return auth, e
 	}
-	if auth.Asset != billing.CashAsset || auth.FundingMode != billing.FundingPrepaidCash || auth.ProfileVersion < 0 {
+	if auth.ProfileVersion < 0 || !nativeFundingMatches(auth.FundingMode, auth.Asset, nativePricingSource(auth.Asset)) {
 		return billing.UsageAuthorization{}, accounts.ErrForbidden
+	}
+	if auth.Asset == billing.CreditAsset {
+		if _, e := s.nativeCreditConversionOn(ctx, q, product); e != nil {
+			return billing.UsageAuthorization{}, e
+		}
 	}
 	return auth, nil
 }
@@ -63,6 +69,19 @@ func nativeScopeLocks(ctx context.Context, tx pgx.Tx, product, instance, account
 }
 
 func (s *Service) createNativeAPIKey(ctx context.Context, actor, account string, r APIKeyRequest) (APIKey, error) {
+	// Native keys opt into credits explicitly; a changed profile default never migrates cash keys.
+	if r.FundingMode == "" {
+		r.FundingMode = billing.FundingPrepaidCash
+	}
+	if r.FundingMode == billing.FundingCredits {
+		ready, e := s.NativeCreditsReadiness(ctx, actor, account, r.OriginProductID, r.InstanceID)
+		if e != nil {
+			return APIKey{}, e
+		}
+		if !ready.Ready {
+			return APIKey{}, accounts.ErrForbidden
+		}
+	}
 	models := slices.Clone(r.Models)
 	if models == nil {
 		models = []string{}
@@ -99,7 +118,7 @@ func (s *Service) createNativeAPIKey(ctx context.Context, actor, account string,
 		return APIKey{}, e
 	}
 	data, _ := json.Marshal(models)
-	_, e = tx.Exec(ctx, `INSERT INTO model_credentials(id,token_hash,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,name,instance_id,max_total,max_per_call,model_scope,pricing_source,credential_version) VALUES($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,'api_key',$11,$12,$13,$14,$15,$16,1)`, id, digest(token), actor, account, r.OriginProductID, data, expiry, auth.FundingMode, auth.Asset, auth.ProfileVersion, r.Name, r.InstanceID, r.MaxTotal, r.MaxPerCall, ScopeLLMRouterAvailable, PricingLLMRouterNative)
+	_, e = tx.Exec(ctx, `INSERT INTO model_credentials(id,token_hash,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,name,instance_id,max_total,max_per_call,model_scope,pricing_source,credential_version) VALUES($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,'api_key',$11,$12,$13,$14,$15,$16,1)`, id, digest(token), actor, account, r.OriginProductID, data, expiry, auth.FundingMode, auth.Asset, auth.ProfileVersion, r.Name, r.InstanceID, r.MaxTotal, r.MaxPerCall, ScopeLLMRouterAvailable, nativePricingSource(auth.Asset))
 	if e != nil {
 		return APIKey{}, e
 	}
@@ -157,7 +176,7 @@ func (s *Service) UpgradeAPIKeyScope(ctx context.Context, actor, account, id str
 			return APIKey{}, e
 		}
 	}
-	if key.Asset != billing.CashAsset {
+	if key.Asset != billing.CashAsset && !(key.ModelScope == ScopeLLMRouterAvailable && key.Asset == billing.CreditAsset && key.PricingSource == PricingLLMRouterNativeCredit) {
 		return APIKey{}, accounts.ErrForbidden
 	}
 	if key.ModelScope != ScopeLLMRouterAvailable {

@@ -12,6 +12,7 @@ import (
 
 func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 	b := s.options.Billing
+	s.checkoutRoutes(m, add)
 	s.productQueryRoutes(add)
 	addOps := func(pattern string, fn action) {
 		m.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +62,7 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 			return e
 		}
 		if originProduct(r) != "" {
-			return respond(w, 200, publicCreditBatches(v))
+			return respond(w, 200, publicCreditBatches(v, originProduct(r)))
 		}
 		return respond(w, 200, v)
 	})
@@ -91,6 +92,7 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 	})
 	add("POST /v1/accounts/{account}/quotes", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body struct {
+			PaymentSource  string `json:"payment_source,omitempty"`
 			SubscriptionID string `json:"subscription_id"`
 			OfferID        string `json:"offer_id"`
 		}
@@ -109,7 +111,16 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 				return e
 			}
 		}
-		v, e := b.QuoteUpgrade(r.Context(), u.ID, r.PathValue("account"), body.SubscriptionID, body.OfferID)
+		var v billing.Quote
+		var e error
+		switch body.PaymentSource {
+		case "", "wallet":
+			v, e = b.QuoteUpgrade(r.Context(), u.ID, r.PathValue("account"), body.SubscriptionID, body.OfferID)
+		case "external":
+			v, e = b.QuoteExternalUpgrade(r.Context(), u.ID, r.PathValue("account"), body.SubscriptionID, body.OfferID)
+		default:
+			return billing.ErrInvalid
+		}
 		if e != nil {
 			return e
 		}

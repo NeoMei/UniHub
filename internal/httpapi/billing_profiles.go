@@ -41,12 +41,13 @@ func (s *api) billingProfileRoutes(add func(string, action), addOps func(string,
 	})
 	addOps("PUT /ops/v1/products/{product}/billing-profile", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body struct {
-			ProductID       string                    `json:"product_id"`
-			Version         *int64                    `json:"version"`
-			Subscription    *billing.BillingComponent `json:"subscription"`
-			IncludedCredits *billing.BillingComponent `json:"included_credits"`
-			Addons          *billing.BillingComponent `json:"addons"`
-			Usage           *billing.UsagePolicy      `json:"usage"`
+			ProductID              string                    `json:"product_id"`
+			Version                *int64                    `json:"version"`
+			Subscription           *billing.BillingComponent `json:"subscription"`
+			IncludedCredits        *billing.BillingComponent `json:"included_credits"`
+			Addons                 *billing.BillingComponent `json:"addons"`
+			Usage                  *billing.UsagePolicy      `json:"usage"`
+			NativeCreditConversion *billing.NativeConversion `json:"native_credit_conversion,omitempty"`
 		}
 		if e := decode(w, r, &body); e != nil {
 			return e
@@ -54,7 +55,7 @@ func (s *api) billingProfileRoutes(add func(string, action), addOps func(string,
 		if body.Version == nil || body.Subscription == nil || body.IncludedCredits == nil || body.Addons == nil || body.Usage == nil {
 			return billing.ErrInvalid
 		}
-		p := billing.BillingProfile{ProductID: body.ProductID, Version: *body.Version, Subscription: *body.Subscription, IncludedCredits: *body.IncludedCredits, Addons: *body.Addons, Usage: *body.Usage}
+		p := billing.BillingProfile{NativeCreditConversion: body.NativeCreditConversion, ProductID: body.ProductID, Version: *body.Version, Subscription: *body.Subscription, IncludedCredits: *body.IncludedCredits, Addons: *body.Addons, Usage: *body.Usage}
 		saved, e := b.SaveProfile(r.Context(), u.ID, r.PathValue("product"), p)
 		if e != nil {
 			return e

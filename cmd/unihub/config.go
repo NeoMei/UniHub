@@ -10,11 +10,13 @@ import (
 	"strings"
 	"unihub/internal/billing"
 	"unihub/internal/httpapi"
+	"unihub/internal/payments"
 	"unihub/internal/products"
 	"unihub/internal/productusers"
 )
 
 type config struct {
+	PaymentProviders                                              []payments.Provider
 	ProductUserManifests                                          productusers.Registry
 	ProductRuntime                                                map[string]httpapi.RuntimeService
 	UserAdminIDs                                                  []string
@@ -260,8 +262,21 @@ func readConfig(get func(string) string) (config, error) {
 	if mode == "" {
 		mode = "disabled"
 	}
-	if mode != "disabled" && mode != "sandbox" {
-		return c, fmt.Errorf("PAYMENT_MODE must be disabled or sandbox")
+	if mode != "disabled" && mode != "sandbox" && mode != "direct" {
+		return c, fmt.Errorf("PAYMENT_MODE must be disabled, sandbox or direct")
+	}
+	merchantFile := get("PAYMENT_PROVIDERS_FILE")
+	if mode == "direct" {
+		if merchantFile == "" {
+			return c, fmt.Errorf("direct payment mode requires PAYMENT_PROVIDERS_FILE")
+		}
+		var err error
+		c.PaymentProviders, err = readPaymentProviders(merchantFile)
+		if err != nil {
+			return c, err
+		}
+	} else if merchantFile != "" {
+		return c, fmt.Errorf("PAYMENT_PROVIDERS_FILE requires direct payment mode")
 	}
 	c.Sandbox = mode == "sandbox"
 	if c.Sandbox && (env != "development" || len(c.SigningKey) < 32 || c.Merchant == "") {

@@ -45,6 +45,10 @@ func creditSaleReadiness(p BillingProfile, rates []Rate) SalesReadiness {
 }
 
 func (s *Service) saleReadinessOn(ctx context.Context, q accounts.Querier, o Offer) (SalesReadiness, error) {
+	if nativePointsOffer(o) {
+		r, e := s.NativeCreditsReadinessOn(ctx, q, o.ProductID)
+		return SalesReadiness{Ready: r.Ready, Reason: r.Reason}, e
+	}
 	n, e := integer(o.MonthlyCredit, false)
 	if e != nil {
 		return SalesReadiness{}, e

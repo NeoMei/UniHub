@@ -72,14 +72,15 @@ func (s *api) modelDiscoveryRoute(w http.ResponseWriter, r *http.Request, u acco
 		instance = "default"
 	}
 	var body struct {
-		ModelScope string `json:"model_scope"`
+		ModelScope  string `json:"model_scope"`
+		FundingMode string `json:"funding_mode,omitempty"`
 	}
 	if r.ContentLength != 0 {
 		if e := decode(w, r, &body); e != nil {
 			return e
 		}
 	}
-	discovery, e := s.options.ModelAccess.DiscoverAccountWithScope(r.Context(), u.ID, r.PathValue("account"), "superwagie", instance, body.ModelScope)
+	discovery, e := s.options.ModelAccess.DiscoverAccountWithFundingScope(r.Context(), u.ID, r.PathValue("account"), "superwagie", instance, body.ModelScope, body.FundingMode)
 	if e != nil {
 		return e
 	}

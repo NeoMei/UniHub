@@ -123,9 +123,13 @@ const purchase = await hub.purchase(accountId, offerId, savedPurchaseKey);
 
 调用者显式持有稳定幂等键。SDK没有财务重试逻辑；网络失败、409 operation_pending、UNKNOWN 都查原对象和原 key，不换 key 重付。返回 202 只表示异步命令/未知结果，不能显示为支付成功；账务操作仅 APPLIED 表示账本确认。退款返回 refund_requires_review 可能已冻结来源额度，需要读取原订单。错误为 `UniHubError{status,code,body,headers}`；SDK不会吞掉错误或将它变成成功。
 
+升级接受接口的 `409 quote_invalidated` 是明确的**新订单创建前、扣款前拒绝**：报价过期、账期起点变化或订阅版本已变化。客户端可以读取新报价并重新让用户确认。已有同幂等键订单优先恢复，即使原报价随后失效也不改报该错误。普通 `conflict`、`operation_pending` 和网络未知结果仍保留原幂等键，不能当成未扣款而重建购买。
+
 `sandboxSettleRecharge` 仅供显式测试，不会在创建充值后自动调用；它运行真实账务命令恢复路径，但不是支付渠道到账证明。生产真实支付尚未集成。
 
-共享模型额度继续是同账户 llmrouter 公共池，跨获准来源批次分配。产品 GET credits 返回每个真实批次的账本数量、有效期和冻结状态，省略其他产品、订单、订阅和来源配置；批次 ID 为实际 opaque ID。不能将本产品订阅额度误称为账户全部余额。resources 的 spendable 仅累计有效且未冻结 available，reserved/frozen 分开；财务现金字段对普通成员省略。as_of 是读取完成时刻，不承诺 PostgreSQL 和账本的原子快照。
+共享模型额度继续是同账户 llmrouter 公共池，跨获准来源批次分配。产品 GET credits 返回每个真实批次的账本数量、有效期和冻结状态。自有 `base/upgrade` 批次投影 `kind=subscription`，自有 `addon` 投影 `kind=addon`，并返回 `source_scope=product` 和本产品 `product_id`；其他来源一律投影 `kind=other/source_scope=shared`，不返回来源产品、订单、订阅或 source key；批次 ID 仍为实际 opaque ID。分类表达来源，不代表额度专属于本产品。不能将本产品订阅额度误称为账户全部余额。resources 的 spendable 仅累计有效且未冻结 available，reserved/frozen 分开；财务现金字段对普通成员省略。as_of 是读取完成时刻，不承诺 PostgreSQL 和账本的原子快照。
+
+受信产品财务代理现支持 `POST /internal/v1/product-finance/accounts/{account}/orders`、`POST .../quotes`、`POST .../quotes/{quote}/accept` 和 `GET .../credits`，沿用原业务 scope、账户角色、产品白名单及服务/actor 双重证明。订单和报价接受请求必须有且仅有一个合法 `Idempotency-Key`；报价创建不扣款。显式计费策略（version > 0）要求会员时，新加量包购买校验同账户同商品产品的有效会员，否则返回 `409 subscription_required`；历史 v0 和已付款原 key 恢复保持兼容。完整边界与未上市条件见 [SuperWagie 点数草稿](integrations/superwagie-points-draft.md)。
 
 ## 调用分页与准确性
 

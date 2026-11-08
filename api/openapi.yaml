@@ -11,6 +11,17 @@
   -
     "BearerAuth": []
 "paths":
+  "/v1/accounts/{account}/checkouts": {"get": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Checkout"}}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}, "post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}], "responses": {"202": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "properties": {"offer_id": {"type": "string"}, "quote_id": {"type": "string"}, "provider": {"enum": ["wechat", "alipay"]}}, "required": ["provider"], "oneOf": [{"required": ["offer_id"], "not": {"required": ["quote_id"]}}, {"required": ["quote_id"], "not": {"required": ["offer_id"]}}]}}}}}}
+  "/v1/accounts/{account}/checkouts/{checkout}": {"get": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}}
+  "/v1/accounts/{account}/checkouts/{checkout}/reconcile": {"post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}}}}
+  "/v1/accounts/{account}/checkouts/{checkout}/close": {"post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}}}}
+  "/v1/accounts/{account}/checkouts/{checkout}/refund": {"post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}], "responses": {"202": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "properties": {"reason": {"type": "string", "minLength": 1, "maxLength": 80}}, "required": ["reason"]}}}}}}
+  "/internal/v1/product-finance/accounts/{account}/checkouts": {"get": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available. Requires verified finance service token and X-UniHub-Actor-Authorization proof with existing orders/refunds scopes.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Checkout"}}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}, "post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available. Requires verified finance service token and X-UniHub-Actor-Authorization proof with existing orders/refunds scopes.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}], "responses": {"202": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "properties": {"offer_id": {"type": "string"}, "quote_id": {"type": "string"}, "provider": {"enum": ["wechat", "alipay"]}}, "required": ["provider"], "oneOf": [{"required": ["offer_id"], "not": {"required": ["quote_id"]}}, {"required": ["quote_id"], "not": {"required": ["offer_id"]}}]}}}}}}
+  "/internal/v1/product-finance/accounts/{account}/checkouts/{checkout}": {"get": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available. Requires verified finance service token and X-UniHub-Actor-Authorization proof with existing orders/refunds scopes.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}}
+  "/internal/v1/product-finance/accounts/{account}/checkouts/{checkout}/reconcile": {"post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available. Requires verified finance service token and X-UniHub-Actor-Authorization proof with existing orders/refunds scopes.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}}}}
+  "/internal/v1/product-finance/accounts/{account}/checkouts/{checkout}/close": {"post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available. Requires verified finance service token and X-UniHub-Actor-Authorization proof with existing orders/refunds scopes.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}}}}
+  "/internal/v1/product-finance/accounts/{account}/checkouts/{checkout}/refund": {"post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available. Requires verified finance service token and X-UniHub-Actor-Authorization proof with existing orders/refunds scopes.", "parameters": [{"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}], "responses": {"202": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "properties": {"reason": {"type": "string", "minLength": 1, "maxLength": 80}}, "required": ["reason"]}}}}}}
+  "/payments/{provider}/notify": {"post": {"security": [], "description": "Provider-authenticated raw callback. Verifies merchant, signature, exact CNY amount, original order and unique transaction before durable receipt ACK. Return navigation is never payment evidence. Alipay ACK is literal success; WeChat ACK is code SUCCESS. Fulfillment/ledger failure recovers independently.", "parameters": [{"name": "provider", "in": "path", "required": true, "schema": {"enum": ["wechat", "alipay"]}}], "responses": {"200": {"description": "Verified receipt persisted"}, "400": {"description": "Invalid or unpersisted notification"}}}}
   "/v1/me/product-access":
     "get": {"operationId": "productAccess", "description": "Verified product access:read or console; product/instance derive from client policy.", "responses": {"200": {"description": "Successful response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProductAccess"}}}}, "400": {"$ref": "#/components/responses/Error"}, "401": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "404": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "parameters": [{"name": "product_id", "in": "query", "required": false, "schema": {"type": "string"}}, {"name": "instance", "in": "query", "required": false, "schema": {"type": "string"}}]}
   "/v1/me/applications":
@@ -1300,7 +1311,7 @@
     "post":
       "operationId": "purchase"
       "summary": "purchase"
-      "description": "Offer ownership checked before purchase/resume. No amount supplied by caller. Order payment/fulfillment status must be evaluated separately."
+      "description": "Offer ownership checked before purchase/resume. No amount supplied by caller. New add-on purchases under an explicit billing profile (version > 0) requiring a subscription need an active subscription for the same account and offer product; otherwise HTTP 409 subscription_required. Implicit version-zero profiles and original-key paid-order recovery preserve historical behavior. Order payment/fulfillment status must be evaluated separately."
       "security":
         -
           "BearerAuth": []
@@ -1530,7 +1541,7 @@
     "get":
       "operationId": "credits"
       "summary": "credits"
-      "description": "All real account shared llmrouter pool batches; product DTO omits product/order/source/subscription details. Console retains full Batch DTO. Ledger quantities authoritative; spendable requires current validity and !frozen."
+      "description": "All real account shared llmrouter pool batches. Product DTO classifies its own base/upgrade batches as subscription and own add-ons as addon, with source_scope=product and own product_id. Other products have kind=other and source_scope=shared without product/order/source/subscription identifiers. Console retains full Batch DTO. Ledger quantities authoritative; spendable requires current validity and !frozen."
       "security":
         -
           "BearerAuth": []
@@ -1930,6 +1941,7 @@
             "schema":
               "type": "object"
               "properties":
+                "payment_source": {"enum":["wallet","external"],"description":"External returns versioned cent-rounded quote with 15 minute maximum deadline; accept via checkout only."}
                 "subscription_id":
                   "type": "string"
                 "offer_id":
@@ -1942,7 +1954,7 @@
     "post":
       "operationId": "acceptQuote"
       "summary": "acceptQuote"
-      "description": ""
+      "description": "Accepts an upgrade using a stable Idempotency-Key. Existing orders under that key recover before checking quote validity. HTTP 409 quote_invalidated is emitted only for a new upgrade whose quote expired, billing period changed, or subscription version changed, before creating its order or payment. The client may fetch a fresh quote and request confirmation. Generic conflict, operation_pending, and unknown outcomes do not prove no debit and must retain the original key."
       "security":
         -
           "BearerAuth": []
@@ -2667,13 +2679,13 @@
     "post":
       "operationId": "discoverAccountModels"
       "summary": "discoverAccountModels"
-      "description": "Signed-in SuperWagie product-client discovery. Product and instance derive from the verified client registry; the selected account's role, active access, usage policy and published rates are checked. Dynamic scope uses the current LLMRouter catalog after account and prepaid eligibility checks; selected scope retains central tariffs. No bearer or provider secret is returned."
+      "description": "Signed-in SuperWagie product-client discovery. Product and instance derive from the verified client registry; account access and selected funding policy are checked. Dynamic scope uses the current LLMRouter catalog. Explicit credits requires configured versioned conversion and runtime protocol support; omitted discovery funding uses the profile default. Selected scope retains central tariffs. No bearer or provider secret is returned."
       "security":
         -
           "BearerAuth": []
       "x-product-scopes": ["catalog:read"]
       "parameters": [{"name":"account","in":"path","required":true,"schema":{"type":"string"}}]
-      "requestBody": {"required":false,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":{"model_scope":{"enum":["selected","llmrouter_available"],"default":"selected"}}}}}}
+      "requestBody": {"required":false,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":{"model_scope":{"enum":["selected","llmrouter_available"],"default":"selected"},"funding_mode":{"$ref":"#/components/schemas/FundingMode"}}}}}}
       "responses":
         "200":
           "description": "Scoped account model metadata"
@@ -2805,12 +2817,13 @@
         "application/json":
           "schema": {"$ref": "#/components/schemas/IdentityRateLimited"}
     "Error":
-      "description": "Structured failure: 400 invalid_request/invalid_grant; 401 unauthenticated; 402 insufficient funds/credits; 403 forbidden; 404 unavailable object; 409 conflict/operation_pending/refund_requires_review/interaction_required; 429 rate_limited; 503 unavailable/payment_not_configured/authorization_result_unknown. Uncertainty is not success."
+      "description": "Structured failure: 400 invalid_request/invalid_grant; 401 unauthenticated; 402 insufficient funds/credits; 403 forbidden; 404 unavailable object; 409 conflict/operation_pending/refund_requires_review/interaction_required/subscription_required/quote_invalidated; 429 rate_limited; 503 unavailable/payment_not_configured/authorization_result_unknown. quote_invalidated is a pre-order, pre-payment upgrade rejection only. Uncertainty is not success."
       "content":
         "application/json":
           "schema":
             "$ref": "#/components/schemas/Error"
   "schemas":
+    "Checkout": {"type": "object", "properties": {"id": {"type": "string"}, "account_id": {"type": "string"}, "product_id": {"type": "string"}, "provider": {"type": "string"}, "offer_name": {"type": "string"}, "currency": {"type": "string"}, "order_id": {"type": "string"}, "error_code": {"type": "string"}, "amount": {"$ref": "#/components/schemas/IntegerString"}, "payment_status": {"enum": ["CREATED", "PENDING", "UNKNOWN", "PAID", "CLOSED", "REVIEW"]}, "fulfillment_status": {"enum": ["NOT_STARTED", "PENDING", "FULFILLED", "REVIEW"]}, "refund_status": {"enum": ["PENDING", "SUCCEEDED", "REVIEW"]}, "created_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"}, "session": {"type": "object", "properties": {"kind": {"enum": ["qr", "redirect"]}, "url": {"type": "string"}, "expires_at": {"type": "string", "format": "date-time"}}, "required": ["kind", "url", "expires_at"]}}, "required": ["id", "account_id", "product_id", "provider", "offer_name", "amount", "currency", "payment_status", "fulfillment_status", "expires_at", "created_at"]}
     "ScopedModel":
       "type": "object"
       "additionalProperties": false
@@ -2843,6 +2856,7 @@
         "catalog_source": {"type":"string"}
         "model_scope": {"enum":["selected","llmrouter_available"]}
         "pricing_source": {"type":"string"}
+        "native_credit_conversion": {"$ref":"#/components/schemas/NativeCreditConversion"}
         "credential_version": {"type":"integer","minimum":1}
         "account_id": {"type": "string"}
         "instance_id": {"type": "string"}
@@ -2851,6 +2865,7 @@
         "models": {"type": "array", "items": {"$ref": "#/components/schemas/ScopedModel"}}
     "ManagedAPIKeyRequest":
       "type": "object"
+      "description": "Native llmrouter_available keys default to prepaid_cash when funding_mode is omitted. Explicit credits opts into CREDIT/6 and requires configured conversion/runtime support. Existing key assets are never converted by scope upgrades."
       "additionalProperties": false
       "required": ["name"]
       "oneOf": [{"required":["model_scope"],"properties":{"model_scope":{"const":"llmrouter_available"}}},{"required":["models"],"properties":{"model_scope":{"const":"selected"},"models":{"minItems":1,"maxItems":32}}}]
@@ -2884,7 +2899,7 @@
       "type": "object"
       "properties":
         "model_scope": {"enum":["selected","llmrouter_available"]}
-        "pricing_source": {"enum":["","llmrouter_native"]}
+        "pricing_source": {"enum":["","llmrouter_native","llmrouter_native_credit"]}
         "credential_version": {"type":"integer","minimum":1}
         "id": {"type":"string"}
         "credential_kind": {"const":"api_key"}
@@ -3684,7 +3699,9 @@
         "sandbox":
           "type": "boolean"
         "real_payments_configured":
-          "const": false
+          "type": "boolean"
+        "payment_providers": {"type":"array","items":{"enum":["wechat","alipay"]}}
+        "native_credits": {"type":"object","properties":{"ready":{"type":"boolean"},"reason":{"type":"string"},"conversion":{"$ref":"#/components/schemas/NativeCreditConversion"}},"required":["ready"]}
         "unified_wallet_recharge":
           "type": "boolean"
         "product_wallet_recharge":
@@ -3745,6 +3762,9 @@
     "Order":
       "type": "object"
       "properties":
+        "payment_source": {"enum":["external","wallet"]}
+        "checkout_id": {"type":"string"}
+        "provider_transaction_id": {"type":"string"}
         "id":
           "type": "string"
         "account_id":
@@ -3820,6 +3840,10 @@
     "Quote":
       "type": "object"
       "properties":
+        "payment_source": {"enum":["external","wallet"]}
+        "rounding_rule": {"const":"cny_cent_ceil_v1"}
+        "original_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "period_end": {"type":"string","format":"date-time"}
         "id":
           "type": "string"
         "account_id":
@@ -3858,6 +3882,15 @@
     "PublicCreditBatch":
       "type": "object"
       "properties":
+        "kind":
+          "type": "string"
+          "enum": ["subscription", "addon", "other"]
+        "source_scope":
+          "type": "string"
+          "enum": ["product", "shared"]
+        "product_id":
+          "type": "string"
+          "description": "Present only for a batch originating from the authenticated calling product; absent for shared sources."
         "original":
           "$ref": "#/components/schemas/IntegerString"
         "available":
@@ -3890,6 +3923,8 @@
         "frozen":
           "type": "boolean"
       "required":
+        - "kind"
+        - "source_scope"
         - "original"
         - "available"
         - "reserved"
@@ -4344,6 +4379,10 @@
           "type": "boolean"
         "require_subscription":
           "type": "boolean"
+        "require_subscription_for_credits":
+          "type": "boolean"
+          "default": false
+          "description": "Requires membership for CREDIT use while preserving cash behavior when the global membership flag is false. Does not override global require_subscription."
         "funding_modes":
           "type": "array"
           "items":
@@ -4361,7 +4400,16 @@
         - "funding_modes"
         - "default_funding_mode"
       "additionalProperties": false
-      "description": "Enabled usage requires an allowed default mode. Disabled usage requires an empty modes array, empty default and require_subscription=false. A subscription requirement requires subscription.enabled."
+      "description": "Enabled usage requires an allowed default mode. Disabled usage requires an empty modes array, empty default and both subscription flags false. Either subscription requirement requires subscription.enabled."
+    "NativeCreditConversion":
+      "type": "object"
+      "additionalProperties": false
+      "required": ["version", "numerator", "denominator", "rounding"]
+      "properties":
+        "version": {"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$","description":"Immutable tariff identifier; changing a ratio requires a new version. Reserved cash conversion version is not valid."}
+        "numerator": {"type":"string","pattern":"^[1-9][0-9]{0,18}$","description":"Positive int64 CREDIT/6 micro-units numerator per native quota unit."}
+        "denominator": {"type":"string","pattern":"^[1-9][0-9]{0,18}$","description":"Positive int64 divisor."}
+        "rounding": {"const":"lr-cumulative-ceil-v1"}
     "BillingProfile":
       "type": "object"
       "properties":
@@ -4381,6 +4429,8 @@
           "$ref": "#/components/schemas/BillingComponent"
         "usage":
           "$ref": "#/components/schemas/UsagePolicy"
+        "native_credit_conversion":
+          "anyOf": [{"$ref":"#/components/schemas/NativeCreditConversion"},{"type":"null"}]
       "required":
         - "product_id"
         - "version"

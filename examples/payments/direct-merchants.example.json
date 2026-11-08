@@ -1,0 +1,21 @@
+{
+  "wechat": {
+    "app_id": "REPLACE_WITH_BOUND_APP_ID",
+    "merchant_id": "REPLACE_WITH_MERCHANT_ID",
+    "certificate_serial": "REPLACE_WITH_MERCHANT_CERTIFICATE_SERIAL",
+    "private_key_file": "/etc/unihub/payments/wechat-private.pem",
+    "api_v3_key_file": "/etc/unihub/payments/wechat-api-v3.key",
+    "platform_key_files": {
+      "REPLACE_WITH_TRUSTED_WECHAT_KEY_ID_OR_CERT_SERIAL": "/etc/unihub/payments/wechat-platform.pem"
+    },
+    "notify_url": "https://payments.example.com/payments/wechat/notify"
+  },
+  "alipay": {
+    "app_id": "REPLACE_WITH_APP_ID",
+    "seller_id": "REPLACE_WITH_SELLER_ID",
+    "private_key_file": "/etc/unihub/payments/alipay-private.pem",
+    "public_key_file": "/etc/unihub/payments/alipay-platform.pem",
+    "notify_url": "https://payments.example.com/payments/alipay/notify",
+    "return_url": "https://payments.example.com/payment-return"
+  }
+}

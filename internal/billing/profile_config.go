@@ -10,13 +10,14 @@ import (
 // It is independent of identity clients and contains no runtime credentials.
 func ParseBillingProfiles(raw []byte) ([]BillingProfile, error) {
 	type entry struct {
-		ProductID       string            `json:"product_id"`
-		Version         int64             `json:"version"`
-		Preset          string            `json:"preset,omitempty"`
-		Subscription    *BillingComponent `json:"subscription,omitempty"`
-		IncludedCredits *BillingComponent `json:"included_credits,omitempty"`
-		Addons          *BillingComponent `json:"addons,omitempty"`
-		Usage           *UsagePolicy      `json:"usage,omitempty"`
+		NativeCreditConversion *NativeConversion `json:"native_credit_conversion,omitempty"`
+		ProductID              string            `json:"product_id"`
+		Version                int64             `json:"version"`
+		Preset                 string            `json:"preset,omitempty"`
+		Subscription           *BillingComponent `json:"subscription,omitempty"`
+		IncludedCredits        *BillingComponent `json:"included_credits,omitempty"`
+		Addons                 *BillingComponent `json:"addons,omitempty"`
+		Usage                  *UsagePolicy      `json:"usage,omitempty"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -59,6 +60,7 @@ func ParseBillingProfiles(raw []byte) ([]BillingProfile, error) {
 				p.Usage = *e.Usage
 			}
 		}
+		p.NativeCreditConversion = e.NativeCreditConversion
 		if err := p.Validate(); err != nil {
 			return nil, err
 		}

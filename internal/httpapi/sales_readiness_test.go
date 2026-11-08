@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"testing"
 	"unihub/internal/accounts"
@@ -17,6 +18,32 @@ func TestCreditSalesReadinessErrorContract(t *testing.T) {
 	writeError(w, billing.ErrCreditRatesUnavailable)
 	if w.Code != 409 || w.Body.String() != "{\"error\":\"credit_rates_unavailable\"}\n" {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+func TestAddonSubscriptionRequiredErrorContract(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeError(w, billing.ErrSubscriptionRequired)
+	if w.Code != 409 || w.Body.String() != "{\"error\":\"subscription_required\"}\n" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+func TestUpgradeQuoteInvalidatedErrorContract(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		code string
+	}{
+		{billing.ErrQuoteInvalidated, "quote_invalidated"},
+		{errors.Join(billing.ErrQuoteInvalidated, billing.ErrConflict), "quote_invalidated"},
+		{billing.ErrConflict, "conflict"},
+		{billing.ErrPending, "operation_pending"},
+	} {
+		w := httptest.NewRecorder()
+		writeError(w, tc.err)
+		if w.Code != 409 || w.Body.String() != "{\"error\":\""+tc.code+"\"}\n" {
+			t.Fatalf("error=%v status=%d body=%s", tc.err, w.Code, w.Body)
+		}
 	}
 }
 

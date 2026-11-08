@@ -18,6 +18,7 @@ import (
 	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
+	"unihub/internal/payments"
 	"unihub/internal/platformadmin"
 	"unihub/internal/productauth"
 	"unihub/internal/products"
@@ -26,6 +27,7 @@ import (
 )
 
 type Options struct {
+	PaymentProviders []payments.Provider
 	PlatformAdmin    *platformadmin.Store
 	ProductRuntime   map[string]RuntimeService
 	ProductAuth      *productauth.Service
@@ -67,6 +69,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		if o.ModelAccess != nil {
 			o.ModelAccess.ConfigureProductUsers(o.ProductUsers)
 		}
+	}
+	if o.Billing != nil && o.PaymentProviders != nil {
+		o.Billing.ConfigurePayments(o.PaymentProviders)
 	}
 	s := &api{v, a, w, o}
 	m := http.NewServeMux()
@@ -448,11 +453,13 @@ func writeError(w http.ResponseWriter, e error) {
 		fail(w, 403, "invalid_model_credential")
 	case errors.Is(e, accounts.ErrNotFound):
 		fail(w, 404, "not_found")
+	case errors.Is(e, billing.ErrQuoteInvalidated):
+		fail(w, 409, "quote_invalidated")
 	case errors.Is(e, accounts.ErrConflict) || errors.Is(e, wallet.ErrConflict):
 		fail(w, 409, "conflict")
 	case errors.Is(e, accounts.ErrInvalid) || errors.Is(e, wallet.ErrInvalid):
 		fail(w, 400, "invalid_request")
-	case errors.Is(e, paymentUnavailable):
+	case errors.Is(e, paymentUnavailable) || errors.Is(e, billing.ErrPaymentUnavailable):
 		fail(w, 503, "payment_not_configured")
 	case errors.Is(e, billing.ErrInvalid):
 		fail(w, 400, "invalid_request")
@@ -466,6 +473,8 @@ func writeError(w http.ResponseWriter, e error) {
 		fail(w, 402, "insufficient_funds")
 	case errors.Is(e, billing.ErrCreditRatesUnavailable):
 		fail(w, 409, "credit_rates_unavailable")
+	case errors.Is(e, billing.ErrSubscriptionRequired):
+		fail(w, 409, "subscription_required")
 	case errors.Is(e, billing.ErrUnsupported):
 		fail(w, 409, "unsupported_plan_change")
 	case errors.Is(e, billing.ErrManualReview):

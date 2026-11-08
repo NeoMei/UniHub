@@ -71,7 +71,7 @@ func (s *Service) authorizeUsageOn(ctx context.Context, q accounts.Querier, acto
 	default:
 		return UsageAuthorization{}, accounts.ErrForbidden
 	}
-	if p.Usage.RequireSubscription {
+	if p.Usage.RequireSubscription || (mode == FundingCredits && p.Usage.RequireSubscriptionForCredits) {
 		sub, e := load[Subscription](ctx, q, `SELECT snapshot FROM billing_subscriptions WHERE account_id=$1 AND product_id=$2`, account, origin)
 		if e != nil {
 			if errors.Is(e, accounts.ErrNotFound) {

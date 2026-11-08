@@ -24,10 +24,41 @@ func (s *Service) Orders(ctx context.Context, actor, account string) ([]Order, e
 	}
 	return list[Order](ctx, s.pool, `SELECT snapshot FROM billing_orders WHERE account_id=$1 ORDER BY (snapshot->>'created_at')::timestamptz DESC,id LIMIT 200`, account)
 }
+
+// Explicit product policies govern new add-on purchases. The implicit version
+// zero profile preserves historical shared-pool sales; paid order recovery never
+// re-enters this check. A membership in another product cannot satisfy it.
+func (s *Service) requireAddonSubscriptionOn(ctx context.Context, q accounts.Querier, offer Offer, account string, now time.Time) error {
+	if offer.Kind != "addon" {
+		return nil
+	}
+	profile, err := s.ProfileOn(ctx, q, offer.ProductID)
+	if err != nil {
+		return err
+	}
+	if profile.Version == 0 || (!profile.Usage.RequireSubscription && !profile.Usage.RequireSubscriptionForCredits) {
+		return nil
+	}
+	sub, err := load[Subscription](ctx, q, `SELECT snapshot FROM billing_subscriptions WHERE account_id=$1 AND product_id=$2`, account, offer.ProductID)
+	if errors.Is(err, accounts.ErrNotFound) {
+		return ErrSubscriptionRequired
+	}
+	if err != nil {
+		return err
+	}
+	if sub.Status != "active" || !now.Before(sub.PaidThrough) {
+		return ErrSubscriptionRequired
+	}
+	return nil
+}
+
 func (s *Service) Purchase(ctx context.Context, actor, account string, r PurchaseRequest) (Order, error) {
 	var out Order
 	if !keyOK(r.Key) {
 		return out, ErrInvalid
+	}
+	if e := s.newPurchaseReady(ctx, actor, account, r.Key, r.OfferID, ""); e != nil {
+		return out, e
 	}
 	e := s.locked(ctx, account, func(c *pgxpool.Conn) error {
 		if e := s.finance(ctx, c, actor, account); e != nil {
@@ -49,6 +80,9 @@ func (s *Service) Purchase(ctx context.Context, actor, account string, r Purchas
 		if !errors.Is(e, accounts.ErrNotFound) {
 			return e
 		}
+		if e = s.commercialClear(ctx, c, account); e != nil {
+			return e
+		}
 		if e = s.clear(ctx, c, account); e != nil {
 			return e
 		}
@@ -57,6 +91,9 @@ func (s *Service) Purchase(ctx context.Context, actor, account string, r Purchas
 			return e
 		}
 		now := s.now().UTC()
+		if e = s.requireAddonSubscriptionOn(ctx, c, offer, account, now); e != nil {
+			return e
+		}
 		o := Order{ID: id("bo_"), AccountID: account, ActorID: actor, ProductID: offer.ProductID, Kind: offer.Kind, Offer: offer, Amount: offer.Price, PaymentStatus: "PENDING", FulfillmentStatus: "PENDING", Start: now, CreatedAt: now, GrantAmount: offer.MonthlyCredit}
 		if offer.Kind == "membership" {
 			sub, e := load[Subscription](ctx, c, `SELECT snapshot FROM billing_subscriptions WHERE account_id=$1 AND product_id=$2`, account, offer.ProductID)
@@ -87,6 +124,7 @@ func (s *Service) Purchase(ctx context.Context, actor, account string, r Purchas
 	return out, e
 }
 func (s *Service) payLocked(ctx context.Context, c *pgxpool.Conn, o Order, key, digest string, renewal *Authorization) (Order, error) {
+	o.PaymentSource = "wallet"
 	amount, _ := integer(o.Amount, true)
 	balance, e := s.ledger.Balance(ctx, wallet.Address(o.AccountID, o.ProductID), wallet.Asset)
 	if e != nil {
@@ -134,6 +172,9 @@ func (s *Service) payLocked(ctx context.Context, c *pgxpool.Conn, o Order, key, 
 		return o, e
 	}
 	if e = s.requireSaleReadyOn(ctx, tx, o.Offer); e != nil {
+		return o, e
+	}
+	if e = s.requireAddonSubscriptionOn(ctx, tx, o.Offer, o.AccountID, s.now().UTC()); e != nil {
 		return o, e
 	}
 	_, e = tx.Exec(ctx, `INSERT INTO billing_orders(id,account_id,actor_id,request_key,request_digest,snapshot) VALUES($1,$2,$3,$4,$5,$6)`, o.ID, o.AccountID, o.ActorID, key, digest, encode(o))
@@ -204,6 +245,12 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 	if !errors.Is(e, pgx.ErrNoRows) {
 		return e
 	}
+	if o.PaymentSource == "external" {
+		reviewed, e := s.externalFulfillmentReviewLocked(ctx, c, o, now)
+		if e != nil || reviewed {
+			return e
+		}
+	}
 	if e = s.clearExceptOrder(ctx, c, o.AccountID, o.ID); e != nil {
 		return e
 	}
@@ -245,6 +292,10 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 	o.FulfillmentStatus = "FULFILLED"
 	eff := effect{Order: &o, Subscription: sub}
 	posts := []ledger.Posting{}
+	if o.PaymentSource == "external" {
+		amount, _ := integer(o.Amount, true)
+		posts = append(posts, ledger.Posting{Source: externalReceived(o.CheckoutID), Destination: "commercial:revenue:" + o.ProductID, Asset: wallet.Asset, Amount: amount})
+	}
 	n, _ := integer(grant, false)
 	if n > 0 {
 		kind := "base"
@@ -259,7 +310,7 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 		}
 		b := Batch{ID: id("batch_"), AccountID: o.AccountID, ProductID: o.ProductID, OrderID: o.ID, SubscriptionID: o.SubscriptionID, SourceKey: source, Kind: kind, Original: grant, StartsAt: start, ExpiresAt: end, CreatedAt: now}
 		eff.Batches = []Batch{b}
-		posts = []ledger.Posting{{Source: "world", Destination: BatchAddress(b.ID, "available"), Asset: CreditAsset, Amount: n}}
+		posts = append(posts, ledger.Posting{Source: "world", Destination: BatchAddress(b.ID, "available"), Asset: CreditAsset, Amount: n})
 	}
 	tx, e := c.Begin(ctx)
 	if e != nil {
@@ -319,6 +370,9 @@ func (s *Service) monthlyLocked(ctx context.Context, c *pgxpool.Conn, sub Subscr
 	return s.runLocked(ctx, c, cmd.ID)
 }
 func (s *Service) renewLocked(ctx context.Context, c *pgxpool.Conn, sub Subscription, now time.Time) error {
+	if e := s.commercialClear(ctx, c, sub.AccountID); e != nil {
+		return e
+	}
 	if sub.Status != "active" {
 		return nil
 	}

@@ -31,17 +31,18 @@ type Model struct {
 // Discovery is safe to return to a trusted product client. Token material is
 // intentionally absent; callers may persist this response as public state.
 type Discovery struct {
-	SchemaVersion     int       `json:"schema_version,omitempty"`
-	CatalogVersion    string    `json:"catalog_version,omitempty"`
-	CatalogSource     string    `json:"catalog_source,omitempty"`
-	ModelScope        string    `json:"model_scope,omitempty"`
-	PricingSource     string    `json:"pricing_source,omitempty"`
-	CredentialVersion int64     `json:"credential_version,omitempty"`
-	AccountID         string    `json:"account_id"`
-	InstanceID        string    `json:"instance_id"`
-	OriginProductID   string    `json:"origin_product_id"`
-	ExpiresAt         time.Time `json:"expires_at"`
-	Models            []Model   `json:"models"`
+	NativeCreditConversion *billing.NativeConversion `json:"native_credit_conversion,omitempty"`
+	SchemaVersion          int                       `json:"schema_version,omitempty"`
+	CatalogVersion         string                    `json:"catalog_version,omitempty"`
+	CatalogSource          string                    `json:"catalog_source,omitempty"`
+	ModelScope             string                    `json:"model_scope,omitempty"`
+	PricingSource          string                    `json:"pricing_source,omitempty"`
+	CredentialVersion      int64                     `json:"credential_version,omitempty"`
+	AccountID              string                    `json:"account_id"`
+	InstanceID             string                    `json:"instance_id"`
+	OriginProductID        string                    `json:"origin_product_id"`
+	ExpiresAt              time.Time                 `json:"expires_at"`
+	Models                 []Model                   `json:"models"`
 }
 
 // ProjectCatalog projects an allowlisted model set against the published rate
@@ -156,7 +157,7 @@ func (s *Service) DiscoverAPIKey(ctx context.Context, token, expectedProduct, ex
 		return Discovery{}, ErrCredential
 	}
 	if out.ModelScope == ScopeLLMRouterAvailable {
-		if _, e := s.nativeAuthorityOn(ctx, s.pool, actor, out.AccountID, out.OriginProductID, out.InstanceID, funding); e != nil || asset != billing.CashAsset || out.PricingSource != PricingLLMRouterNative {
+		if _, e := s.nativeAuthorityOn(ctx, s.pool, actor, out.AccountID, out.OriginProductID, out.InstanceID, funding); e != nil || !nativeFundingMatches(funding, asset, out.PricingSource) {
 			return Discovery{}, ErrCredential
 		}
 		return s.nativeDiscovery(ctx, actor, out)

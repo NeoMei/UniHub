@@ -9,12 +9,16 @@ import (
 )
 
 var (
-	ErrInvalid             = errors.New("billing: invalid input")
-	ErrConflict            = errors.New("billing: idempotency or version conflict")
-	ErrPending             = errors.New("billing: unresolved account command")
-	ErrInsufficientCredits = errors.New("billing: insufficient model credits")
-	ErrUnsupported         = errors.New("billing: cross-period changes are unsupported")
-	ErrManualReview        = errors.New("billing: refund requires manual review")
+	ErrInvalid              = errors.New("billing: invalid input")
+	ErrConflict             = errors.New("billing: idempotency or version conflict")
+	ErrPending              = errors.New("billing: unresolved account command")
+	ErrInsufficientCredits  = errors.New("billing: insufficient model credits")
+	ErrUnsupported          = errors.New("billing: cross-period changes are unsupported")
+	ErrManualReview         = errors.New("billing: refund requires manual review")
+	ErrSubscriptionRequired = errors.New("billing: subscription_required")
+	// ErrQuoteInvalidated rejects a new upgrade before its order or payment exists.
+	// It must never replace an uncertain payment or an existing order's conflict.
+	ErrQuoteInvalidated = errors.New("billing: quote_invalidated")
 )
 
 const (
@@ -66,6 +70,9 @@ type Subscription struct {
 	Status      string    `json:"status"`
 }
 type Order struct {
+	PaymentSource               string    `json:"payment_source,omitempty"`
+	CheckoutID                  string    `json:"checkout_id,omitempty"`
+	ProviderTransactionID       string    `json:"provider_transaction_id,omitempty"`
 	ID                          string    `json:"id"`
 	AccountID                   string    `json:"account_id"`
 	ActorID                     string    `json:"actor_id"`
@@ -96,6 +103,10 @@ type PurchaseRequest struct {
 	Key     string `json:"key"`
 }
 type Quote struct {
+	PaymentSource       string    `json:"payment_source,omitempty"`
+	RoundingRule        string    `json:"rounding_rule,omitempty"`
+	OriginalAmount      string    `json:"original_amount,omitempty"`
+	PeriodEnd           time.Time `json:"period_end,omitempty"`
 	ID                  string    `json:"id"`
 	AccountID           string    `json:"account_id"`
 	SubscriptionID      string    `json:"subscription_id"`

@@ -81,6 +81,9 @@ func (s *Service) AcceptUpgrade(ctx context.Context, actor, account, quoteID, ke
 	if !keyOK(key) {
 		return out, ErrInvalid
 	}
+	if e := s.newPurchaseReady(ctx, actor, account, key, "", quoteID); e != nil {
+		return out, e
+	}
 	e := s.locked(ctx, account, func(c *pgxpool.Conn) error {
 		if e := s.finance(ctx, c, actor, account); e != nil {
 			return e
@@ -101,12 +104,18 @@ func (s *Service) AcceptUpgrade(ctx context.Context, actor, account, quoteID, ke
 		if !errors.Is(e, accounts.ErrNotFound) {
 			return e
 		}
+		if e = s.commercialClear(ctx, c, account); e != nil {
+			return e
+		}
 		if e = s.clear(ctx, c, account); e != nil {
 			return e
 		}
 		q, e := load[Quote](ctx, c, `SELECT snapshot FROM billing_quotes WHERE account_id=$1 AND id=$2`, account, quoteID)
 		if e != nil {
 			return e
+		}
+		if q.PaymentSource == "external" {
+			return ErrInvalid
 		}
 		sub, e := load[Subscription](ctx, c, `SELECT snapshot FROM billing_subscriptions WHERE account_id=$1 AND id=$2`, account, q.SubscriptionID)
 		if e != nil {
@@ -115,7 +124,7 @@ func (s *Service) AcceptUpgrade(ctx context.Context, actor, account, quoteID, ke
 		now := s.now().UTC()
 		start, _, ok := CurrentPeriod(sub.Anchor, sub.PaidThrough, now)
 		if !ok || !now.Before(q.ExpiresAt) || !start.Equal(q.PeriodStart) || sub.Version != q.SubscriptionVersion {
-			return ErrConflict
+			return ErrQuoteInvalidated
 		}
 		offer, e := s.buyable(ctx, c, q.Offer.ID, account)
 		if e != nil {

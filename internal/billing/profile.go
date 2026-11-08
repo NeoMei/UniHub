@@ -22,19 +22,21 @@ type BillingComponent struct {
 	Enabled bool `json:"enabled"`
 }
 type UsagePolicy struct {
-	Models              []string `json:"models"` // nil retains legacy catalog; empty explicitly denies all models.
-	Enabled             bool     `json:"enabled"`
-	RequireSubscription bool     `json:"require_subscription"`
-	FundingModes        []string `json:"funding_modes"`
-	DefaultFundingMode  string   `json:"default_funding_mode"`
+	RequireSubscriptionForCredits bool     `json:"require_subscription_for_credits"`
+	Models                        []string `json:"models"` // nil retains legacy catalog; empty explicitly denies all models.
+	Enabled                       bool     `json:"enabled"`
+	RequireSubscription           bool     `json:"require_subscription"`
+	FundingModes                  []string `json:"funding_modes"`
+	DefaultFundingMode            string   `json:"default_funding_mode"`
 }
 type BillingProfile struct {
-	ProductID       string           `json:"product_id"`
-	Version         int64            `json:"version"`
-	Subscription    BillingComponent `json:"subscription"`
-	IncludedCredits BillingComponent `json:"included_credits"`
-	Addons          BillingComponent `json:"addons"`
-	Usage           UsagePolicy      `json:"usage"`
+	NativeCreditConversion *NativeConversion `json:"native_credit_conversion,omitempty"`
+	ProductID              string            `json:"product_id"`
+	Version                int64             `json:"version"`
+	Subscription           BillingComponent  `json:"subscription"`
+	IncludedCredits        BillingComponent  `json:"included_credits"`
+	Addons                 BillingComponent  `json:"addons"`
+	Usage                  UsagePolicy       `json:"usage"`
 }
 
 var billingProductID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
@@ -66,16 +68,22 @@ func (p BillingProfile) Validate() error {
 		if len(modes) == 0 || !modes[p.Usage.DefaultFundingMode] {
 			return ErrInvalid
 		}
-	} else if len(modes) > 0 || p.Usage.DefaultFundingMode != "" || p.Usage.RequireSubscription {
+	} else if len(modes) > 0 || p.Usage.DefaultFundingMode != "" || p.Usage.RequireSubscription || p.Usage.RequireSubscriptionForCredits {
 		return ErrInvalid
 	}
-	if p.Usage.RequireSubscription && !p.Subscription.Enabled {
+	if p.Usage.RequireSubscriptionForCredits && !modes[FundingCredits] {
+		return ErrInvalid
+	}
+	if (p.Usage.RequireSubscription || p.Usage.RequireSubscriptionForCredits) && !p.Subscription.Enabled {
 		return ErrInvalid
 	}
 	if p.IncludedCredits.Enabled && (!p.Subscription.Enabled || !modes[FundingCredits]) {
 		return ErrInvalid
 	}
 	if p.Addons.Enabled && !modes[FundingCredits] {
+		return ErrInvalid
+	}
+	if p.NativeCreditConversion != nil && (p.ProductID != "superwagie" || !p.Usage.Enabled || !modes[FundingCredits] || !validNativeCreditConversion(*p.NativeCreditConversion)) {
 		return ErrInvalid
 	}
 	return nil
@@ -182,6 +190,9 @@ func lockBillingProduct(ctx context.Context, tx pgx.Tx, productID string) error 
 	return e
 }
 func insertBillingProfile(ctx context.Context, tx pgx.Tx, actor string, p BillingProfile) error {
+	if e := validateNativeCreditHistory(ctx, tx, p); e != nil {
+		return e
+	}
 	_, e := tx.Exec(ctx, `INSERT INTO product_billing_profiles(product_id,version,actor_id,snapshot) VALUES($1,$2,$3,$4)`, p.ProductID, p.Version, actor, encode(p))
 	return e
 }

@@ -51,23 +51,24 @@ type Request struct {
 	TaskID          string   `json:"task_id"`
 }
 type Claims struct {
-	ModelScope            string              `json:"model_scope"`
-	PricingSource         string              `json:"pricing_source"`
-	CredentialVersion     int64               `json:"credential_version"`
-	Operations            map[string][]string `json:"operations,omitempty"`
-	CredentialKind        string              `json:"credential_kind,omitempty"`
-	InstanceID            string              `json:"instance_id,omitempty"`
-	FundingMode           string              `json:"funding_mode"`
-	Asset                 string              `json:"asset"`
-	BillingProfileVersion int64               `json:"billing_profile_version"`
-	ID                    string              `json:"id"`
-	Audience              string              `json:"audience"`
-	ActorID               string              `json:"actor_id"`
-	AccountID             string              `json:"account_id"`
-	OriginProductID       string              `json:"origin_product_id"`
-	Models                []string            `json:"models"`
-	TaskID                string              `json:"task_id"`
-	ExpiresAt             time.Time           `json:"expires_at"`
+	NativeCreditConversion *billing.NativeConversion `json:"native_credit_conversion,omitempty"`
+	ModelScope             string                    `json:"model_scope"`
+	PricingSource          string                    `json:"pricing_source"`
+	CredentialVersion      int64                     `json:"credential_version"`
+	Operations             map[string][]string       `json:"operations,omitempty"`
+	CredentialKind         string                    `json:"credential_kind,omitempty"`
+	InstanceID             string                    `json:"instance_id,omitempty"`
+	FundingMode            string                    `json:"funding_mode"`
+	Asset                  string                    `json:"asset"`
+	BillingProfileVersion  int64                     `json:"billing_profile_version"`
+	ID                     string                    `json:"id"`
+	Audience               string                    `json:"audience"`
+	ActorID                string                    `json:"actor_id"`
+	AccountID              string                    `json:"account_id"`
+	OriginProductID        string                    `json:"origin_product_id"`
+	Models                 []string                  `json:"models"`
+	TaskID                 string                    `json:"task_id"`
+	ExpiresAt              time.Time                 `json:"expires_at"`
 }
 type Grant struct {
 	Claims
@@ -418,14 +419,17 @@ func (s *Service) verifyScoped(ctx context.Context, token, model, instance strin
 		return c, e
 	}
 	if c.ModelScope == ScopeLLMRouterAvailable {
-		if c.CredentialKind != "api_key" || c.PricingSource != PricingLLMRouterNative {
+		if c.CredentialKind != "api_key" || !nativeFundingMatches(c.FundingMode, c.Asset, c.PricingSource) {
 			return Claims{}, ErrCredential
 		}
 		if _, e := s.nativeAuthorityOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID, c.FundingMode); e != nil {
 			return Claims{}, ErrCredential
 		}
-		if c.Asset != billing.CashAsset {
-			return Claims{}, ErrCredential
+		if c.Asset == billing.CreditAsset {
+			c.NativeCreditConversion, e = s.nativeCreditConversionOn(ctx, s.pool, c.OriginProductID)
+			if e != nil {
+				return Claims{}, ErrCredential
+			}
 		}
 		c.Audience = "llmrouter"
 		return c, nil
