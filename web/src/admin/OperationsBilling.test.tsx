@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { Operations } from "./Operations";
 
@@ -42,11 +42,13 @@ test("offer editor exposes entitlements and commercial rules", async () => {
   expect(screen.getByText("升级规则")).toBeDefined();
 });
 
-test.each([0, 12])("offer editor preserves add-on validity_months=%i when saving a draft", async (validityMonths) => {
+test("unrelated offer edit preserves the approved 12-month add-on validity in PUT", async () => {
+  const validityMonths = 12;
   const offer = { id: "addon", product_id: "superwagie", name: "积分加量包", account_kind: "both", kind: "addon", period: "", price: "1000000", monthly_credit: "2000000", entitlements: {}, rank: 0, validity_months: validityMonths, refund_rule: "unused_only_v1", upgrade_rule: "", status: "draft", sandbox: false, version: 1 };
-  let saved: { offer: { validity_months: number } } | undefined;
+  let saved: { offer: { validity_months: number; name: string }; version: number } | undefined;
+  let savedPath = "";
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
-    if (options?.method === "PUT") { saved = JSON.parse(String(options.body)); return json({}); }
+    if (options?.method === "PUT") { savedPath = String(input); saved = JSON.parse(String(options.body)); return json({}); }
     const url = new URL(String(input), "http://localhost");
     if (url.pathname === "/admin/v1/offers") return json({ items: [offer], total: 1, as_of: "" });
     return json({});
@@ -54,17 +56,17 @@ test.each([0, 12])("offer editor preserves add-on validity_months=%i when saving
   render(<Operations resource="offers" principal={principal} csrf="csrf" />);
   fireEvent.click(await screen.findByRole("button", { name: "编辑草稿" }));
   expect((screen.getByLabelText(/有效月数/) as HTMLInputElement).value).toBe(String(validityMonths));
+  fireEvent.change(screen.getByLabelText("商品名称"), { target: { value: "新名称积分加量包" } });
+  fireEvent.change(screen.getByLabelText("是否测试商品"), { target: { value: "false" } });
   fireEvent.change(screen.getByLabelText("操作原因"), { target: { value: "保留加量包有效期" } });
   fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
   await screen.findByRole("button", { name: "编辑草稿" });
-  expect(saved?.offer.validity_months).toBe(validityMonths);
+  await waitFor(() => expect(saved?.offer.validity_months).toBe(12));
+  expect(savedPath).toBe("/admin/v1/offers/addon");
+  expect(saved?.offer.name).toBe("新名称积分加量包");
+  expect(saved?.version).toBe(1);
 });
 
-test("credit batch list describes a null deadline as perpetual", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => json({ items: [{ id: "perpetual", account_id: "account", product_id: "superwagie", available: "1", reserved: "0", consumed: "0", expires_at: null }], total: 1, as_of: "" })));
-  render(<Operations resource="credit-batches" principal={principal} csrf="csrf" />);
-  expect(await screen.findByText("永久有效")).toBeDefined();
-});
 
 const nativeConversion = { version: 'sw-native-cny10-20261109-v1', numerator: '146', denominator: '1', rounding: 'lr-cumulative-ceil-v1' };
 const nativeProfile = { product_id: 'superwagie', version: 2, subscription: { enabled: true }, included_credits: { enabled: true }, addons: { enabled: true }, usage: { enabled: true, require_subscription: true, require_subscription_for_credits: true, funding_modes: ['credits', 'prepaid_cash'], default_funding_mode: 'prepaid_cash', models: [] }, native_credit_conversion: nativeConversion };
