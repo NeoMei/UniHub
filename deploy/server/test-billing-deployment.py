@@ -406,6 +406,46 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(bundle.read_env(self.root / 'shared/runtime.env')['PRODUCT_BILLING_FILE'], str(self.public))
         self.assertNotIn('PRIVATE_MARKER', output.getvalue())
 
+    def test_prepare_preserves_systemd_runtime_values_with_spaces_quotes_and_continuations(self):
+        runtime, _, original_key = self.direct_runtime()
+        actual_key = original_key.with_name('merchant active.key')
+        original_key.rename(actual_key)
+        original_key.write_bytes(b'x' * 32)
+        original_key.chmod(0o600)
+        with runtime.open('a') as stream:
+            stream.write('PAYMENT_CONFIG_KEY_FILE=' + str(actual_key) + '\n'
+                         'IDENTITY_LABEL=  two  words \t\n'
+                         'IDENTITY_LITERAL=prefix\"quote\" #literal; $no_expand\n'
+                         "IDENTITY_SINGLE='  first\nsecond \\ $literal  '\n"
+                         'IDENTITY_DOUBLE=\"quote \\\" and \\\\ and \\q and \\$literal\"\n'
+                         'IDENTITY_CONTINUED=first\\\n second\n')
+        bundle.prepare(self.root, self.release, {})
+        actual = bundle.read_env(runtime)
+        self.assertEqual(actual['PAYMENT_CONFIG_KEY_FILE'], str(actual_key))
+        self.assertEqual(actual['IDENTITY_LABEL'], 'two  words')
+        self.assertEqual(actual['IDENTITY_LITERAL'], 'prefix\"quote\" #literal; $no_expand')
+        self.assertEqual(actual['IDENTITY_SINGLE'], '  first\nsecond \\ $literal  ')
+        self.assertEqual(actual['IDENTITY_DOUBLE'], 'quote \" and \\ and \\q and $literal')
+        self.assertEqual(actual['IDENTITY_CONTINUED'], 'first second')
+        # Existing generated quote concatenation must stay compatible too.
+        expected = {'VALUE': "'single' \"double\" \\ slash\nnext"}
+        bundle.atomic_write(self.source, bundle.env_text(expected))
+        self.assertEqual(bundle.read_env(self.source), expected)
+
+    def test_unsupported_environment_syntax_fails_without_rewriting_runtime_or_printing_values(self):
+        runtime = self.root / 'shared/runtime.env'
+        original = runtime.read_bytes()
+        for value in [b'BROKEN="PRIVATE_MARKER', b'BROKEN=trailing\\',
+                      b'BROKEN=\x00PRIVATE_MARKER\n', b'BROKEN=\xef\xbb\xbfPRIVATE_MARKER\n',
+                      b'BROKEN=\xffPRIVATE_MARKER\n']:
+            runtime.write_bytes(original + value)
+            before = runtime.read_bytes()
+            with self.subTest(value=value):
+                with self.assertRaises(bundle.DeploymentError) as error:
+                    bundle.prepare(self.root, self.release, {})
+                self.assertNotIn('PRIVATE_MARKER', str(error.exception))
+                self.assertEqual(runtime.read_bytes(), before)
+
     def test_static_manifest_backup_keeps_referenced_credential_files(self):
         runtime, values, manifest = self.direct_runtime(key=False)
         private = manifest.with_name('signing.pem')
@@ -443,12 +483,19 @@ class BillingDeploymentTests(unittest.TestCase):
         unit = host / 'unihub.service'
         unit.write_text('[Service]\nEnvironmentFile=' + str(runtime_path) + '\n')
         dropin = host / 'commerce.conf'
-        effective_key = host / 'effective.key'
+        effective_key = host / 'merchant active.key'
+        decoy_key = host / 'merchant'
+        decoy_key.write_bytes(b'x' * 32)
+        decoy_key.chmod(0o600)
         effective_key.write_bytes(bytes(reversed(range(32))))
         effective_key.chmod(0o600)
         extra_env = host / 'commerce.env'
-        extra_env.write_text(bundle.env_text({'PAYMENT_CONFIG_KEY_FILE': str(effective_key),
-                                             'EXTRA_IDENTITY_SECRET': 'private fixture'}))
+        extra_env.write_text('PAYMENT_CONFIG_KEY_FILE=' + str(effective_key) + '\n'
+                             'EXTRA_IDENTITY_SECRET=  private  fixture value \t\n'
+                             'IDENTITY_LITERAL=prefix"quote" #literal; $no_expand\n'
+                             "IDENTITY_SINGLE='  first\nsecond \\ $literal  '\n"
+                             'IDENTITY_DOUBLE="quote \\" and \\\\ and \\q and \\$literal"\n'
+                             'IDENTITY_CONTINUED=first\\\n second\n')
         extra_env.chmod(0o600)
         dropin.write_text('[Service]\nEnvironmentFile=' + str(extra_env) + '\n')
         show = ('LoadState=loaded\nFragmentPath=' + str(unit) + '\nDropInPaths=' + str(dropin) +
@@ -480,6 +527,8 @@ class BillingDeploymentTests(unittest.TestCase):
             archive.extractall(restored, filter='data')
         self.assertTrue((restored / 'host-configuration/files.json').is_file(), 'backup omitted merchant/unit recovery mapping')
         mapping = json.loads((restored / 'host-configuration/files.json').read_text())
+        self.assertIn(str(effective_key), mapping, 'backup omitted actual spaced key path')
+        self.assertNotIn(str(decoy_key), mapping, 'backup silently selected the truncated decoy')
         for source in [unit, dropin, extra_env, runtime_key, effective_key]:
             restored_path = restored / mapping[str(source)]
             self.assertEqual(restored_path.read_bytes(), source.read_bytes())
@@ -489,7 +538,11 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(effective['PAYMENT_CONFIG_KEY_FILE'], str(effective_key))
         self.assertEqual(effective['PAYMENT_MODE'], 'direct')
         self.assertEqual(effective['UNIT_IDENTITY_SECRET'], 'unit-fixture')
-        self.assertEqual(effective['EXTRA_IDENTITY_SECRET'], 'private fixture')
+        self.assertEqual(effective['EXTRA_IDENTITY_SECRET'], 'private  fixture value')
+        self.assertEqual(effective['IDENTITY_LITERAL'], 'prefix"quote" #literal; $no_expand')
+        self.assertEqual(effective['IDENTITY_SINGLE'], '  first\nsecond \\ $literal  ')
+        self.assertEqual(effective['IDENTITY_DOUBLE'], 'quote " and \\ and \\q and $literal')
+        self.assertEqual(effective['IDENTITY_CONTINUED'], 'first second')
         manifest = json.loads((destination / 'manifest.json').read_text())
         self.assertEqual(manifest['files']['configuration.tar'], backup_bundle.sha256(destination / 'configuration.tar'))
 

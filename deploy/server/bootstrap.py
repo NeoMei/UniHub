@@ -63,12 +63,79 @@ def run(args, *, input=None, env=None):
 
 
 def read_env(path):
+    """Read systemd EnvironmentFile values, including literal interior spaces.
+
+    This also reads bootstrap's shell-compatible generated files. Expansion is
+    never performed. Malformed or unsupported input fails without its contents.
+    """
+    try:
+        text = path.read_bytes().decode('utf-8')
+    except UnicodeError:
+        raise DeploymentError('Environment configuration must be valid UTF-8.') from None
+    if any(ord(c) in {0, 0xfeff, 0xfffe, 0xffff} or 0xfdd0 <= ord(c) <= 0xfdef
+           or ord(c) & 0xffff in {0xfffe, 0xffff} for c in text):
+        raise DeploymentError('Environment configuration contains unsupported characters.')
     values = {}
-    for line in path.read_text().splitlines():
-        if line and not line.startswith('#'):
-            key, value = line.split('=', 1)
-            parts = shlex.split(value)
-            values[key] = parts[0] if parts else ''
+    offset = 0
+    whitespace = ' \t\r'
+    while offset < len(text):
+        end = text.find('\n', offset)
+        end = len(text) if end < 0 else end
+        line = text[offset:end].lstrip(whitespace)
+        if not line or line.startswith(('#', ';')) or '=' not in line:
+            if line.startswith(('#', ';')) and line.endswith('\\'):
+                raise DeploymentError('Continued environment comments are unsupported.')
+            offset = end + 1
+            continue
+        key = line.split('=', 1)[0].rstrip(whitespace)
+        if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) is None:
+            raise DeploymentError('Environment configuration contains an invalid variable name.')
+        offset = text.index('=', offset, end) + 1
+        value, state, trailing = [], 'leading', None
+        while offset < len(text):
+            char = text[offset]
+            offset += 1
+            if state in {'leading', 'unquoted'} and char == '\n':
+                break
+            if state == 'leading':
+                if char in whitespace:
+                    continue
+                if char in {"'", '"'}:
+                    state = char
+                    continue
+                state = 'unquoted'
+            if state == 'unquoted':
+                if char == '\\':
+                    trailing = None
+                    if offset == len(text):
+                        raise DeploymentError('Environment configuration ends with an incomplete escape.')
+                    char = text[offset]
+                    offset += 1
+                    if char != '\n':
+                        value.append(char)
+                else:
+                    if char in whitespace:
+                        if trailing is None:
+                            trailing = len(value)
+                    else:
+                        trailing = None
+                    value.append(char)
+            elif char == state:
+                state = 'leading'
+            elif state == '"' and char == '\\':
+                if offset == len(text):
+                    raise DeploymentError('Environment configuration ends with an incomplete escape.')
+                char = text[offset]
+                offset += 1
+                if char != '\n':
+                    if char not in '"\\`$':
+                        value.append('\\')
+                    value.append(char)
+            else:
+                value.append(char)
+        if state in {"'", '"'}:
+            raise DeploymentError('Environment configuration contains an unclosed quoted value.')
+        values[key] = ''.join(value if trailing is None else value[:trailing])
     return values
 
 
