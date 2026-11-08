@@ -14,7 +14,14 @@ export type Capabilities = {
   product_wallet_recharge?: boolean;
 };
 export type Account = { id: string; kind: string; name: string; role: string };
+export type NativeCreditConversion = {
+  version: string;
+  numerator: string;
+  denominator: string;
+  rounding: string;
+};
 export type BillingProfile = {
+  native_credit_conversion?: NativeCreditConversion | null;
   product_id: string;
   version: number;
   subscription: { enabled: boolean };
@@ -23,6 +30,7 @@ export type BillingProfile = {
   usage: {
     enabled: boolean;
     require_subscription: boolean;
+    require_subscription_for_credits?: boolean;
     funding_modes: string[];
     default_funding_mode: string;
     models?: string[] | null;

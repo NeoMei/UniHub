@@ -75,7 +75,7 @@ test.each([[], null, ['fixture-model']])('unrelated profile edits preserve exact
  const writes: { options: RequestInit; body: typeof nativeProfile & { profile: typeof nativeProfile } }[] = [];
  vi.stubGlobal('fetch', vi.fn(async (_path: string, options: RequestInit) => {
   if (options.method === 'PUT') { writes.push({ options, body: JSON.parse(String(options.body)) }); return json({}); }
-  return json({ items: [{ ...nativeProfile, usage: { ...nativeProfile.usage, models } }], total: 1, as_of: '' });
+  return json({ items: [{ ...nativeProfile, usage: { ...nativeProfile.usage, models }, actor_id: 'fixture-admin', created_at: '2026-11-09T00:00:00Z', status: 'published' }], total: 1, as_of: '' });
  }));
  render(<Operations resource="billing-profiles" principal={principal} csrf="fixture-csrf" />);
  fireEvent.click(await screen.findByRole('button', { name: '更新计费配置' }));
@@ -86,6 +86,46 @@ test.each([[], null, ['fixture-model']])('unrelated profile edits preserve exact
  expect(writes).toHaveLength(1); expect(writes[0].body.version).toBe(2);
  expect(writes[0].body.profile).toEqual({ ...nativeProfile, addons: { enabled: false }, usage: { ...nativeProfile.usage, models } });
  expect(writes[0].options.headers).toMatchObject({ 'X-CSRF-Token': 'fixture-csrf' });
+});
+
+test('actual admin list profile metadata stays out of the canonical PUT when editing conversion and models', async () => {
+ const original = { ...nativeProfile, native_credit_conversion: undefined, usage: { ...nativeProfile.usage, models: ['legacy-model', 'preserved-model'] } };
+ let payload: unknown;
+ let savedPath = '';
+ vi.stubGlobal('fetch', vi.fn(async (path: string, options: RequestInit) => {
+  if (options.method === 'PUT') { savedPath = path; payload = JSON.parse(String(options.body)); return json({}); }
+  return json({ items: [{ ...original, actor_id: 'fixture-admin', created_at: '2026-11-09T00:00:00Z', status: 'published' }], total: 1, as_of: '' });
+ }));
+ render(<Operations resource="billing-profiles" principal={principal} csrf="fixture-csrf" />);
+ fireEvent.click(await screen.findByRole('button', { name: '更新计费配置' }));
+ fireEvent.change(screen.getByLabelText(/原生 CREDIT 换算操作/), { target: { value: 'update' } });
+ fireEvent.change(screen.getByLabelText(/原生换算版本/), { target: { value: nativeConversion.version } });
+ fireEvent.change(screen.getByLabelText(/原生换算分子/), { target: { value: '146' } });
+ fireEvent.change(screen.getByLabelText(/原生换算分母/), { target: { value: '1' } });
+ fireEvent.change(screen.getByLabelText(/模型白名单/), { target: { value: 'canonical-model,preserved-model' } });
+ fireEvent.change(screen.getByLabelText('操作原因'), { target: { value: 'fixture canonical profile' } });
+ fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+ await screen.findByRole('button', { name: '更新计费配置' });
+ expect(savedPath).toBe('/admin/v1/billing-profiles/superwagie');
+ expect(payload).toEqual({ version: 2, reason: 'fixture canonical profile', profile: { ...nativeProfile, usage: { ...nativeProfile.usage, models: ['canonical-model', 'preserved-model'] } } });
+});
+
+test('implicit legacy projection metadata stays out of the first profile PUT', async () => {
+ let payload: unknown;
+ vi.stubGlobal('fetch', vi.fn(async (_path: string, options: RequestInit) => {
+  if (options.method === 'PUT') { payload = JSON.parse(String(options.body)); return json({}); }
+  return json({ items: [{ product_id: 'notes', version: 0, configuration_source: 'implicit_legacy', actor_id: null, created_at: null, status: 'published' }], total: 1, as_of: '' });
+ }));
+ render(<Operations resource="billing-profiles" principal={principal} csrf="fixture-csrf" />);
+ fireEvent.click(await screen.findByRole('button', { name: '更新计费配置' }));
+ fireEvent.change(screen.getByLabelText('订阅能力'), { target: { value: 'yes' } });
+ fireEvent.change(screen.getByLabelText('操作原因'), { target: { value: 'fixture implicit profile' } });
+ fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+ await screen.findByRole('button', { name: '更新计费配置' });
+ expect(payload).toEqual({ version: 0, reason: 'fixture implicit profile', profile: {
+  product_id: 'notes', version: 0, subscription: { enabled: true }, included_credits: { enabled: false }, addons: { enabled: false },
+  usage: { enabled: false, require_subscription: false, require_subscription_for_credits: false, funding_modes: [], default_funding_mode: '', models: null },
+ } });
 });
 
 test.each(['update', 'remove'])('native conversion %s requires an explicit action; credit-only membership edits remain independent', async action => {

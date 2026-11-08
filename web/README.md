@@ -17,3 +17,5 @@ npm run build
 “套餐与用量”是一级导航，显示当前会员的实际已付期限、账户共享 CREDIT、统一钱包现金与托管模型产品钱包现金，分别记账。原生共享现金调用和托管模型调用的资金归属应以实际消费记录为准。目录和概览统一按发布状态、账户类型、测试资格及产品筛选；未知产品链接保持未核验，不自动切换到其他产品。
 
 概览的月付/年付卡片只携带商品与产品选择进入现有目录，不创建订单或自动打开购买确认。订单仍须现有确认；已有会员沿用升级报价及接受报价流程。切换付费账户或角色会重建目录和确认上下文。权益展示只翻译已识别标签（席位数、工作区）或已有中文标签，未知技术键不展示。
+
+The admin billing-profile editor constructs the `BillingProfile` mutation body from its public fields. List metadata such as `actor_id`, `created_at`, `status`, and the implicit legacy `configuration_source` stays outside the mutation body. Unchanged model policy preserves the distinction between `null` and an empty allowlist. Native credit conversion changes require the existing explicit update or remove action. The request and profile both retain the displayed version for the server's compare-and-swap check.
