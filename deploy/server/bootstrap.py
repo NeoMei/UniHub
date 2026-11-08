@@ -78,9 +78,11 @@ def read_env(path):
     values = {}
     offset = 0
     whitespace = ' \t\r'
+    newlines = '\n\r'
+    record_end = re.compile(r'[\n\r]')
     while offset < len(text):
-        end = text.find('\n', offset)
-        end = len(text) if end < 0 else end
+        boundary = record_end.search(text, offset)
+        end = boundary.start() if boundary is not None else len(text)
         line = text[offset:end].lstrip(whitespace)
         if not line or line.startswith(('#', ';')) or '=' not in line:
             if line.startswith(('#', ';')) and line.endswith('\\'):
@@ -95,7 +97,7 @@ def read_env(path):
         while offset < len(text):
             char = text[offset]
             offset += 1
-            if state in {'leading', 'unquoted'} and char == '\n':
+            if state in {'leading', 'unquoted'} and char in newlines:
                 break
             if state == 'leading':
                 if char in whitespace:
@@ -111,7 +113,7 @@ def read_env(path):
                         raise DeploymentError('Environment configuration ends with an incomplete escape.')
                     char = text[offset]
                     offset += 1
-                    if char != '\n':
+                    if char not in newlines:
                         value.append(char)
                 else:
                     if char in whitespace:

@@ -446,6 +446,24 @@ class BillingDeploymentTests(unittest.TestCase):
                 self.assertNotIn('PRIVATE_MARKER', str(error.exception))
                 self.assertEqual(runtime.read_bytes(), before)
 
+    def test_systemd_record_boundaries_and_quoted_cr_escape_rules(self):
+        self.source.write_bytes(b'# comment\r; comment\r\nignored line\r'
+                                b'A=one\rB=two\nEMPTY=\r'
+                                b"S='a\rb'\rD=\"a\rb\"\r"
+                                b'U=first\\\r second\r'
+                                b'Q="first\\\rsecond"\r'
+                                b'L="first\\\nsecond"\r'
+                                b'W="first\\\r\nsecond"\r')
+        self.assertEqual(bundle.read_env(self.source), {
+            'A': 'one', 'B': 'two', 'EMPTY': '', 'S': 'a\rb', 'D': 'a\rb',
+            'U': 'first second', 'Q': 'first\\\rsecond', 'L': 'firstsecond',
+            'W': 'first\\\r\nsecond',
+        })
+        for newline in [b'\n', b'\r', b'\r\n']:
+            self.source.write_bytes(b'# unsupported continuation\\' + newline + b'A=one' + newline)
+            with self.subTest(newline=newline), self.assertRaises(bundle.DeploymentError):
+                bundle.read_env(self.source)
+
     def test_static_manifest_backup_keeps_referenced_credential_files(self):
         runtime, values, manifest = self.direct_runtime(key=False)
         private = manifest.with_name('signing.pem')
@@ -477,8 +495,17 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(effective, {'PAYMENT_MODE': 'disabled'})
 
     def test_backup_restores_effective_unit_dropins_environment_and_merchant_key_privately(self):
+        self.assert_private_merchant_backup('\n')
+
+    def test_backup_restores_cr_and_crlf_environment_records_after_comments(self):
+        for newline in ['\r', '\r\n']:
+            with self.subTest(newline=repr(newline)):
+                self.assert_private_merchant_backup(newline)
+
+    def assert_private_merchant_backup(self, newline):
         runtime_path, _, runtime_key = self.direct_runtime()
-        host = Path(self.temp.name).resolve() / 'host-systemd'
+        suffix = {'\n': 'lf', '\r': 'cr', '\r\n': 'crlf'}[newline]
+        host = Path(self.temp.name).resolve() / ('host-systemd-' + suffix)
         host.mkdir()
         unit = host / 'unihub.service'
         unit.write_text('[Service]\nEnvironmentFile=' + str(runtime_path) + '\n')
@@ -490,12 +517,15 @@ class BillingDeploymentTests(unittest.TestCase):
         effective_key.write_bytes(bytes(reversed(range(32))))
         effective_key.chmod(0o600)
         extra_env = host / 'commerce.env'
-        extra_env.write_text('PAYMENT_CONFIG_KEY_FILE=' + str(effective_key) + '\n'
+        payload = ('# leading fixture comment\n; second fixture comment\n'
+                             'PAYMENT_MODE=direct\n'
+                             'PAYMENT_CONFIG_KEY_FILE=' + str(effective_key) + '\n'
                              'EXTRA_IDENTITY_SECRET=  private  fixture value \t\n'
                              'IDENTITY_LITERAL=prefix"quote" #literal; $no_expand\n'
                              "IDENTITY_SINGLE='  first\nsecond \\ $literal  '\n"
                              'IDENTITY_DOUBLE="quote \\" and \\\\ and \\q and \\$literal"\n'
                              'IDENTITY_CONTINUED=first\\\n second\n')
+        extra_env.write_bytes(payload.replace('\n', newline).encode('utf-8'))
         extra_env.chmod(0o600)
         dropin.write_text('[Service]\nEnvironmentFile=' + str(extra_env) + '\n')
         show = ('LoadState=loaded\nFragmentPath=' + str(unit) + '\nDropInPaths=' + str(dropin) +
@@ -510,7 +540,7 @@ class BillingDeploymentTests(unittest.TestCase):
             self.assertEqual(command[:3], ['docker', 'exec', 'unihub-server-postgres'])
             kwargs['stdout'].write(b'isolated backup fixture')
             return SimpleNamespace(returncode=0)
-        destination = self.root / 'backups/test-effective-config'
+        destination = self.root / ('backups/test-effective-config-' + suffix)
         inventory = {'container:unihub-server-postgres': {'State': {'Running': True}}}
         with patch.object(backup_bundle, 'inventory_resources', return_value=inventory), \
                 patch.object(backup_bundle, 'validate_resources'), \
@@ -520,7 +550,7 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o700)
         for path in destination.iterdir():
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        restored = Path(self.temp.name).resolve() / 'isolated-restore'
+        restored = Path(self.temp.name).resolve() / ('isolated-restore-' + suffix)
         restored.mkdir(mode=0o700)
         with tarfile.open(destination / 'configuration.tar') as archive:
             self.assertTrue(all(not Path(item.name).is_absolute() and '..' not in Path(item.name).parts for item in archive))
@@ -540,9 +570,9 @@ class BillingDeploymentTests(unittest.TestCase):
         self.assertEqual(effective['UNIT_IDENTITY_SECRET'], 'unit-fixture')
         self.assertEqual(effective['EXTRA_IDENTITY_SECRET'], 'private  fixture value')
         self.assertEqual(effective['IDENTITY_LITERAL'], 'prefix"quote" #literal; $no_expand')
-        self.assertEqual(effective['IDENTITY_SINGLE'], '  first\nsecond \\ $literal  ')
+        self.assertEqual(effective['IDENTITY_SINGLE'], '  first' + newline + 'second \\ $literal  ')
         self.assertEqual(effective['IDENTITY_DOUBLE'], 'quote " and \\ and \\q and $literal')
-        self.assertEqual(effective['IDENTITY_CONTINUED'], 'first second')
+        self.assertEqual(effective['IDENTITY_CONTINUED'], 'first' if newline == '\r\n' else 'first second')
         manifest = json.loads((destination / 'manifest.json').read_text())
         self.assertEqual(manifest['files']['configuration.tar'], backup_bundle.sha256(destination / 'configuration.tar'))
 
