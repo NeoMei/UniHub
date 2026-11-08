@@ -18,6 +18,7 @@ import (
 	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
+	"unihub/internal/paymentconfig"
 	"unihub/internal/payments"
 	"unihub/internal/platformadmin"
 	"unihub/internal/productauth"
@@ -27,21 +28,22 @@ import (
 )
 
 type Options struct {
-	PaymentProviders []payments.Provider
-	PlatformAdmin    *platformadmin.Store
-	ProductRuntime   map[string]RuntimeService
-	ProductAuth      *productauth.Service
-	Sandbox          bool
-	Merchant         string
-	SigningKey       []byte
-	Billing          *billing.Service
-	ServiceToken     string
-	ModelAccess      *modelaccess.Service
-	OperatorVerifier auth.Verifier
-	ProductVerifiers map[string]auth.Verifier
-	ProductAccess    map[string]products.Client
-	ProductUsers     *productusers.Store
-	Identity         ProfileService
+	PaymentProviders     []payments.Provider
+	PaymentConfiguration PaymentConfiguration
+	PlatformAdmin        *platformadmin.Store
+	ProductRuntime       map[string]RuntimeService
+	ProductAuth          *productauth.Service
+	Sandbox              bool
+	Merchant             string
+	SigningKey           []byte
+	Billing              *billing.Service
+	ServiceToken         string
+	ModelAccess          *modelaccess.Service
+	OperatorVerifier     auth.Verifier
+	ProductVerifiers     map[string]auth.Verifier
+	ProductAccess        map[string]products.Client
+	ProductUsers         *productusers.Store
+	Identity             ProfileService
 }
 type ProfileService interface {
 	Profile(context.Context, string) (identityapi.Profile, error)
@@ -459,6 +461,8 @@ func writeError(w http.ResponseWriter, e error) {
 		fail(w, 409, "conflict")
 	case errors.Is(e, accounts.ErrInvalid) || errors.Is(e, wallet.ErrInvalid):
 		fail(w, 400, "invalid_request")
+	case errors.Is(e, paymentconfig.ErrUnavailable):
+		fail(w, 503, "payment_configuration_unavailable")
 	case errors.Is(e, paymentUnavailable) || errors.Is(e, billing.ErrPaymentUnavailable):
 		fail(w, 503, "payment_not_configured")
 	case errors.Is(e, billing.ErrInvalid):

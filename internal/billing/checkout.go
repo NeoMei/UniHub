@@ -21,10 +21,8 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 	if !keyOK(r.Key) || (r.OfferID == "") == (r.QuoteID == "") {
 		return x.Checkout, ErrInvalid
 	}
-	p, e := s.checkoutProvider(r.Provider, "")
-	if e != nil {
-		return x.Checkout, e
-	}
+	var p payments.Provider
+	var e error
 	// Probe readiness without holding an account lock. Replays recover accepted
 	// obligations even when new sales are disabled afterwards.
 	if e = s.finance(ctx, s.pool, actor, account); e != nil {
@@ -35,6 +33,12 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 		return x.Checkout, e
 	}
 	if !replay {
+		// Resolve durable payment authority before acquiring the account connection.
+		// A bounded pool must not need a second connection while every writer holds one.
+		p, e = s.checkoutProvider(ctx, r.Provider, "")
+		if e != nil {
+			return x.Checkout, e
+		}
 		var candidate Offer
 		if r.OfferID != "" {
 			candidate, e = load[Offer](ctx, s.pool, `SELECT snapshot FROM billing_offers WHERE id=$1`, r.OfferID)
@@ -65,6 +69,9 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 		}
 		if !errors.Is(e, accounts.ErrNotFound) {
 			return e
+		}
+		if p == nil {
+			return ErrPaymentUnavailable
 		}
 		if e = s.commercialClear(ctx, c, account); e != nil {
 			return e
@@ -230,7 +237,7 @@ func (s *Service) reconcileCheckout(ctx context.Context, account, checkout strin
 	if x.Receipt != nil {
 		return s.settleCheckout(ctx, account, checkout)
 	}
-	p, e := s.checkoutBoundProvider(x)
+	p, e := s.checkoutBoundProvider(ctx, x)
 	if e != nil {
 		return x.Checkout, e
 	}
@@ -318,7 +325,7 @@ func (s *Service) CloseCheckout(ctx context.Context, actor, account, checkout st
 	if e != nil {
 		return v, e
 	}
-	p, e := s.checkoutBoundProvider(x)
+	p, e := s.checkoutBoundProvider(ctx, x)
 	if e != nil {
 		return v, e
 	}
@@ -343,7 +350,11 @@ func (s *Service) CloseCheckout(ctx context.Context, actor, account, checkout st
 // NotifyCheckout acknowledges a verified receipt only after its durable unique
 // binding. Fulfillment recovery is independent of callback delivery success.
 func (s *Service) NotifyCheckout(ctx context.Context, provider string, headers http.Header, body []byte) error {
-	for _, p := range s.notificationProviders(provider) {
+	providers, e := s.notificationProviders(ctx, provider)
+	if e != nil {
+		return e
+	}
+	for _, p := range providers {
 		result, e := p.VerifyNotification(headers, body)
 		if e != nil || result.Status != "PAID" {
 			continue
@@ -512,7 +523,7 @@ func (s *Service) RecoverCheckouts(ctx context.Context) error {
 			var v Checkout
 			v, e = s.reconcileCheckout(ctx, x.AccountID, x.ID)
 			if e == nil && x.CloseRequested && v.PaymentStatus != "CLOSED" && v.PaymentStatus != "PAID" && v.PaymentStatus != "REVIEW" {
-				p, pe := s.checkoutBoundProvider(x)
+				p, pe := s.checkoutBoundProvider(ctx, x)
 				if pe == nil {
 					pe = p.Close(ctx, x.ID)
 				}

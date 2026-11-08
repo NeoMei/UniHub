@@ -184,7 +184,7 @@ func (s *Service) recoverCheckoutRefund(ctx context.Context, account, checkout s
 		return s.checkoutView(ctx, x)
 	}
 	if x.RefundReceipt == nil {
-		p, e := s.checkoutBoundProvider(x)
+		p, e := s.checkoutBoundProvider(ctx, x)
 		if e != nil {
 			return x.Checkout, e
 		}

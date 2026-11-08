@@ -115,3 +115,47 @@ func TestPaymentConfigRejectsUnknownFieldsAndEmptyChannels(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedPaymentsAllowNoMerchantsAndRequireProtectedKey(t *testing.T) {
+	env := paymentTestEnvironment()
+	env["PUBLIC_URL"] = "https://hub.example"
+	env["OIDC_CLIENT_SECRET"] = "fixture-secret"
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "payment-config.key")
+	if e := os.WriteFile(path, make([]byte, 32), 0600); e != nil {
+		t.Fatal(e)
+	}
+	env["PAYMENT_CONFIG_KEY_FILE"] = path
+	read := func() (config, error) { return readConfig(func(k string) string { return env[k] }) }
+	c, e := read()
+	if e != nil || c.Sandbox || len(c.PaymentProviders) != 0 || c.PaymentConfigKeyFile != path {
+		t.Fatal("empty managed configuration", e)
+	}
+	env["PAYMENT_PROVIDERS_FILE"] = "/unused"
+	if _, e = read(); e == nil {
+		t.Fatal("dual authority accepted")
+	}
+	delete(env, "PAYMENT_PROVIDERS_FILE")
+	env["PUBLIC_URL"] = "http://localhost:8088"
+	if _, e = read(); e == nil {
+		t.Fatal("unsafe callback origin")
+	}
+	env["PUBLIC_URL"] = "https://hub.example"
+	for _, mode := range []string{"disabled", "sandbox"} {
+		env["PAYMENT_MODE"] = mode
+		if _, e = read(); e == nil {
+			t.Fatal("key outside direct")
+		}
+	}
+	env["PAYMENT_MODE"] = "direct"
+	os.Remove(path)
+	if _, e = read(); e == nil {
+		t.Fatal("lost key accepted")
+	}
+	if _, e = os.Stat(path); !os.IsNotExist(e) {
+		t.Fatal("key generated")
+	}
+}

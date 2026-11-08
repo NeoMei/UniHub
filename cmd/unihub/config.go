@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unihub/internal/billing"
 	"unihub/internal/httpapi"
+	"unihub/internal/paymentconfig"
 	"unihub/internal/payments"
 	"unihub/internal/products"
 	"unihub/internal/productusers"
@@ -17,6 +18,7 @@ import (
 
 type config struct {
 	PaymentProviders                                              []payments.Provider
+	PaymentConfigKeyFile                                          string
 	ProductUserManifests                                          productusers.Registry
 	ProductRuntime                                                map[string]httpapi.RuntimeService
 	UserAdminIDs                                                  []string
@@ -266,18 +268,26 @@ func readConfig(get func(string) string) (config, error) {
 		return c, fmt.Errorf("PAYMENT_MODE must be disabled, sandbox or direct")
 	}
 	merchantFile := get("PAYMENT_PROVIDERS_FILE")
+	c.PaymentConfigKeyFile = get("PAYMENT_CONFIG_KEY_FILE")
 	if mode == "direct" {
-		if merchantFile == "" {
-			return c, fmt.Errorf("direct payment mode requires PAYMENT_PROVIDERS_FILE")
+		if (merchantFile == "") == (c.PaymentConfigKeyFile == "") {
+			return c, fmt.Errorf("direct payment mode requires exactly one of PAYMENT_PROVIDERS_FILE and PAYMENT_CONFIG_KEY_FILE")
 		}
-		var err error
-		c.PaymentProviders, err = readPaymentProviders(merchantFile)
-		if err != nil {
-			return c, err
+		if c.PaymentConfigKeyFile != "" {
+			if !paymentconfig.ValidManagedConfiguration(c.PaymentConfigKeyFile, c.PublicURL) {
+				return c, fmt.Errorf("invalid managed payment configuration")
+			}
+		} else {
+			var err error
+			c.PaymentProviders, err = readPaymentProviders(merchantFile)
+			if err != nil {
+				return c, err
+			}
 		}
-	} else if merchantFile != "" {
-		return c, fmt.Errorf("PAYMENT_PROVIDERS_FILE requires direct payment mode")
+	} else if merchantFile != "" || c.PaymentConfigKeyFile != "" {
+		return c, fmt.Errorf("payment configuration requires direct payment mode")
 	}
+
 	c.Sandbox = mode == "sandbox"
 	if c.Sandbox && (env != "development" || len(c.SigningKey) < 32 || c.Merchant == "") {
 		return c, fmt.Errorf("sandbox requires development, merchant and signing key of at least 32 bytes")

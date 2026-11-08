@@ -268,6 +268,7 @@ func (s *api) adminRoutes(add func(string, action)) {
 		return respond(w, 200, map[string]any{"revoked": n})
 	})
 
+	s.adminPaymentRoutes(central)
 	s.adminOperationRoutes(central)
 	s.adminIdentityRoutes(central)
 }

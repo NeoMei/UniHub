@@ -21,6 +21,7 @@ import (
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
 	"unihub/internal/notify"
+	"unihub/internal/paymentconfig"
 	"unihub/internal/platformadmin"
 	"unihub/internal/productauth"
 	"unihub/internal/products"
@@ -98,6 +99,18 @@ func run() error {
 	w.ConfigureSandboxRechargeUsers(c.SandboxRechargeUserIDs)
 	b := billing.New(pool, a, l)
 	b.ConfigurePayments(c.PaymentProviders)
+	var paymentConfiguration httpapi.PaymentConfiguration
+	if c.PaymentConfigKeyFile != "" {
+		manager, err := paymentconfig.New(pool, platformAdmin, c.PaymentConfigKeyFile, c.PublicURL)
+		if err != nil {
+			return err
+		}
+		if _, err = manager.RuntimeStatus(startup); err != nil {
+			return err
+		}
+		b.ConfigurePaymentSource(manager.Providers)
+		paymentConfiguration = manager
+	}
 	b.ConfigureProductUsers(productUsers)
 	b.ConfigureOperators(c.OperatorIDs)
 	b.ConfigureTrustedServices([]string{"llmrouter"})
@@ -182,7 +195,7 @@ func run() error {
 		productAuth = productauth.New(pool, a, productUsers, c.PublicURL)
 		productAuth.ConfigureBrowserClients(c.ProductAccess)
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentConfiguration: paymentConfiguration, PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir})
 		if err != nil {

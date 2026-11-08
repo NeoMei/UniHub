@@ -28,6 +28,7 @@ type Service struct {
 	sandbox            bool
 	productUsers       *productusers.Store
 	paymentProviders   map[string]payments.Provider
+	paymentSource      func(context.Context) ([]payments.Provider, []payments.Provider, error)
 	checkoutReadiness  func(context.Context, string, string, string) (NativeCreditReadiness, error)
 }
 

@@ -61,24 +61,51 @@ func (s *Service) ConfigurePayments(providers []payments.Provider) {
 		}
 	}
 }
-func (s *Service) PaymentProviders() []string {
+
+// ConfigurePaymentSource binds a durable source shared by API and worker. Each
+// financial boundary reads current authority; failed reads never use stale state.
+func (s *Service) ConfigurePaymentSource(source func(context.Context) ([]payments.Provider, []payments.Provider, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paymentSource = source
+}
+func (s *Service) paymentSnapshot(ctx context.Context) ([]payments.Provider, []payments.Provider, error) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	source := s.paymentSource
+	if source != nil {
+		s.mu.RUnlock()
+		return source(ctx)
+	}
+	active := []payments.Provider{}
+	for _, p := range s.paymentProviders {
+		active = append(active, p)
+	}
+	s.mu.RUnlock()
+	return active, active, nil
+}
+func (s *Service) PaymentProvidersContext(ctx context.Context) ([]string, error) {
+	active, _, e := s.paymentSnapshot(ctx)
+	if e != nil {
+		return nil, e
+	}
 	out := []string{}
-	for name := range s.paymentProviders {
-		out = append(out, name)
+	for _, p := range active {
+		out = append(out, p.ID())
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
-func (s *Service) checkoutProvider(name, merchant string) (payments.Provider, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	p := s.paymentProviders[name]
-	if p == nil || merchant != "" && merchant != p.MerchantID() {
-		return nil, ErrPaymentUnavailable
+func (s *Service) checkoutProvider(ctx context.Context, name, merchant string) (payments.Provider, error) {
+	active, _, e := s.paymentSnapshot(ctx)
+	if e != nil {
+		return nil, e
 	}
-	return p, nil
+	for _, p := range active {
+		if p.ID() == name && (merchant == "" || merchant == p.MerchantID()) {
+			return p, nil
+		}
+	}
+	return nil, ErrPaymentUnavailable
 }
 func (s *Service) commercialClear(ctx context.Context, c *pgxpool.Conn, account string) error {
 	var pending bool
@@ -226,20 +253,28 @@ func paymentConfigurationID(p payments.Provider) string {
 	}
 	return hash([]string{"direct_v1", p.ID(), p.MerchantID()})
 }
-func (s *Service) checkoutBoundProvider(x checkoutRecord) (payments.Provider, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	p := s.paymentProviders[x.Provider]
-	if p == nil || p.MerchantID() != x.MerchantID || paymentConfigurationID(p) != x.MerchantVersion {
-		return nil, ErrPaymentUnavailable
+func (s *Service) checkoutBoundProvider(ctx context.Context, x checkoutRecord) (payments.Provider, error) {
+	_, recovery, e := s.paymentSnapshot(ctx)
+	if e != nil {
+		return nil, e
 	}
-	return p, nil
+	for _, p := range recovery {
+		if p.ID() == x.Provider && p.MerchantID() == x.MerchantID && paymentConfigurationID(p) == x.MerchantVersion {
+			return p, nil
+		}
+	}
+	return nil, ErrPaymentUnavailable
 }
-func (s *Service) notificationProviders(name string) []payments.Provider {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if p := s.paymentProviders[name]; p != nil {
-		return []payments.Provider{p}
+func (s *Service) notificationProviders(ctx context.Context, name string) ([]payments.Provider, error) {
+	_, recovery, e := s.paymentSnapshot(ctx)
+	if e != nil {
+		return nil, e
 	}
-	return nil
+	out := []payments.Provider{}
+	for _, p := range recovery {
+		if p.ID() == name {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }

@@ -15,7 +15,7 @@ Both callback/return URLs must be HTTPS with no credentials/fragment and no nons
 
 The executable loads these adapters with `PAYMENT_MODE=direct` and an absolute `PAYMENT_PROVIDERS_FILE`. The [example](../../examples/payments/direct-merchants.example.json) contains placeholders and file references only. Omit a channel to disable it; at least one must be configured. Private key/APIv3 key files must be regular absolute paths, at most 64 KiB, with no group/other permissions. Unknown JSON fields, invalid keys and incomplete channel configuration fail startup. API and worker processes need the same configuration.
 
-`ConfigurationID()` binds provider, merchant/seller and application identity, and is frozen on checkout. Signing/trusted key rotation under that same identity permits recovery. Changing merchant or application fails closed for existing orders; finish their recovery first or retain the original deployment/configuration until resolved. No key material enters the identity hash or order snapshot.
+`ConfigurationID()` binds provider, merchant/seller and application identity, and is frozen on checkout. Signing/trusted key rotation under that same identity permits recovery. In static-file mode, changing merchant or application fails closed for existing orders; finish their recovery first or retain the original deployment/configuration until resolved. Managed administration retains each original identity in encrypted PostgreSQL revisions and selects its latest credentials for recovery, even after the current channel is disabled or replaced. See [managed configuration](../paymentconfig/README.md). No key material enters the identity hash or order snapshot.
 
 ## Accounting and state contract
 
@@ -41,3 +41,7 @@ Checked 2026-11-08; these references establish protocol contracts, not merchant 
 - [Official Alipay refund response model](https://github.com/alipay/alipay-sdk-java-all/blob/master/v2/src/main/java/com/alipay/api/response/AlipayTradeRefundResponse.java) and [refund query contract](https://aipay.alipay.com/docs/vibe-pay/ai-web-app-payment-qianyi/api-list/alipay-trade-fastpay-refund-query.html): query success code alone is insufficient; require `REFUND_SUCCESS` and the per-request amount.
 
 Focused local verification: `go test ./internal/payments -count=1` and `go test -race ./internal/payments -count=1`. Fixtures generate ephemeral RSA keys, serve signed responses over local TLS, and verify outgoing request signatures. No tests connect to merchants or exercise real money.
+
+## Administration metadata
+
+`ConfigurationMetadata()` exposes public merchant/application identifiers, certificate serial and trusted platform key IDs, fixed URLs and credential-presence booleans. It exposes no key contents, fingerprints or file paths. The platform finance-read endpoint uses this projection for read-only static mode; ordinary product capabilities receive channel names only.

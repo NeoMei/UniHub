@@ -209,7 +209,11 @@ func (s *api) capabilities(w http.ResponseWriter, r *http.Request, u accounts.Us
 	paymentProviders := []string{}
 	nativeCredits := billing.NativeCreditReadiness{Reason: "native_credits_disabled"}
 	if s.options.Billing != nil {
-		paymentProviders = s.options.Billing.PaymentProviders()
+		var err error
+		paymentProviders, err = s.options.Billing.PaymentProvidersContext(r.Context())
+		if err != nil {
+			return err
+		}
 		if originProduct(r) != "" {
 			var err error
 			nativeCredits, err = s.options.Billing.NativeCheckoutReadiness(r.Context(), u.ID, "", originProduct(r))
