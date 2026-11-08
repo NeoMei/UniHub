@@ -31,6 +31,9 @@ func (r *UpdateRequest) UnmarshalJSON(raw []byte) error {
 		if d.Decode(&value) != nil || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return accounts.ErrInvalid
 		}
+		if strings.EqualFold(key, "platform_public_keys") && !uniqueCredentialKeys(value) {
+			return accounts.ErrInvalid
+		}
 	}
 	if _, e = d.Token(); e != nil {
 		return accounts.ErrInvalid
@@ -48,4 +51,31 @@ func (r *UpdateRequest) UnmarshalJSON(raw []byte) error {
 	*r = UpdateRequest(v)
 	r.provided = seen
 	return nil
+}
+
+// Provider key IDs are case-sensitive, unlike top-level request field names.
+func uniqueCredentialKeys(raw []byte) bool {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	token, e := d.Token()
+	if e != nil || token != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for d.More() {
+		token, e := d.Token()
+		if e != nil {
+			return false
+		}
+		key, ok := token.(string)
+		if !ok || seen[key] {
+			return false
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if d.Decode(&value) != nil || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return false
+		}
+	}
+	token, e = d.Token()
+	return e == nil && token == json.Delim('}') && d.Decode(&struct{}{}) == io.EOF
 }
