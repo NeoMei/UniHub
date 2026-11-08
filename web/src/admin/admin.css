@@ -165,3 +165,11 @@
 .admin-onboarding-actions span{font-size:11px;color:var(--admin-faint)}
 @media(max-width:760px){.admin-onboarding-grid{grid-template-columns:1fr}.admin-onboarding-actions{align-items:flex-start;flex-direction:column}.admin-command{flex-direction:column}}
 .admin-rate-price{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+
+.admin-provider-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.admin-provider-grid .panel{min-width:0;margin-top:0}
+.admin-provider-url{grid-column:1/-1}
+.admin-provider-form fieldset{display:flex;flex-direction:column;gap:14px;border:0;padding:0;margin:0;min-width:0}
+.admin-provider-key{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--admin-line,#e6edf0);border-radius:8px}
+.admin-provider-key button{align-self:flex-start}
+@media(max-width:1000px){.admin-provider-grid{grid-template-columns:1fr}}
