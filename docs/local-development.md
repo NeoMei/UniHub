@@ -32,10 +32,10 @@ make api
 
 ### 并行本地栈
 
-同一个仓库的多个 worktree（例如 Codex、犇马、WorkBuddy 各用一个）可以各起一套互不冲突的本地栈。在 worktree 里首次初始化时给一个实例名：
+同一个仓库的多个 worktree（例如 Codex、犇马、WorkBuddy 各用一个）可以各起一套互不冲突的本地栈。在 worktree 里首次初始化时给一个实例名和偏移（**第二个实例起必须显式给偏移**，否则默认 100 会和首个实例的端口/容器名相撞）：
 
 ```sh
-UNIHUB_DEV_INSTANCE=wb UNIHUB_DEV_PORT_OFFSET=200 make dev-setup
+UNIHUB_DEV_INSTANCE=<实例名> UNIHUB_DEV_PORT_OFFSET=<偏移> make dev-setup
 ```
 
 偏移取值：**不设实例名时偏移为 0**，项目名、容器名、卷、网络和端口与原来完全一致；**设了实例名但没给 `UNIHUB_DEV_PORT_OFFSET` 时默认 100**。脚本把 Compose 项目名、容器名前缀、网络、卷和全部发布端口按「基准 + 偏移」写进本 worktree 的 `.local/dev.env`。
@@ -51,7 +51,15 @@ UNIHUB_DEV_INSTANCE=wb UNIHUB_DEV_PORT_OFFSET=200 make dev-setup
 | `make dev-login` 回调 | 8089 |
 | SuperWagie 回调 | 57991 |
 
-例如偏移 200 时：PostgreSQL `55638`、Formance `53268`、Casdoor `58200`、UniHub API `8288`、登录回调 `8289`、SuperWagie 回调 `58191`。
+实际端口 = 基准 + 偏移。当前三方分配：
+
+| 客户端 | 实例 | 偏移 | PostgreSQL | Formance | Casdoor | API | 登录回调 | SW 回调 |
+|---|---|---|---|---|---|---|---|---|
+| Codex | （默认）`unihub-dev-` | 0 | 55438 | 53068 | 58000 | 8088 | 8089 | 57991 |
+| WorkBuddy | `unihub-dev-wb` | 200 | 55638 | 53268 | 58200 | 8288 | 8289 | 58191 |
+| 犇马 | `unihub-dev-sw` | 300 | 55738 | 53368 | 58300 | 8388 | 8389 | 58291 |
+
+偏移 100（`bb` 实例）已回收，端口段空闲；新实例从 400 起顺延，并同步更新本表与仓库根 `AGENTS.md`。
 
 实例名只允许小写字母、数字和连字符；已存在 `.local/dev.env` 时不能临时切换到另一个实例，需要先明确移除。每个实例有独立的 PostgreSQL 卷、Casdoor 凭据和配置目录，互不可见。已有 `.local/dev.env` 不必重写。不要对同一实例并发运行 `make dev-setup`。
 
