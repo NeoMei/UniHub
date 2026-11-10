@@ -94,7 +94,9 @@ def read_env():
     return result
 
 def inspect_container(name):
-    completed = subprocess.run(['docker', 'inspect', name], capture_output=True, text=True)
+    # --type container: a Docker volume may share the container's name, and a
+    # bare inspect would return that volume when the container does not exist.
+    completed = subprocess.run(['docker', 'inspect', '--type', 'container', name], capture_output=True, text=True)
     return json.loads(completed.stdout)[0] if completed.returncode == 0 else None
 
 def run(args, *, input=None, quiet=False, env=None):
@@ -531,7 +533,9 @@ def start_service(service):
         run(compose + ['up', '-d', '--no-deps', service], env=process_env)
 
 start_service('postgres')
-for attempt in range(60):
+# The pinned PostgreSQL image is linux/amd64; its first initdb runs under
+# emulation on Apple Silicon and can exceed one minute.
+for attempt in range(120):
     if subprocess.run(['docker', 'exec', s['prefix'] + '-postgres', 'pg_isready', '-U', env['POSTGRES_ADMIN_USER']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         break
     time.sleep(1)
