@@ -32,15 +32,26 @@ make api
 
 ### 并行本地栈
 
-同一个仓库的多个 worktree（例如两个 agent 各用一个）可以各起一套互不冲突的本地栈。在 worktree 里首次初始化时给一个实例名：
+同一个仓库的多个 worktree（例如两个客户端各用一个）可以各起一套互不冲突的本地栈。在 worktree 里首次初始化时给一个实例名和端口偏移：
 
 ```sh
-UNIHUB_DEV_INSTANCE=bb make dev-setup
+UNIHUB_DEV_INSTANCE=sw UNIHUB_DEV_PORT_OFFSET=300 make dev-setup
 ```
 
-脚本把 Compose 项目名、容器名前缀、网络、卷和全部发布端口按该实例写进本 worktree 的 `.local/dev.env`，默认端口偏移 100：PostgreSQL `55538`、Formance `53168`、Casdoor `58100`、UniHub API `8188`、`make dev-login` 回调 `8189`、SuperWagie 回调 `58091`。用 `UNIHUB_DEV_PORT_OFFSET` 可改偏移。
+脚本把 Compose 项目名、容器名前缀、网络、卷和全部发布端口按该实例写进本 worktree 的 `.local/dev.env`。**不设实例名时偏移为 0**（即上表默认端口）；**给了实例名但未指定偏移时默认 100**，因此从第二个实例起必须显式指定 `UNIHUB_DEV_PORT_OFFSET`，否则会撞端口。
 
-实例名只允许小写字母、数字和连字符；已存在 `.local/dev.env` 时不能临时切换到另一个实例，需要先明确移除。每个实例有独立的 PostgreSQL 卷、Casdoor 凭据和配置目录，互不可见。不设实例名时项目名、容器名、卷、网络和端口与原来完全一致，已有 `.local/dev.env` 不必重写。不要对同一实例并发运行 `make dev-setup`。
+端口共六个，全部按同一偏移平移：
+
+| 用途 | 基准 | 计算 |
+| --- | --- | --- |
+| PostgreSQL | 55438 | 55438 + offset |
+| Formance Ledger | 53068 | 53068 + offset |
+| Casdoor | 58000 | 58000 + offset |
+| UniHub API（`LISTEN_ADDR`、`PUBLIC_URL`） | 8088 | 8088 + offset |
+| `make dev-login` PKCE 回调 | 8089 | 8089 + offset |
+| SuperWagie 产品客户端回调 | 57991 | 57991 + offset |
+
+例如 `sw / 300` → 55738 / 53368 / 58300 / 8388 / 8389 / 58291。实例名只允许小写字母、数字和连字符；已存在 `.local/dev.env` 时不能临时切换到另一个实例，需要先明确移除。每个实例有独立的 PostgreSQL 卷、Casdoor 凭据和配置目录，互不可见。不设实例名时项目名、容器名、卷、网络和端口与原来完全一致，已有 `.local/dev.env` 不必重写。不要对同一实例并发运行 `make dev-setup`。
 
 第二套实例的 SuperWagie 登录回调使用偏移后的端口，联调时 SuperWagie 侧要指向同一个回调端口。
 
