@@ -32,17 +32,30 @@ make api
 
 ### 并行本地栈
 
-同一个仓库的多个 worktree（例如两个 agent 各用一个）可以各起一套互不冲突的本地栈。在 worktree 里首次初始化时给一个实例名：
+同一个仓库的多个 worktree（例如 Codex、犇马、WorkBuddy 各用一个）可以各起一套互不冲突的本地栈。在 worktree 里首次初始化时给一个实例名：
 
 ```sh
-UNIHUB_DEV_INSTANCE=bb make dev-setup
+UNIHUB_DEV_INSTANCE=wb UNIHUB_DEV_PORT_OFFSET=200 make dev-setup
 ```
 
-脚本把 Compose 项目名、容器名前缀、网络、卷和全部发布端口按该实例写进本 worktree 的 `.local/dev.env`，默认端口偏移 100：PostgreSQL `55538`、Formance `53168`、Casdoor `58100`、UniHub API `8188`、`make dev-login` 回调 `8189`、SuperWagie 回调 `58091`。用 `UNIHUB_DEV_PORT_OFFSET` 可改偏移。
+偏移取值：**不设实例名时偏移为 0**，项目名、容器名、卷、网络和端口与原来完全一致；**设了实例名但没给 `UNIHUB_DEV_PORT_OFFSET` 时默认 100**。脚本把 Compose 项目名、容器名前缀、网络、卷和全部发布端口按「基准 + 偏移」写进本 worktree 的 `.local/dev.env`。
 
-实例名只允许小写字母、数字和连字符；已存在 `.local/dev.env` 时不能临时切换到另一个实例，需要先明确移除。每个实例有独立的 PostgreSQL 卷、Casdoor 凭据和配置目录，互不可见。不设实例名时项目名、容器名、卷、网络和端口与原来完全一致，已有 `.local/dev.env` 不必重写。不要对同一实例并发运行 `make dev-setup`。
+六个端口的基准值：
 
-第二套实例的 SuperWagie 登录回调使用偏移后的端口，联调时 SuperWagie 侧要指向同一个回调端口。
+| 端口 | 基准 |
+|---|---|
+| PostgreSQL | 55438 |
+| Formance | 53068 |
+| Casdoor | 58000 |
+| UniHub API | 8088 |
+| `make dev-login` 回调 | 8089 |
+| SuperWagie 回调 | 57991 |
+
+例如偏移 200 时：PostgreSQL `55638`、Formance `53268`、Casdoor `58200`、UniHub API `8288`、登录回调 `8289`、SuperWagie 回调 `58191`。
+
+实例名只允许小写字母、数字和连字符；已存在 `.local/dev.env` 时不能临时切换到另一个实例，需要先明确移除。每个实例有独立的 PostgreSQL 卷、Casdoor 凭据和配置目录，互不可见。已有 `.local/dev.env` 不必重写。不要对同一实例并发运行 `make dev-setup`。
+
+非默认实例的 SuperWagie 登录回调使用偏移后的端口，联调时 SuperWagie 侧要指向同一个回调端口。
 
 `make dev-setup` 可重复执行：保留原配置与密码、创建缺少的数据库、复用现有同名容器、启动缺少的服务。当本项目 Compose 管理的 Casdoor 容器缺少品牌前端只读挂载时，仅重建该服务容器；保留数据库、配置、密钥及日志卷，PostgreSQL/Ledger 仍复用。脚本等待 Formance 信息接口及 Casdoor discovery 就绪；逻辑账本 `unihub` 由 Go 服务启动时创建/读回。
 

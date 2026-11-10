@@ -11,8 +11,8 @@ UniHub 可能同时被 **Codex、犇马（SuperWagie）、WorkBuddy** 三路在�
 三方交接点是**文件**，不依赖任一客户端的 API：
 
 - 代码交接：各仓库 `main` 分支
-- 状态记录：`~/项目/codexprojects/U-L-S 综合验收/OPERATIONS.md`（发布/验收记录，**三方只读**，不并发写）
-- 交接日志：同目录 `HANDOFF.md`（**append-only**，三方只追加不改写）
+- 状态记录：`~/项目/codexprojects/U-L-S 综合验收/OPERATIONS.md`。**发布方追加新段落，不改旧段落**；总控保留验收段落。三方不并发写同一段落。
+- 交接日志：同目录 `HANDOFF.md`。**append-only**：写入前先读文件尾部，只在末尾追加；**禁止整文件覆盖或重写模板**。该文件无技术写保护（2026-11-10 22:19 曾被整体重写丢 3 条记录），整文件写入前必须先确认没有他人条目。
 
 ## 工作区
 
@@ -33,6 +33,23 @@ UniHub 可能同时被 **Codex、犇马（SuperWagie）、WorkBuddy** 三路在�
 - **三方都不直接推 `main`**，只走分支 + 由人合并。合并时机：每轮联调开始前，由人在 `main` 上合入已验收的分支；合完各客户端 `fetch` 后从 `main` 拉新分支。
 - 从 `main` 拉新分支。需要别人未合并的改动时，在 `HANDOFF.md` 写明依赖的是哪个分支。
 
+### 提交身份
+
+分支前缀只是名义所有权，提交作者必须也能区分客户端。每个客户端在自己的 worktree 设 local 作者（不改全局配置）：
+
+| 客户端 | user.name | user.email |
+|---|---|---|
+| Codex | `Codex` | `codex@local` |
+| 犇马 | `SuperWagie` | `sw@local` |
+| WorkBuddy | `WorkBuddy` | `wb@workbuddy.local` |
+
+```sh
+git config user.name "WorkBuddy"
+git config user.email "wb@workbuddy.local"
+```
+
+已推送的提交不改写。历史提交沿用项目原身份，不影响本约定。
+
 ## 本地栈
 
 每个 worktree 一个实例名，和分支所有者一致：
@@ -41,15 +58,29 @@ UniHub 可能同时被 **Codex、犇马（SuperWagie）、WorkBuddy** 三路在�
 UNIHUB_DEV_INSTANCE=wb UNIHUB_DEV_PORT_OFFSET=200 make dev-setup
 ```
 
-默认偏移是 100，**从第二个实例起必须显式指定 `UNIHUB_DEV_PORT_OFFSET`**，否则端口和容器名会撞。当前分配：
+偏移规则（`scripts/dev-setup.sh`）：**不设实例名 → 偏移 0；设了实例名但没给 `UNIHUB_DEV_PORT_OFFSET` → 默认 100**。从第二个实例起必须显式指定偏移，否则端口和容器名会撞。
 
-| 客户端 | 实例 | 偏移 | PostgreSQL | Formance | Casdoor | UniHub API |
-|---|---|---|---|---|---|---|
-| Codex | （默认）`unihub-dev-` | 0 | 55438 | 53068 | 58000 | 8088 |
-| WorkBuddy | `unihub-dev-wb` | 200 | 55638 | 53268 | 58200 | 8288 |
-| 犇马 | `unihub-dev-sw` | 300 | 55738 | 53368 | 58300 | 8388 |
+一个实例实际占用 **6 个端口**，全部 = 基准 + 偏移：
+
+| 端口 | 基准 |
+|---|---|
+| PostgreSQL | 55438 |
+| Formance | 53068 |
+| Casdoor | 58000 |
+| UniHub API | 8088 |
+| 登录回调（`make dev-login`） | 8089 |
+| SuperWagie 回调 | 57991 |
+
+当前偏移分配：
+
+| 客户端 | 实例 | 偏移 | PostgreSQL | Formance | Casdoor | API | 登录回调 | SW 回调 |
+|---|---|---|---|---|---|---|---|---|
+| Codex | （默认）`unihub-dev-` | 0 | 55438 | 53068 | 58000 | 8088 | 8089 | 57991 |
+| WorkBuddy | `unihub-dev-wb` | 200 | 55638 | 53268 | 58200 | 8288 | 8289 | 58191 |
+| 犇马 | `unihub-dev-sw` | 300 | 55738 | 53368 | 58300 | 8388 | 8389 | 58291 |
 
 - 偏移 100（`bb` 实例）已回收，端口段空闲；新增实例往后顺延 400 并更新这张表。
+- 联调时 SuperWagie 侧必须指向同一个偏移后的 SW 回调端口。
 - 不要对同一个实例名并发跑 `make dev-setup`。机制细节见 `docs/local-development.md`。
 - `docker inspect <name>` 不加 `--type container` 时，容器未创建会命中同名卷；已锁定的 PostgreSQL 镜像是 linux/amd64，Apple Silicon 首次 initdb 可能超过 60 秒（等待窗已放宽至 120 秒）。
 
