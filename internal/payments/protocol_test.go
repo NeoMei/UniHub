@@ -377,6 +377,36 @@ func TestAlipayRefundRequiresExplicitSuccessAndExactBinding(t *testing.T) {
 		})
 	}
 }
+func TestAlipayPOSTCharsetLivesInQueryForSignedRefund(t *testing.T) {
+	merchant, platform := testKey(t), testKey(t)
+	c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("charset") != "utf-8" {
+			t.Fatalf("charset must be in query: %s", r.URL.RawQuery)
+		}
+		if e := r.ParseForm(); e != nil {
+			t.Fatal(e)
+		}
+		if r.PostForm.Get("charset") != "" {
+			t.Fatal("charset must not be sent in the form body")
+		}
+		if r.Form.Get("method") != "alipay.trade.refund" {
+			t.Fatalf("method=%q", r.Form.Get("method"))
+		}
+		if !strings.Contains(r.Form.Get("biz_content"), "退款") {
+			t.Fatal("non-ASCII refund reason missing from biz_content")
+		}
+		fixtureVerify(t, &merchant.PublicKey, fixtureCanonical(r.Form, false), r.Form.Get("sign"))
+		aliReply(t, w, platform, "alipay.trade.refund", `{"code":"10000","out_trade_no":"Order1","trade_no":"Tx1"}`)
+	})
+	p, e := NewAlipay(aliConfig(merchant, platform, c))
+	if e != nil {
+		t.Fatal(e)
+	}
+	r, e := p.Refund(context.Background(), RefundRequest{OrderID: "Order1", TransactionID: "Tx1", RefundID: "Refund1", Amount: "1000000", TotalAmount: "1000000", Reason: "联调测试退款"})
+	if e != nil || r.Status != "PENDING" {
+		t.Fatalf("%#v %v", r, e)
+	}
+}
 func TestProviderUnavailableAndValidation(t *testing.T) {
 	if _, e := NewWeChat(WeChatConfig{}); !errors.Is(e, ErrUnconfigured) {
 		t.Fatal(e)

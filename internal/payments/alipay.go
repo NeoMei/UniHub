@@ -110,7 +110,18 @@ func (a *Alipay) call(ctx context.Context, method string, biz any) (alipayRespon
 	if e != nil {
 		return alipayResponse{}, e
 	}
-	req, e := http.NewRequestWithContext(ctx, "POST", alipayGateway, strings.NewReader(v.Encode()))
+	// Alipay reads the request charset from the URL query string for POST
+	// gateway calls. Keeping charset in the form body makes signatures fail
+	// whenever biz_content contains non-ASCII text such as a Chinese refund
+	// reason (isv.invalid-signature). It remains part of the signed parameter
+	// set, but must not be sent a second time in the body.
+	body := url.Values{}
+	for key, values := range v {
+		if key != "charset" {
+			body[key] = values
+		}
+	}
+	req, e := http.NewRequestWithContext(ctx, "POST", alipayGateway+"?charset=utf-8", strings.NewReader(body.Encode()))
 	if e != nil {
 		return alipayResponse{}, ErrInvalid
 	}
