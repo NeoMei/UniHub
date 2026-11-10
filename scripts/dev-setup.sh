@@ -13,6 +13,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shlex
 import subprocess
@@ -42,6 +43,39 @@ official_homepages = {'http://casdoor.org', 'http://casdoor.org/', 'https://casd
 mode = sys.argv[1] if len(sys.argv) == 2 else 'up'
 if len(sys.argv) > 2 or mode not in {'up', 'prepare', 'login'}:
     sys.exit('Usage: scripts/dev-setup.sh [up|prepare|login]')
+
+# Parallel local stacks: an instance name suffixes the Compose project,
+# containers, network and volumes, and shifts every published port by the
+# same offset. Empty instance keeps the original single-stack values.
+def instance_env(instance, offset):
+    suffix = '-' + instance if instance else ''
+    return {
+        'UNIHUB_DEV_INSTANCE': instance,
+        'UNIHUB_DEV_COMPOSE_PROJECT': 'unihub' + suffix,
+        'UNIHUB_DEV_CONTAINER_PREFIX': 'unihub-dev' + suffix,
+        'UNIHUB_DEV_NETWORK': 'unihub-dev' + suffix,
+        'UNIHUB_DEV_POSTGRES_VOLUME': 'unihub-dev' + suffix + '-postgres',
+        'UNIHUB_DEV_CASDOOR_LOGS_VOLUME': 'unihub-dev' + suffix + '-casdoor-logs',
+        'UNIHUB_DEV_POSTGRES_PORT': str(55438 + offset),
+        'UNIHUB_DEV_LEDGER_PORT': str(53068 + offset),
+        'UNIHUB_DEV_CASDOOR_PORT': str(58000 + offset),
+        'UNIHUB_DEV_APP_PORT': str(8088 + offset),
+        'UNIHUB_DEV_LOGIN_CALLBACK_PORT': str(8089 + offset),
+        'UNIHUB_DEV_SUPERWAGIE_CALLBACK_PORT': str(57991 + offset),
+    }
+
+def stack(env):
+    return {'project': env.get('UNIHUB_DEV_COMPOSE_PROJECT', 'unihub'),
+        'prefix': env.get('UNIHUB_DEV_CONTAINER_PREFIX', 'unihub-dev'),
+        'network': env.get('UNIHUB_DEV_NETWORK', 'unihub-dev'),
+        'volume': env.get('UNIHUB_DEV_POSTGRES_VOLUME', 'unihub-dev-postgres'),
+        'logs': env.get('UNIHUB_DEV_CASDOOR_LOGS_VOLUME', 'unihub-dev-casdoor-logs'),
+        'pg': env.get('UNIHUB_DEV_POSTGRES_PORT', '55438'),
+        'ledger': env.get('UNIHUB_DEV_LEDGER_PORT', '53068'),
+        'casdoor': env.get('UNIHUB_DEV_CASDOOR_PORT', '58000'),
+        'app': env.get('UNIHUB_DEV_APP_PORT', '8088'),
+        'login': env.get('UNIHUB_DEV_LOGIN_CALLBACK_PORT', '8089'),
+        'superwagie': env.get('UNIHUB_DEV_SUPERWAGIE_CALLBACK_PORT', '57991')}
 
 def write_private(path, content, mode=0o600):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,7 +161,7 @@ def apply_seed_branding(init):
 def sql_literal(value):
     return "'" + value.replace("'", "''") + "'"
 
-def ensure_product_application(init, secret):
+def ensure_product_application(init, secret, sw_port):
     apps = init.setdefault('applications', [])
     if any(app.get('owner') == 'admin' and app.get('name') == 'app-superwagie' for app in apps):
         return False
@@ -135,8 +169,8 @@ def ensure_product_application(init, secret):
     product = json.loads(json.dumps(source))
     product.update({'name': 'app-superwagie', 'clientId': 'superwagie-unihub-local',
         'clientSecret': secret, 'grantTypes': ['authorization_code'],
-        'redirectUris': ['http://127.0.0.1:57991/api/platform-account/callback',
-                         'http://localhost:57991/api/platform-account/callback']})
+        'redirectUris': [f'http://127.0.0.1:{sw_port}/api/platform-account/callback',
+                         f'http://localhost:{sw_port}/api/platform-account/callback']})
     apps.append(product)
     return True
 
@@ -182,21 +216,22 @@ if mode == 'login':
     if not env_path.exists() or not credentials_path.exists():
         sys.exit('Run make dev-setup first.')
     env = read_env()
+    s = stack(env)
     credentials = json.loads(credentials_path.read_text())
     issuer = env['OIDC_ISSUER']
-    if issuer != 'http://localhost:58000' or env['APP_ENV'] != 'development':
+    if issuer != 'http://localhost:' + s['casdoor'] or env['APP_ENV'] != 'development':
         sys.exit('This local login helper only supports the loopback development issuer.')
     discovery = request_json(issuer + '/.well-known/openid-configuration')
     if discovery.get('issuer') != issuer:
         sys.exit('Discovery issuer mismatch.')
     for endpoint in ('authorization_endpoint', 'token_endpoint'):
         parsed = urllib.parse.urlsplit(discovery[endpoint])
-        if (parsed.scheme, parsed.netloc) != ('http', 'localhost:58000'):
+        if (parsed.scheme, parsed.netloc) != ('http', 'localhost:' + s['casdoor']):
             sys.exit('Discovery endpoint is not the expected loopback UniHub sign-in server.')
     verifier = secrets.token_urlsafe(32)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
     state = secrets.token_urlsafe(32)
-    redirect = 'http://localhost:8089/callback'
+    redirect = f'http://localhost:{s["login"]}/callback'
     callback = {}
     try:
         callback_logo = 'data:image/png;base64,' + base64.b64encode((root / 'branding/assets/unihub-logo-v1.png').read_bytes()).decode()
@@ -249,7 +284,7 @@ img{{width:240px;max-width:80%;height:auto;margin-bottom:24px}}h1{{font-size:24p
             callback['code'] = values['code'][0]
             self.send_brand_page(200, '授权已收到', '请返回终端。终端将继续交换令牌并验证 UniHub API；本页不代表验证已通过。')
 
-    server = http.server.HTTPServer(('127.0.0.1', 8089), Callback)
+    server = http.server.HTTPServer(('127.0.0.1', int(s['login'])), Callback)
     server.timeout = 1
     query = urllib.parse.urlencode({'client_id': env['OIDC_AUDIENCE'], 'redirect_uri': redirect,
         'response_type': 'code', 'scope': 'openid profile email', 'state': state,
@@ -276,7 +311,7 @@ img{{width:240px;max-width:80%;height:auto;margin-bottom:24px}}h1{{font-size:24p
         sys.exit('Token endpoint did not return a bearer access token.')
     # The API performs actual signature and claim verification; this helper
     # only retrieves a token through the real browser code+PKCE flow.
-    request = urllib.request.Request('http://127.0.0.1:8088/v1/me', headers={'Authorization': 'Bearer ' + access})
+    request = urllib.request.Request('http://127.0.0.1:' + s['app'] + '/v1/me', headers={'Authorization': 'Bearer ' + access})
     try:
         with urllib.request.urlopen(request, timeout=5) as response:
             response.read()
@@ -295,9 +330,16 @@ if subprocess.run(['docker', 'info'], stdout=subprocess.DEVNULL, stderr=subproce
     sys.exit('Docker is unavailable. Start Docker Desktop and retry.')
 local.mkdir(mode=0o700, exist_ok=True)
 local.chmod(0o700)
+instance = os.environ.get('UNIHUB_DEV_INSTANCE', '').strip()
+if instance and not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,20}', instance):
+    sys.exit('UNIHUB_DEV_INSTANCE must be a short lowercase name (letters, digits, hyphen).')
 if not env_path.exists():
-    existing = inspect_container('unihub-dev-postgres')
-    volume_exists = subprocess.run(['docker', 'volume', 'inspect', 'unihub-dev-postgres'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    offset = int(os.environ.get('UNIHUB_DEV_PORT_OFFSET', '100' if instance else '0'))
+    if not 0 <= offset <= 500:
+        sys.exit('UNIHUB_DEV_PORT_OFFSET must be between 0 and 500.')
+    inst = instance_env(instance, offset)
+    existing = inspect_container(inst['UNIHUB_DEV_CONTAINER_PREFIX'] + '-postgres')
+    volume_exists = subprocess.run(['docker', 'volume', 'inspect', inst['UNIHUB_DEV_POSTGRES_VOLUME']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
     if volume_exists and not existing:
         sys.exit('Existing PostgreSQL volume has no container/config to recover credentials from. Restore .local/dev.env before continuing; data was not changed.')
     inherited = dict(item.split('=', 1) for item in existing['Config']['Env'] if '=' in item) if existing else {}
@@ -307,20 +349,26 @@ if not env_path.exists():
         sys.exit('Existing PostgreSQL role requires manual configuration.')
     user_url = urllib.parse.quote(admin, safe='')
     pass_url = urllib.parse.quote(password, safe='')
-    env = {'APP_ENV': 'development', 'LISTEN_ADDR': '127.0.0.1:8088',
-        'DATABASE_URL': f'postgresql://{user_url}:{pass_url}@127.0.0.1:55438/unihub?sslmode=disable',
-        'LEDGER_URL': 'http://127.0.0.1:53068', 'LEDGER_NAME': 'unihub',
-        'OIDC_ISSUER': 'http://localhost:58000', 'OIDC_AUDIENCE': 'unihub-local',
+    env = {'APP_ENV': 'development', 'LISTEN_ADDR': '127.0.0.1:' + inst['UNIHUB_DEV_APP_PORT'],
+        'DATABASE_URL': f'postgresql://{user_url}:{pass_url}@127.0.0.1:{inst["UNIHUB_DEV_POSTGRES_PORT"]}/unihub?sslmode=disable',
+        'LEDGER_URL': 'http://127.0.0.1:' + inst['UNIHUB_DEV_LEDGER_PORT'], 'LEDGER_NAME': 'unihub',
+        'OIDC_ISSUER': 'http://localhost:' + inst['UNIHUB_DEV_CASDOOR_PORT'], 'OIDC_AUDIENCE': 'unihub-local',
         'PAYMENT_MODE': 'sandbox', 'PAYMENT_MERCHANT': 'unihub-sandbox', 'PAYMENT_SIGNING_KEY': secrets.token_hex(32),
         'POSTGRES_ADMIN_USER': admin, 'POSTGRES_ADMIN_PASSWORD': password,
-        'LEDGER_POSTGRES_URI': f'postgresql://{user_url}:{pass_url}@unihub-dev-postgres:5432/ledger?sslmode=disable',
-        'CASDOOR_DATABASE_PASSWORD': secrets.token_hex(32), 'LOCAL_GID': str(os.getgid())}
+        'LEDGER_POSTGRES_URI': f'postgresql://{user_url}:{pass_url}@{inst["UNIHUB_DEV_CONTAINER_PREFIX"]}-postgres:5432/ledger?sslmode=disable',
+        'CASDOOR_DATABASE_PASSWORD': secrets.token_hex(32), 'LOCAL_GID': str(os.getgid()), **inst}
     write_private(env_path, '# Generated local development values. Never commit this file.\n' + ''.join(f'{key}={shlex.quote(value)}\n' for key, value in env.items()))
 env = read_env()
 if env.get('APP_ENV') != 'development':
     sys.exit('dev-setup refuses non-development configuration.')
+# Missing instance keys fall back to the original single-stack values, so an
+# existing dev.env keeps working without being rewritten.
+s = stack(env)
+if env_path.exists() and instance and env.get('UNIHUB_DEV_INSTANCE', '') != instance:
+    sys.exit(f'This workspace already uses instance "{env.get("UNIHUB_DEV_INSTANCE", "") or "(default)"}"; '
+        'remove .local/dev.env deliberately before switching instances.')
 if not credentials_path.exists():
-    if inspect_container('unihub-dev-casdoor'):
+    if inspect_container(s['prefix'] + '-casdoor'):
         sys.exit('Existing Casdoor requires its original .local/credentials.json. Restore it; credentials were not rotated.')
     credentials = {'organization': 'unihub', 'application': 'app-unihub', 'client_id': 'unihub-local',
         'client_secret': secrets.token_hex(32), 'admin': {'organization': 'built-in', 'username': 'admin', 'password': secrets.token_urlsafe(24)},
@@ -335,7 +383,7 @@ if 'superwagie_client_secret' not in credentials:
     credentials_path.chmod(0o600)
 # Browser console credentials stay server-side. Preserve customized values on
 # repeated setup; the model-service secret is separate from OIDC and payment.
-console_defaults = {'PUBLIC_URL': 'http://localhost:8088',
+console_defaults = {'PUBLIC_URL': 'http://localhost:' + s['app'],
     'OIDC_CLIENT_SECRET': credentials['client_secret'],
     'CONSOLE_STATIC_DIR': 'web/dist', 'SANDBOX_CATALOG': 'true',
     'OIDC_PRODUCT_CLIENTS': 'superwagie=superwagie-unihub-local'}
@@ -367,11 +415,11 @@ httpport = 8000
 runmode = prod
 copyrequestbody = true
 driverName = postgres
-dataSourceName = user=casdoor password={env['CASDOOR_DATABASE_PASSWORD']} host=unihub-dev-postgres port=5432 sslmode=disable dbname=casdoor
+dataSourceName = user=casdoor password={env['CASDOOR_DATABASE_PASSWORD']} host={s['prefix']}-postgres port=5432 sslmode=disable dbname=casdoor
 dbName = casdoor
 showSql = false
-origin = http://localhost:58000
-originFrontend = http://localhost:58000
+origin = http://localhost:{s['casdoor']}
+originFrontend = http://localhost:{s['casdoor']}
 initAdminPassword = {credentials['admin']['password']}
 initDataFile = /conf/init_data.json
 initDataNewOnly = true
@@ -398,7 +446,7 @@ if not init_path.exists():
             'signinItems': [{'name': 'Username', 'visible': True, 'rule': 'None'},
                 {'name': 'Password', 'visible': True, 'rule': 'None'},
                 {'name': 'Login button', 'visible': True, 'rule': 'None'}],
-            'grantTypes': ['authorization_code'], 'redirectUris': ['http://localhost:8089/callback', 'http://localhost:8088/auth/callback'],
+            'grantTypes': ['authorization_code'], 'redirectUris': [f'http://localhost:{s["login"]}/callback', f'http://localhost:{s["app"]}/auth/callback'],
             'tokenFormat': 'JWT-Standard', 'expireInHours': 1, 'cookieExpireInHours': 8,
             'failedSigninLimit': 5, 'failedSigninFrozenTime': 15}],
         'users': [{'owner': 'unihub', 'name': u['username'], 'id': secrets.token_hex(16), 'type': 'normal-user',
@@ -412,13 +460,13 @@ if not init_path.exists():
 # incomplete copies of their authentication configuration here.
 init = json.loads(init_path.read_text())
 seed_changed = apply_seed_branding(init)
-seed_changed = ensure_product_application(init, credentials['superwagie_client_secret']) or seed_changed
+seed_changed = ensure_product_application(init, credentials['superwagie_client_secret'], s['superwagie']) or seed_changed
 for application in init.get('applications', []):
     if application.get('owner') != 'admin' or application.get('name') != 'app-unihub':
         continue
     redirects = application.get('redirectUris', [])
-    if 'http://localhost:8088/auth/callback' not in redirects:
-        redirects.append('http://localhost:8088/auth/callback')
+    if f'http://localhost:{s["app"]}/auth/callback' not in redirects:
+        redirects.append(f'http://localhost:{s["app"]}/auth/callback')
         application['redirectUris'] = redirects
         seed_changed = True
     items = application.get('signinItems', [])
@@ -435,18 +483,18 @@ if mode == 'prepare':
 process_env = {**os.environ, **env}
 compose = ['docker', 'compose', '--env-file', str(env_path)]
 run(compose + ['config', '--quiet'], env=process_env)
-for resource, name in [('network', 'unihub-dev'), ('volume', 'unihub-dev-postgres')]:
+for resource, name in [('network', s['network']), ('volume', s['volume'])]:
     if subprocess.run(['docker', resource, 'inspect', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
         run(['docker', resource, 'create', name], quiet=True)
 
 def start_service(service):
-    name = 'unihub-dev-' + service
+    name = s['prefix'] + '-' + service
     existing = inspect_container(name)
     if existing:
         expected = {'postgres': 'postgres:', 'ledger': 'ghcr.io/formancehq/ledger:v2.4.16', 'casdoor': 'casbin/casdoor:v4.23.0'}[service]
         if not existing['Config']['Image'].startswith(expected):
             sys.exit(f'{name} has an unexpected image. Resolve it explicitly; no container was replaced.')
-        expected_port = {'postgres': ('5432/tcp', '55438'), 'ledger': ('3068/tcp', '53068'), 'casdoor': ('8000/tcp', '58000')}[service]
+        expected_port = {'postgres': ('5432/tcp', s['pg']), 'ledger': ('3068/tcp', s['ledger']), 'casdoor': ('8000/tcp', s['casdoor'])}[service]
         bindings = existing['HostConfig'].get('PortBindings', {}).get(expected_port[0], [])
         if not bindings or any(binding['HostIp'] != '127.0.0.1' or binding['HostPort'] != expected_port[1] for binding in bindings):
             sys.exit(f'{name} must publish only its documented loopback port. Resolve it explicitly; no container was replaced.')
@@ -463,7 +511,7 @@ def start_service(service):
                 labels = existing['Config'].get('Labels') or {}
                 conf_mount = mounts.get('/conf', {})
                 expected_conf = str(conf_dir.resolve())
-                if (labels.get('com.docker.compose.project') != 'unihub'
+                if (labels.get('com.docker.compose.project') != s['project']
                         or labels.get('com.docker.compose.service') != 'casdoor'
                         or conf_mount.get('Type') != 'bind'
                         or not mount_source_matches(conf_mount.get('Source'), expected_conf)
@@ -476,15 +524,15 @@ def start_service(service):
                 return
         if not existing['State']['Running']:
             run(['docker', 'start', name], quiet=True)
-        if 'unihub-dev' not in existing['NetworkSettings']['Networks']:
-            run(['docker', 'network', 'connect', 'unihub-dev', name], quiet=True)
+        if s['network'] not in existing['NetworkSettings']['Networks']:
+            run(['docker', 'network', 'connect', s['network'], name], quiet=True)
         print(f'Reusing {name}; no container was stopped or removed.', flush=True)
     else:
         run(compose + ['up', '-d', '--no-deps', service], env=process_env)
 
 start_service('postgres')
 for attempt in range(60):
-    if subprocess.run(['docker', 'exec', 'unihub-dev-postgres', 'pg_isready', '-U', env['POSTGRES_ADMIN_USER']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    if subprocess.run(['docker', 'exec', s['prefix'] + '-postgres', 'pg_isready', '-U', env['POSTGRES_ADMIN_USER']], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
         break
     time.sleep(1)
 else:
@@ -500,7 +548,7 @@ SELECT 'CREATE DATABASE unihub OWNER {admin_sql}' WHERE NOT EXISTS (SELECT FROM 
 SELECT 'CREATE DATABASE ledger OWNER {admin_sql}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'ledger')\\gexec
 SELECT 'CREATE DATABASE casdoor OWNER casdoor' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'casdoor')\\gexec
 '''
-run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-q'], input=sql, quiet=True)
+run(['docker', 'exec', '-i', s['prefix'] + '-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-q'], input=sql, quiet=True)
 start_service('ledger')
 # The helper verifies the pinned upstream bundle and publishes files in place,
 # preserving an existing bind mount's directory inode. Prepare mode exits above.
@@ -525,31 +573,32 @@ WHERE owner='admin' AND name='app-unihub'
     WHERE item->>'name'='Login button'
   );
 '''
-run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=repair_sql, quiet=True)
+run(['docker', 'exec', '-i', s['prefix'] + '-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=repair_sql, quiet=True)
 # Add only the known local console callback to our own development client.
 # Existing callbacks, client credentials and built-in admin app are preserved.
-console_callback_sql = '''UPDATE application
-SET redirect_uris = (redirect_uris::jsonb || '["http://localhost:8088/auth/callback"]'::jsonb)::text
+console_callback = f'http://localhost:{s["app"]}/auth/callback'
+console_callback_sql = f'''UPDATE application
+SET redirect_uris = (redirect_uris::jsonb || '["{console_callback}"]'::jsonb)::text
 WHERE owner='admin' AND name='app-unihub'
   AND jsonb_typeof(redirect_uris::jsonb)='array'
-  AND NOT (redirect_uris::jsonb @> '["http://localhost:8088/auth/callback"]'::jsonb);
+  AND NOT (redirect_uris::jsonb @> '["{console_callback}"]'::jsonb);
 '''
-run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=console_callback_sql, quiet=True)
+run(['docker', 'exec', '-i', s['prefix'] + '-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=console_callback_sql, quiet=True)
 # Add this development client once, cloning only our own application. Keep any
 # existing product client settings/credentials untouched on subsequent setup.
 product_fields = {'name': 'app-superwagie', 'client_id': 'superwagie-unihub-local',
     'client_secret': credentials['superwagie_client_secret'],
     'grant_types': json.dumps(['authorization_code']),
-    'redirect_uris': json.dumps(['http://127.0.0.1:57991/api/platform-account/callback',
-                                'http://localhost:57991/api/platform-account/callback'])}
+    'redirect_uris': json.dumps([f'http://127.0.0.1:{s["superwagie"]}/api/platform-account/callback',
+                                f'http://localhost:{s["superwagie"]}/api/platform-account/callback'])}
 product_sql = '''INSERT INTO application
 SELECT (jsonb_populate_record(NULL::application, to_jsonb(a) || %s::jsonb)).*
 FROM application a WHERE owner='admin' AND name='app-unihub'
 AND NOT EXISTS (SELECT 1 FROM application WHERE owner='admin' AND name='app-superwagie')
 ON CONFLICT DO NOTHING;
 ''' % sql_literal(json.dumps(product_fields))
-run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=product_sql, quiet=True)
-run(['docker', 'exec', '-i', 'unihub-dev-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=branding_sql(), quiet=True)
-print('Ready: PostgreSQL :55438; Formance :53068; UniHub sign-in http://localhost:58000.', flush=True)
-print('Next: make migrate; make web-build; make api; open http://localhost:8088. CLI token helper: make dev-login.', flush=True)
+run(['docker', 'exec', '-i', s['prefix'] + '-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=product_sql, quiet=True)
+run(['docker', 'exec', '-i', s['prefix'] + '-postgres', 'psql', '-U', env['POSTGRES_ADMIN_USER'], '-d', 'casdoor', '-v', 'ON_ERROR_STOP=1', '-q'], input=branding_sql(), quiet=True)
+print(f'Ready: PostgreSQL :{s["pg"]}; Formance :{s["ledger"]}; UniHub sign-in http://localhost:{s["casdoor"]}.', flush=True)
+print(f'Next: make migrate; make web-build; make api; open http://localhost:{s["app"]}. CLI token helper: make dev-login.', flush=True)
 PY

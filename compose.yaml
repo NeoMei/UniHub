@@ -1,12 +1,15 @@
-name: unihub
+# Parallel local stacks: UNIHUB_DEV_INSTANCE=<name> shifts every container,
+# volume, network and port by the instance suffix/offset written to
+# .local/dev.env by scripts/dev-setup.sh. Defaults keep the original stack.
+name: ${UNIHUB_DEV_COMPOSE_PROJECT:-unihub}
 
 services:
   postgres:
     image: postgres:16.15-alpine@sha256:f4610795587492cd4fb887c2dc3de301b813278bb6f616992061141b5f15ac36
-    container_name: unihub-dev-postgres
+    container_name: ${UNIHUB_DEV_CONTAINER_PREFIX:-unihub-dev}-postgres
     restart: unless-stopped
     ports:
-      - "127.0.0.1:55438:5432"
+      - "127.0.0.1:${UNIHUB_DEV_POSTGRES_PORT:-55438}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_ADMIN_USER:?Run make dev-setup first}
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Run make dev-setup first}
@@ -22,11 +25,11 @@ services:
 
   ledger:
     image: ghcr.io/formancehq/ledger:v2.4.16@sha256:fc624af4dde0b9fa8b43ae02b7297fc3f15266df7c9806edec794f1420b40e62
-    container_name: unihub-dev-ledger
+    container_name: ${UNIHUB_DEV_CONTAINER_PREFIX:-unihub-dev}-ledger
     restart: unless-stopped
     command: ["serve", "--worker"]
     ports:
-      - "127.0.0.1:53068:3068"
+      - "127.0.0.1:${UNIHUB_DEV_LEDGER_PORT:-53068}:3068"
     environment:
       POSTGRES_URI: ${LEDGER_POSTGRES_URI:?Run make dev-setup first}
       AUTO_UPGRADE: "true"
@@ -38,10 +41,10 @@ services:
 
   casdoor:
     image: casbin/casdoor:v4.23.0@sha256:e13c9aada231f7338a03ab0ae7054d0a9480e77283338ab9fc319d88fe2b3ce0
-    container_name: unihub-dev-casdoor
+    container_name: ${UNIHUB_DEV_CONTAINER_PREFIX:-unihub-dev}-casdoor
     restart: unless-stopped
     ports:
-      - "127.0.0.1:58000:8000"
+      - "127.0.0.1:${UNIHUB_DEV_CASDOOR_PORT:-58000}:8000"
     # The image runs as uid 1000; supplemental group permits reading the
     # generated config without making secret files world-readable.
     group_add: ["${LOCAL_GID:?Run make dev-setup first}"]
@@ -64,12 +67,12 @@ services:
 
 networks:
   dev:
-    name: unihub-dev
+    name: ${UNIHUB_DEV_NETWORK:-unihub-dev}
     external: true
 
 volumes:
   postgres:
-    name: unihub-dev-postgres
+    name: ${UNIHUB_DEV_POSTGRES_VOLUME:-unihub-dev-postgres}
     external: true
   casdoor-logs:
-    name: unihub-dev-casdoor-logs
+    name: ${UNIHUB_DEV_CASDOOR_LOGS_VOLUME:-unihub-dev-casdoor-logs}
