@@ -6,7 +6,9 @@ import {
   Plus,
 } from "lucide-react";
 import { accountPath, idempotencyKey, request } from "./api";
+import { useResource } from "./useResource";
 import type {
+  Account,
   Authorization,
   Capabilities,
   Invitation,
@@ -20,7 +22,7 @@ import type {
   Product,
 } from "./types";
 import { activeSubscription, date, financeRole, fixed, parseCash } from "./money";
-import type { Shared } from "./App";
+import type { Shared, ActionSpec } from "./App";
 import { OperationTable } from "./App";
 import type { Resource } from "./useResource";
 import {
@@ -407,6 +409,46 @@ type WalletsProps = Shared & {
 export function Wallets(props: WalletsProps) {
   return <AccountWallets key={`${props.account.id}/${props.account.role}`} {...props} />;
 }
+// Team owner's conserved transfer to one of its own members. Source is the
+// owner's own personal unified wallet (server-derived), destination is the
+// selected member's personal wallet. Server re-checks owner + membership.
+function MemberTransfer({account, products, act}: {account: Account; products: Product[]; act: (spec: ActionSpec) => void}) {
+  const members = useResource<Member[]>(accountPath(account.id, "members"));
+  const [user, setUser] = useState("");
+  const [product, setProduct] = useState("");
+  const [amount, setAmount] = useState("");
+  const [error, setError] = useState("");
+  function submit() {
+    setError("");
+    try {
+      if (!user) throw new Error("请选择要划款的组员。");
+      if (!products.some(item => item.id === product) && product !== "") throw new Error("请选择有效的目标钱包。");
+      const value = parseCash(amount);
+      act({
+        title: "确认划款给组员",
+        path: accountPath(account.id, "member-transfers"),
+        body: {user_id: user, product_id: product, amount: value},
+        content: <><dl>
+          <Detail label="接收组员">{members.data?.find(m => m.user_id === user)?.name || user}</Detail>
+          <Detail label="目标钱包">{product ? products.find(item => item.id === product)?.name : "统一钱包"}</Detail>
+          <Detail label="金额">¥ {fixed(value)}</Detail>
+        </dl><Notice>从你本人账户的统一钱包划出，计入该组员本人账户，资金守恒、不经真实支付。由后台记账，稍后刷新查看结果。</Notice></>,
+        onResult: () => {setAmount(""); setUser("");},
+      });
+    } catch (e) {setError((e as Error).message);}
+  }
+  return <Panel title="划款给组员">
+    <Notice>仅团队所有者可用：从你本人账户的统一钱包，划款给你团队中的组员本人账户（统一钱包或指定产品钱包）。</Notice>
+    {members.loading ? <p role="status">正在加载组员…</p> : members.error && <Notice kind="error">组员加载失败：{members.error}</Notice>}
+    <div className="inline-form">
+      <label>接收组员<select value={user} onChange={event => setUser(event.target.value)}><option value="">请选择组员</option>{members.data?.map(m => <option key={m.user_id} value={m.user_id}>{m.name || m.email || m.user_id}</option>)}</select></label>
+      <label>目标钱包<select value={product} onChange={event => setProduct(event.target.value)}><option value="">统一钱包</option>{products.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label>划款金额（元）<input aria-label="划款给组员金额（元）" inputMode="decimal" placeholder="0.00" value={amount} onChange={event => setAmount(event.target.value)} /></label>
+      <div className="form-buttons"><button disabled={!user || members.loading} onClick={submit}>划款给组员</button></div>
+    </div>
+    {error && <Notice kind="error">{error}</Notice>}
+  </Panel>;
+}
 function AccountWallets({account, session, products, act, wallets, operations, refresh, initialProductId, initialWalletDestination, productCatalog = {loading: false}, capabilities = {loading: false}}: WalletsProps) {
   const [amount, setAmount] = useState("");
   const [product, setProduct] = useState<string | undefined>(initialWalletDestination === "unified" ? "" : initialWalletDestination === "invalid" || initialProductId ? undefined : "");
@@ -467,6 +509,7 @@ function AccountWallets({account, session, products, act, wallets, operations, r
   }
   return (<>
     <Panel title="现金钱包"><WalletBalances wallets={wallets} products={products} focusProductId={product} /></Panel>
+    {account.kind === "team" && account.role === "owner" && <MemberTransfer account={account} products={products} act={act} />}
     <Panel title={session.sandbox ? "测试充值" : "充值"}>
       {session.sandbox ? <Notice>测试充值仅用于验证流程，不涉及真实支付；充值单需要手动确认测试入账。</Notice> : <Notice>真实支付渠道尚未开通。可在下方手动划拨已有统一钱包余额。</Notice>}
       {capabilities.error && <Notice kind="error">{capabilities.error}</Notice>}

@@ -103,6 +103,7 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		m.HandleFunc("GET /v1/models", s.modelList)
 	}
 	add("GET /v1/me", func(w http.ResponseWriter, r *http.Request, u accounts.User) error { return respond(w, 200, u) })
+	s.memberTransferRoute(add)
 	add("GET /v1/accounts", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		a, e := s.accounts.ListAccounts(r.Context(), u.ID)
 		if e != nil {

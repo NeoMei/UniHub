@@ -264,6 +264,29 @@ it("offers manual recharge only to the allowlisted operator in direct mode and p
   fireEvent.click(screen.getByRole("button", { name: "确认手工充值" }));
   expect(act).toHaveBeenCalledWith(expect.objectContaining({ path: "/v1/accounts/A/manual-recharges", body: { product_id: "llmrouter", amount: "300000000" } }));
 });
+it("shows the conserved member-transfer panel only for a team owner and posts the selected member", async () => {
+  const act = vi.fn();
+  const products = [{ id: "llmrouter", name: "LLMRouter" }];
+  const props = { act, wallets: { data: [], loading: false }, operations: { data: [], loading: false }, capabilities: { data: {}, loading: false } };
+  // A personal account has no member-transfer panel.
+  const personal = render(<Wallets {...shared} {...props} />);
+  expect(screen.queryByText("划款给组员")).toBeNull();
+  personal.unmount();
+  // A team owner does. Stub the members resource.
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname.endsWith("/members")) return new Response(JSON.stringify([{ user_id: "U1", name: "组员一", email: "m@example.com", role: "member" }]), { status: 200, headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+  }));
+  render(<Wallets {...shared} {...props} account={{ id: "T", name: "团队", kind: "team", role: "owner" }} products={products} />);
+  expect(screen.getByRole("button", { name: "划款给组员" })).toBeDefined();
+  const member = await waitFor(() => screen.getByLabelText("接收组员") as HTMLSelectElement);
+  fireEvent.change(member, { target: { value: "U1" } });
+  fireEvent.change(screen.getByLabelText("目标钱包"), { target: { value: "llmrouter" } });
+  fireEvent.change(screen.getByLabelText("划款给组员金额（元）"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "划款给组员" }));
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({ path: "/v1/accounts/T/member-transfers", body: { user_id: "U1", product_id: "llmrouter", amount: "5000000" } }));
+});
 it("preserves failed wallet reads as errors and authoritative zero as zero", () => {
   const props = {...shared, operations: {data: [], loading: false}};
   const view = render(<Wallets {...props} wallets={{data: [{product_id: "llmrouter", asset: "CNY/6", amount: "0"}], loading: false, error: "wallet offline"}} />);

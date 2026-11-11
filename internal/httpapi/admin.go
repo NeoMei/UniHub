@@ -271,4 +271,5 @@ func (s *api) adminRoutes(add func(string, action)) {
 	s.adminPaymentRoutes(central)
 	s.adminOperationRoutes(central)
 	s.adminIdentityRoutes(central)
+	s.adminTransferRoute(central)
 }
