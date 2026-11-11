@@ -242,6 +242,28 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 		}
 		return respond(w, 201, a)
 	})
+	// Manual recharge credits a cash wallet with no real payment. It is gated by
+	// the recharge allowlist + account finance role inside the service, and is
+	// deliberately absent from the product-token scope allowlists, so only a
+	// console owner (the platform operator) can reach it. Available in every
+	// payment mode, unlike the sandbox-only /recharges route above.
+	add("POST /v1/accounts/{account}/manual-recharges", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		var b struct {
+			ProductID string `json:"product_id"`
+			Amount    string `json:"amount"`
+		}
+		if e := decode(w, r, &b); e != nil {
+			return e
+		}
+		if e := requireBillingProduct(r, b.ProductID); e != nil {
+			return e
+		}
+		a, e := s.wallet.ManualRecharge(r.Context(), u.ID, r.PathValue("account"), b.ProductID, b.Amount, r.Header.Get("Idempotency-Key"))
+		if e != nil {
+			return e
+		}
+		return respond(w, 202, a)
+	})
 	add("GET /v1/accounts/{account}/recharges/{order}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		a, e := s.wallet.GetOrder(r.Context(), u.ID, r.PathValue("account"), r.PathValue("order"))
 		if e != nil {

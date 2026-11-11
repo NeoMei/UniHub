@@ -238,6 +238,62 @@ func (s *Service) Transfer(ctx context.Context, actor, account, product, amount,
 	}
 	return o, tx.Commit(ctx)
 }
+
+// ManualRecharge credits an account cash wallet with no real payment behind it.
+// It is the direct-mode counterpart of the sandbox test recharge: the same
+// allowlist (CanSandboxRecharge) plus account finance role gate the caller, and
+// the worker applies the audited world->cash posting like any recharge. No
+// merchant receipt or signature is involved, so it works while real payments are
+// configured. Only allowlisted console owners can call it; product tokens are
+// rejected at the route scope and strangers at the finance check.
+func (s *Service) ManualRecharge(ctx context.Context, actor, account, product, amount, key string) (Operation, error) {
+	n, e := money.ParseRecharge(amount)
+	if e != nil || !validKey(key) {
+		return Operation{}, ErrInvalid
+	}
+	if !s.CanSandboxRecharge(actor) {
+		return Operation{}, accounts.ErrForbidden
+	}
+	tx, e := s.pool.Begin(ctx)
+	if e != nil {
+		return Operation{}, e
+	}
+	defer database.Rollback(tx)
+	if e = database.LockAccountTx(ctx, tx, account); e != nil {
+		return Operation{}, e
+	}
+	if e = s.finance(ctx, tx, actor, account); e != nil {
+		return Operation{}, e
+	}
+	if product != "" {
+		if e = checkProduct(ctx, tx, product); e != nil {
+			return Operation{}, e
+		}
+	}
+	h := digest([]string{"manual-recharge", account, product, strconv.FormatInt(n, 10)})
+	var old string
+	o, e := scanOpWithHash(tx.QueryRow(ctx, `SELECT `+opColumns+`,payload_hash FROM wallet_operations WHERE account_id=$1 AND kind='recharge' AND request_key=$2`, account, key), &old)
+	if e == nil {
+		if h != old {
+			return Operation{}, ErrConflict
+		}
+		return o, tx.Commit(ctx)
+	}
+	if !errors.Is(e, accounts.ErrNotFound) {
+		return Operation{}, e
+	}
+	id := newID("op_")
+	cmd := ledger.Command{Reference: "unihub:" + id, Postings: []ledger.Posting{{Source: "world", Destination: Address(account, product), Asset: Asset, Amount: n}}}
+	b, _ := json.Marshal(cmd)
+	o, e = scanOp(tx.QueryRow(ctx, `INSERT INTO wallet_operations(id,account_id,actor_id,kind,request_key,payload_hash,command) VALUES($1,$2,$3,'recharge',$4,$5,$6) RETURNING `+opColumns, id, account, actor, key, h, b))
+	if e != nil {
+		return Operation{}, dbError(e)
+	}
+	if e = audit(ctx, tx, account, actor, id, "recharge.manual"); e != nil {
+		return Operation{}, e
+	}
+	return o, tx.Commit(ctx)
+}
 func scanOpWithHash(row pgx.Row, h *string) (Operation, error) {
 	var o Operation
 	e := row.Scan(&o.ID, &o.AccountID, &o.Kind, &o.Status, &o.TransactionID, &o.ErrorCode, &o.CreatedAt, h)
