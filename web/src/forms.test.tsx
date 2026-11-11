@@ -248,6 +248,22 @@ it("keeps manual transfer separate from recharge with the same explicit confirma
   expect(act).toHaveBeenCalledWith(expect.objectContaining({path: "/v1/accounts/A/transfers", body: {product_id: "product-a", amount: "3000000"}}));
   expect((screen.getByLabelText("充值金额（元）") as HTMLInputElement).value).toBe("");
 });
+it("offers manual recharge only to the allowlisted operator in direct mode and posts to manual-recharges", () => {
+  const act = vi.fn();
+  const direct = { ...shared, session: { ...shared.session, sandbox: false } };
+  const products = [{ id: "llmrouter", name: "LLMRouter" }];
+  // Direct mode without the manual_recharge capability: no manual panel.
+  const off = render(<Wallets {...direct} act={act} products={products} wallets={{ data: [], loading: false }} operations={{ data: [], loading: false }} capabilities={{ data: {}, loading: false }} />);
+  expect(screen.queryByText("手工充值（无真实交易）")).toBeNull();
+  off.unmount();
+  // Allowlisted operator: panel present, posts to manual-recharges.
+  render(<Wallets {...direct} act={act} products={products} wallets={{ data: [], loading: false }} operations={{ data: [], loading: false }} capabilities={{ data: { manual_recharge: true }, loading: false }} />);
+  expect(screen.getByText("手工充值（无真实交易）")).toBeDefined();
+  fireEvent.change(screen.getByLabelText("手工充值目标钱包"), { target: { value: "llmrouter" } });
+  fireEvent.change(screen.getByLabelText("手工充值金额（元）"), { target: { value: "300" } });
+  fireEvent.click(screen.getByRole("button", { name: "确认手工充值" }));
+  expect(act).toHaveBeenCalledWith(expect.objectContaining({ path: "/v1/accounts/A/manual-recharges", body: { product_id: "llmrouter", amount: "300000000" } }));
+});
 it("preserves failed wallet reads as errors and authoritative zero as zero", () => {
   const props = {...shared, operations: {data: [], loading: false}};
   const view = render(<Wallets {...props} wallets={{data: [{product_id: "llmrouter", asset: "CNY/6", amount: "0"}], loading: false, error: "wallet offline"}} />);

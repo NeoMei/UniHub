@@ -12,6 +12,7 @@ export type Capabilities = {
   real_payments_configured?: boolean;
   unified_wallet_recharge?: boolean;
   product_wallet_recharge?: boolean;
+  manual_recharge?: boolean;
 };
 export type Account = { id: string; kind: string; name: string; role: string };
 export type NativeCreditConversion = {

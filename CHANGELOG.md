@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.47 - 2026-11-11
+
+- 新增「手工充值」能力：授权账户（`SANDBOX_RECHARGE_USER_IDS` 白名单 + 账户 owner/billing_admin）可在任意支付模式下，无真实交易地把人民币现金计入统一钱包或指定产品钱包，用于平台运维补款。新增 `POST /v1/accounts/{account}/manual-recharges`（console 专属，202 异步记账）与 `wallet.ManualRecharge`，复用既有 `wallet_operations` + `audit` + worker 账本提交，幂等键防重。
+- 该端点刻意不进入 product-token scope 白名单，产品令牌即便持有 `recharges:write` 也返回 403；非白名单 console 用户返回 403。`GET /v1/capabilities` 新增 `manual_recharge` 布尔，前端钱包页据此仅对授权账户显示手工充值面板。
+- 修复正式 `direct` 模式下现金钱包无充值入口的缺口：此前现金入账仅挂在 sandbox 测试充值，切到 direct 后唯一入金通道被关闭，导致 `prepaid_cash` 托管模型因钱包余额 0 返回 402。
+- 新增后端单测（白名单/财务角色/幂等/整分/产品钱包入账）与 httpapi 路由门禁测试、前端面板可见性与提交契约测试；同步 OpenAPI 契约与版本元数据。不改变数据库结构、真实支付商户配置、费率或既有 sandbox 充值流程。
+
 ## 0.4.46 - 2026-11-10
 
 - 修复支付宝 POST 网关调用的 `charset` 位置：`charset` 继续参与签名，但改为放在查询串，表单体不再重复携带，避免退款原因含中文时支付宝返回 `isv.invalid-signature`。

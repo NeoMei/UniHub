@@ -414,6 +414,8 @@ function AccountWallets({account, session, products, act, wallets, operations, r
   const [transferAmount, setTransferAmount] = useState("");
   const [error, setError] = useState("");
   const [recharge, setRecharge] = useState<Recharge>();
+  const [manualProduct, setManualProduct] = useState<string>(initialProductId || "");
+  const [manualAmount, setManualAmount] = useState("");
   const rechargePresets = [100, 500, 1000];
   const catalogReady = !productCatalog.loading && !productCatalog.error;
   useEffect(() => {
@@ -422,6 +424,10 @@ function AccountWallets({account, session, products, act, wallets, operations, r
   const targetValid = catalogReady && product !== undefined && (product === "" || products.some(item => item.id === product));
   const unifiedRechargeDisabled = product === "" && capabilities.data?.unified_wallet_recharge === false;
   const canRecharge = session.sandbox && !capabilities.loading && !capabilities.error && capabilities.data?.product_wallet_recharge !== false && !unifiedRechargeDisabled;
+  // Manual recharge (no real payment) for the allowlisted platform operator; it
+  // is independent of sandbox mode and gated server-side by the allowlist.
+  const canManualRecharge = !capabilities.loading && !capabilities.error && capabilities.data?.manual_recharge === true;
+  const manualTargetValid = manualProduct === "" || products.some(item => item.id === manualProduct);
   function prepare(kind: "recharge" | "transfer") {
     setError("");
     try {
@@ -438,6 +444,24 @@ function AccountWallets({account, session, products, act, wallets, operations, r
           <Detail label="金额">¥ {fixed(value)}</Detail>
         </dl><Notice>{kind === "recharge" ? "仅创建测试订单，尚未到账；随后须明确确认测试入账。不涉及真实支付。" : "从当前账户的统一钱包划拨至该产品钱包，其他账户不会自动垫付。"}</Notice></>,
         onResult: kind === "recharge" ? data => setRecharge(data as Recharge) : undefined,
+      });
+    } catch (e) {setError((e as Error).message);}
+  }
+  function prepareManual() {
+    setError("");
+    try {
+      if (!manualTargetValid) throw new Error("请选择有效的充值钱包。");
+      const value = parseCash(manualAmount);
+      act({
+        title: "确认手工充值",
+        path: accountPath(account.id, "manual-recharges"),
+        body: {product_id: manualProduct, amount: value},
+        confirm: "确认充值",
+        content: <><dl>
+          <Detail label="目标钱包">{products.find(item => item.id === manualProduct)?.name || "统一钱包"}</Detail>
+          <Detail label="金额">¥ {fixed(value)}</Detail>
+        </dl><Notice>无真实交易的手工入账，计入审计，仅授权账户可用。提交后由后台记账，稍后刷新查看余额。</Notice></>,
+        onResult: () => {setManualAmount(""); refresh();},
       });
     } catch (e) {setError((e as Error).message);}
   }
@@ -461,6 +485,17 @@ function AccountWallets({account, session, products, act, wallets, operations, r
       {targetValid && product === "llmrouter" && <p>LLMRouter 产品钱包用于 SuperWagie 托管模型调用，与原生 Key 的统一钱包分开记账。</p>}
       {catalogReady && !targetValid && <p>{initialWalletDestination === "invalid" ? "链接中的充值目标无效或存在冲突，请明确选择目标钱包。" : "链接中的产品尚未核验；不会自动改充其他钱包，请等待产品目录或明确选择。"}</p>}
     </Panel>
+    {canManualRecharge && <Panel title="手工充值（无真实交易）">
+      <Notice>仅授权账户可用：直接把人民币现金计入所选钱包，不经过真实支付，用于平台运维补款。计入审计。</Notice>
+      <div className="inline-form">
+        <label>手工充值目标钱包<select value={manualTargetValid ? manualProduct : "__unconfirmed__"} onChange={event => setManualProduct(event.target.value)}>
+          {!manualTargetValid && <option value="__unconfirmed__" disabled>请等待产品核验或明确选择钱包</option>}
+          <option value="">统一钱包</option>{products.map(item => <option value={item.id} key={item.id}>{item.name}{item.id === "llmrouter" ? " · 托管模型调用" : ""}</option>)}
+        </select></label>
+        <label>充值金额（元）<input aria-label="手工充值金额（元）" inputMode="decimal" placeholder="0.00" value={manualAmount} onChange={event => setManualAmount(event.target.value)} /></label>
+        <div className="form-buttons"><button disabled={!manualTargetValid} onClick={prepareManual}>确认手工充值</button></div>
+      </div>
+    </Panel>}
     {product === "llmrouter" && <Panel title="在 SuperWagie 配置模型连接"><p>返回 SuperWagie 的模型连接设置，登录 UniHub 后按界面指引预览并确认托管连接，再选择模型。钱包余额不能证明密钥已经配置或模型当前可调用。</p><p>LLMRouter 原生 API Key 继续在 LLMRouter 原生控制台管理；这里不创建或替换产品密钥。</p></Panel>}
     <details className="wallet-transfer"><summary>手动划拨（可选）</summary><Panel title="从统一钱包划拨">
       <p>只划拨当前账户已有人民币余额。会员购买与模型调用分别使用各自产品钱包，请核对目标。</p>

@@ -222,7 +222,7 @@ func (s *api) capabilities(w http.ResponseWriter, r *http.Request, u accounts.Us
 			}
 		}
 	}
-	return respond(w, 200, map[string]any{"finance_write": financeWrite, "kind": kind, "product_id": originProduct(r), "instance_id": instance, "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": len(paymentProviders) > 0, "payment_providers": paymentProviders, "native_credits": nativeCredits, "unified_wallet_recharge": s.options.Sandbox && s.wallet.CanSandboxRecharge(u.ID) && originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox && s.wallet.CanSandboxRecharge(u.ID), "refresh_token": refreshToken, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
+	return respond(w, 200, map[string]any{"finance_write": financeWrite, "kind": kind, "product_id": originProduct(r), "instance_id": instance, "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": len(paymentProviders) > 0, "payment_providers": paymentProviders, "native_credits": nativeCredits, "unified_wallet_recharge": s.options.Sandbox && s.wallet.CanSandboxRecharge(u.ID) && originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox && s.wallet.CanSandboxRecharge(u.ID), "manual_recharge": s.wallet.CanSandboxRecharge(u.ID) && originProduct(r) == "", "refresh_token": refreshToken, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
 }
 
 // Keep verified expiry in request context rather than accepting any client field.
