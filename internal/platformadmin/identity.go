@@ -23,6 +23,11 @@ var ErrIdentityUnknown = errors.New("identity outcome unknown; inspect original 
 var ErrRecoveryUnsupported = errors.New("user has no verified recovery channel")
 var ErrRecoveryInvalid = errors.New("invalid or consumed recovery credential")
 
+// selfServiceReasonPrefix marks a recovery an account started for itself after
+// proving control of its verified email. beginIdentityOperation accepts such an
+// operation without an administrator role; its audit trail keeps the reason.
+const selfServiceReasonPrefix = "self-service"
+
 type IdentityCapabilities struct {
 	Activation         bool   `json:"activation"`
 	Directory          bool   `json:"directory"`
@@ -242,13 +247,18 @@ func (s *Store) beginIdentityOperation(ctx context.Context, actor, id, kind, iss
 	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('unihub:platform-administration',0))`); e != nil {
 		return IdentityOperation{}, false, e
 	}
-	if target != "" {
-		e = s.requireTargetOn(ctx, tx, actor, target, "identity:manage")
-	} else {
-		e = s.requireOn(ctx, tx, actor, "identity:manage")
-	}
-	if e != nil {
-		return IdentityOperation{}, false, e
+	// Self-service acts as the requester on their own account, where the
+	// verified email channel is the authority; everyone else needs the role.
+	selfIssued := actor == target && strings.HasPrefix(reason, selfServiceReasonPrefix)
+	if !selfIssued {
+		if target != "" {
+			e = s.requireTargetOn(ctx, tx, actor, target, "identity:manage")
+		} else {
+			e = s.requireOn(ctx, tx, actor, "identity:manage")
+		}
+		if e != nil {
+			return IdentityOperation{}, false, e
+		}
 	}
 	hash := identityHash(payload)
 	tag, e := tx.Exec(ctx, `INSERT INTO platform_identity_operations(id,actor_id,kind,issuer,subject,target_id,request_hash,state,reason) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7,'pending',$8) ON CONFLICT(id) DO NOTHING`, id, actor, kind, issuer, subject, target, hash, reason)
@@ -572,6 +582,82 @@ func (s *Store) RedeemRecovery(ctx context.Context, secret, password string, ver
 	}
 	return s.finishIdentityOperation(ctx, op, "succeeded", map[string]string{"request_id": op.ID, "recovery": "completed", "sessions": "revoked"})
 }
+
+// SelfServiceRecovery issues a recovery mail for the account a verified email
+// belongs to, without an administrator. Callers must throttle by address and
+// answer every outcome the same way, so this method never tells an anonymous
+// caller whether the email exists. A missing or ambiguous match reports false
+// without any lookup side effect.
+func (s *Store) SelfServiceRecovery(ctx context.Context, email string) (bool, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if len(email) < 3 || len(email) > 254 || !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\r\n") {
+		return false, accounts.ErrInvalid
+	}
+	p := s.identityProvider
+	if p == nil {
+		return false, ErrIdentityUnavailable
+	}
+	c := p.Capabilities(ctx)
+	if !c.Recovery || !c.RevokeSessions {
+		return false, ErrIdentityUnavailable
+	}
+	rows, e := s.pool.Query(ctx, `SELECT u.id FROM users u JOIN identities i ON i.user_id=u.id WHERE u.active AND lower(u.email)=$1 AND i.issuer=$2 ORDER BY u.created_at,u.id LIMIT 2`, email, c.Issuer)
+	if e != nil {
+		return false, e
+	}
+	targets := []string{}
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			rows.Close()
+			return false, e
+		}
+		targets = append(targets, id)
+	}
+	rows.Close()
+	if e = rows.Err(); e != nil || len(targets) != 1 {
+		return false, e
+	}
+	id, e := s.identityForUser(ctx, p, targets[0])
+	if e != nil || !id.EmailVerified || !strings.EqualFold(strings.TrimSpace(id.Email), email) || id.Disabled || id.Pending {
+		return false, nil
+	}
+	// The requester is the actor: no administrator is involved, and actor_id
+	// must reference a real user anyway. The flow is marked by its reason.
+	op, fresh, e := s.beginIdentityOperation(ctx, targets[0], identityID(), "recovery", id.Issuer, id.Subject, targets[0], selfServiceReasonPrefix+" verified email recovery request", map[string]string{"channel": identityHash(email)})
+	if e != nil || !fresh {
+		return false, e
+	}
+	release, e := s.identityLease(ctx)
+	if e != nil {
+		return false, e
+	}
+	defer release()
+	secret := identityID() + identityID()
+	if _, e = s.pool.Exec(ctx, `INSERT INTO platform_identity_recovery(id,issuer,subject,user_id,purpose,token_hash,verified_channel_hash,state,expires_at) VALUES($1,$2,$3,$4,'recovery',$5,$6,'delivering',now()+interval '20 minutes')`, op.ID, id.Issuer, id.Subject, targets[0], identityHash(secret), identityHash(email)); e != nil {
+		_, _ = s.finishIdentityOperation(context.WithoutCancel(ctx), op, "failed", map[string]string{"code": "recovery_storage_failed"})
+		return false, e
+	}
+	deliverErr := p.DeliverRecovery(ctx, id, secret, op.ID)
+	state := "delivered"
+	if deliverErr != nil {
+		state = "unknown"
+	}
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if _, e = s.pool.Exec(cleanup, `UPDATE platform_identity_recovery SET state=$2 WHERE id=$1 AND state='delivering'`, op.ID, state); e != nil {
+		return true, e
+	}
+	resultState := "succeeded"
+	if state == "unknown" {
+		resultState = "unknown"
+	}
+	if _, e = s.finishIdentityOperation(cleanup, op, resultState, map[string]string{"request_id": op.ID, "delivery_state": state, "purpose": "recovery", "origin": "self-service"}); e != nil {
+		return true, e
+	}
+	return true, nil
+}
+
 func (s *Store) RecoveryHandler(origin string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -627,6 +713,66 @@ func (s *Store) RecoveryHandler(origin string) http.Handler {
 			w.WriteHeader(202)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"request_id": op.ID, "state": op.State})
+	})
+}
+
+const recoveryRequestHTML = `<!doctype html><html lang="zh"><body><main><h1>找回密码</h1><p>输入登录邮箱，若该邮箱已验证，我们会把设置新密码的链接发到你的信箱。</p><form><label>登录邮箱 <input name="email" type="email" maxlength="254" required autocomplete="email"></label><button>发送恢复邮件</button></form><p id="result" role="status"></p></main><script>document.querySelector('form').onsubmit=async e=>{e.preventDefault();const b=document.querySelector('button');b.disabled=true;try{const r=await fetch(location.pathname,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:new FormData(e.target).get('email')})});document.querySelector('#result').textContent=r.status===202?'如果该邮箱已验证，恢复邮件已发送。请查收并打开邮件中的链接。':'请求未受理。请稍后再试。';}catch{document.querySelector('#result').textContent='结果待核对，请勿重复提交。';}finally{b.disabled=false;}};</script></body></html>`
+
+// SelfServiceRecoveryHandler is the anonymous form behind the login page's
+// "forgot password" link. It answers 202 for every accepted request, including
+// unknown emails, so the page cannot be used to enumerate accounts. The URL is
+// /auth/recovery/request; /auth/recovery itself stays the token redemption page.
+func (s *Store) SelfServiceRecoveryHandler(origin string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		// form-action permits the page's own POST; connect-src covers the fetch.
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+		if r.Method == "GET" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write([]byte(recoveryRequestHTML))
+			return
+		}
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			return
+		}
+		u, e := url.Parse(origin)
+		if e != nil || u.Scheme == "" || u.Host == "" || r.Header.Get("Origin") != strings.TrimSuffix(origin, "/") {
+			http.Error(w, "invalid origin", 403)
+			return
+		}
+		ip, _, splitErr := net.SplitHostPort(r.RemoteAddr)
+		if splitErr != nil {
+			ip = r.RemoteAddr
+		}
+		// A tighter bucket than the token page: one request sends real mail.
+		var hits int
+		e = s.pool.QueryRow(r.Context(), `INSERT INTO platform_recovery_rate_limits(key_hash,window_start,hits) VALUES($1,date_bin(interval '15 minutes',now(),timestamptz '2000-01-01'),1) ON CONFLICT(key_hash,window_start) DO UPDATE SET hits=platform_recovery_rate_limits.hits+1 RETURNING hits`, "self:"+identityHash(ip)).Scan(&hits)
+		if e != nil {
+			http.Error(w, "recovery unavailable", 503)
+			return
+		}
+		if hits > 3 {
+			http.Error(w, "too many attempts", 429)
+			return
+		}
+		var body struct {
+			Email string `json:"email"`
+		}
+		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		d.DisallowUnknownFields()
+		if d.Decode(&body) != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		if _, e = s.SelfServiceRecovery(r.Context(), body.Email); e != nil && !errors.Is(e, accounts.ErrInvalid) {
+			// Delivery problems stay silent to the caller but must not be hidden from the operator.
+			http.Error(w, "recovery unavailable", 503)
+			return
+		}
+		w.WriteHeader(202)
+		_, _ = w.Write([]byte(`{"accepted":true}`))
 	})
 }
 

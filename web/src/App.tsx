@@ -62,7 +62,7 @@ import { Catalog, CreditApplicability, Members, SettingsPage, WalletBalances, Wa
 import type { WalletDestination } from "./forms";
 import { BillingHub } from "./BillingHub";
 import { Consumption } from "./Consumption";
-import {ProductApplications,ProductUserManagement} from "./ProductUsers";
+import {confirmDiscardUnsavedPermissions,ProductApplications,ProductUserManagement} from "./ProductUsers";
 import QRCode from "qrcode";
 import type { AdminPrincipal } from "./admin/types";
 const AdminConsole = lazy(() => import("./admin/AdminConsole").then(m => ({default:m.AdminConsole})));
@@ -115,16 +115,15 @@ const roles: Record<string, string> = {
 };
 // Only a public selection hint is retained. Every read/write still requires
 // server-verified membership; an invalid hint must never choose another payer.
-function initialAccount() {
+function requestedAccount() {
   const hint = new URLSearchParams(window.location.search).get("account");
   if (hint && hint.length <= 128) {
-    window.sessionStorage.setItem("unihub.account", hint);
     return hint;
   }
-  return window.sessionStorage.getItem("unihub.account") || "";
+  return "";
 }
-// This public destination hint contains no identity or credentials. Authentication
-// and the live user-management permission check still guard the resulting page.
+// Public task hints contain no identity or credentials. The payer is restored
+// separately after the session identifies which accounts this user can access.
 const taskViews: Page[] = ["billing", "addons", "wallets", "memberships", "consumption", "bills", "user-management"];
 function initialPage(): Page {
   const params = new URLSearchParams(window.location.search);
@@ -165,11 +164,22 @@ export default function App() {
   const authenticated = session.data?.authenticated && !passwordChanged;
   const profile = useResource<Profile>(authenticated ? "/v1/me/profile" : undefined, version);
   const [profileView, setProfileView] = useState<Profile>();
+  const userId = session.data?.authenticated ? session.data.user?.id : undefined;
+  const accountHintKey = userId ? `unihub.account:${userId}` : undefined;
   const accounts = useResource<Account[]>(
     authenticated ? "/v1/accounts" : undefined,
     version,
   );
-  const [selected, setSelected] = useState(initialAccount);
+  const [selected, setSelected] = useState(requestedAccount);
+  const [pendingAccount] = useState(() => {
+    if (requestedAccount()) {
+      window.sessionStorage.setItem("unihub.account", requestedAccount());
+      return { id: requestedAccount(), explicit: true };
+    }
+    const legacy = window.sessionStorage.getItem("unihub.account") || "";
+    window.sessionStorage.removeItem("unihub.account");
+    return { id: legacy, explicit: false };
+  });
   const [page, setPage] = useState<Page>(initialPage);
   const [taskPage] = useState(page);
   const [taskProduct] = useState(() => window.sessionStorage.getItem("unihub.return-product") || undefined);
@@ -204,16 +214,36 @@ export default function App() {
   const [logoutError, setLogoutError] = useState("");
   const account = selected
     ? accounts.data?.find((a) => a.id === selected)
-    : accounts.data?.[0];
+    : accounts.data?.find((a) => a.id === pendingAccount.id)
+      || accounts.data?.[0];
   useEffect(() => {
     if (profile.data) setProfileView(profile.data);
     else if (!authenticated) setProfileView(undefined);
   }, [profile.data, authenticated]);
   useEffect(() => {
-    if (accounts.data?.length && !selected) setSelected(accounts.data[0].id);
-    if (selected && accounts.data?.some((item) => item.id === selected))
-      window.sessionStorage.setItem("unihub.account", selected);
-  }, [accounts.data, selected]);
+    if (!authenticated || !userId || !accountHintKey || !accounts.data?.length) return;
+    const explicit = requestedAccount();
+    if (explicit) {
+      if (selected !== explicit) setSelected(explicit);
+      return;
+    }
+    if (selected && accounts.data.some((item) => item.id === selected)) {
+      window.sessionStorage.setItem(accountHintKey, selected);
+      return;
+    }
+    if (selected) window.sessionStorage.removeItem(accountHintKey);
+    if (pendingAccount.id && accounts.data.some((item) => item.id === pendingAccount.id)) {
+      window.sessionStorage.removeItem("unihub.account");
+      setSelected(pendingAccount.id);
+      return;
+    }
+    const remembered = window.sessionStorage.getItem(accountHintKey) || "";
+    setSelected(
+      accounts.data.some((item) => item.id === remembered)
+        ? remembered
+        : accounts.data[0].id,
+    );
+  }, [accounts.data, accountHintKey, authenticated, pendingAccount, selected, userId]);
   if (passwordChanged) return <div className="auth-page"><img src="/assets/unihub-logo-v1.png" alt="归一 UniHub" /><Notice>密码已更新，当前会话已结束。请使用新密码重新登录。</Notice><a className="button" href="/auth/login?switch_account=1">重新登录</a></div>;
   if (session.loading)
     return (
@@ -290,18 +320,18 @@ export default function App() {
         </a>
         <nav aria-label="主导航">
           {navigation.filter(item => ["overview", "billing", "memberships", "wallets", "consumption", "bills"].includes(item.id)).map(({id, label, icon: Icon}) => (
-            <button key={id} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined} onClick={() => {setProfileOpen(false); setPage(id);}}>
+            <button key={id} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined} onClick={() => {if (page === "user-management" && !confirmDiscardUnsavedPermissions(`${label}`)) return; setProfileOpen(false); setPage(id);}}>
               <Icon size={19} /><span>{label}</span>
             </button>
           ))}
           <details className="secondary-navigation" open={["credits", "addons", "members", "settings", "applications"].includes(page) || undefined}>
             <summary>更多账户功能</summary>
             {navigation.filter(item => ["credits", "addons", "members", "settings"].includes(item.id)).map(({id, label, icon: Icon}) => (
-              <button key={id} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined} onClick={() => {setProfileOpen(false); setPage(id);}}>
+              <button key={id} className={page === id ? "active" : ""} aria-current={page === id ? "page" : undefined} onClick={() => {if (page === "user-management" && !confirmDiscardUnsavedPermissions(label)) return;setProfileOpen(false); setPage(id);}}>
                 <Icon size={19} /><span>{id === "members" && account?.kind !== "team" ? "团队与邀请" : label}</span>
               </button>
             ))}
-          <button className={page==="applications"?"active":""} onClick={()=>{setProfileOpen(false);setPage("applications")}}><Box size={19}/><span>我的应用</span></button>
+          <button className={page==="applications"?"active":""} onClick={()=>{if (page === "user-management" && !confirmDiscardUnsavedPermissions("我的应用")) return;setProfileOpen(false);setPage("applications")}}><Box size={19}/><span>我的应用</span></button>
           </details>
           {userManagement.data?.can_manage && <button className={page==="user-management"?"active":""} onClick={()=>{setProfileOpen(false);setPage("user-management")}}><Users size={19}/><span>用户管理</span></button>}
           {!platform.loading && !platform.error && platform.data?.enabled === true && <button
@@ -309,6 +339,7 @@ export default function App() {
             aria-current={adminPath ? "page" : undefined}
             title="打开系统维护与平台管理"
             onClick={() => {
+              if (page === "user-management" && !confirmDiscardUnsavedPermissions("系统维护")) return;
               setProfileOpen(false);
               const path = "/admin/overview";
               window.history.pushState(null, "", path);
@@ -324,10 +355,10 @@ export default function App() {
       <div className="workspace">
         <header className="topbar">
           <nav className="console-topnav" aria-label="产品站导航">
-            <button onClick={() => openPortal("home")}><House size={17} /><span>首页</span></button>
-            <button onClick={() => openPortal("guide")}><BookOpen size={17} /><span>使用指南</span></button>
-            <button onClick={() => openPortal("products")}><Box size={17} /><span>产品矩阵</span></button>
-            <button onClick={() => setPage("overview")}><CircleUserRound size={17} /><span>控制台</span></button>
+            <button onClick={() => {if (page === "user-management" && !confirmDiscardUnsavedPermissions("首页")) return; openPortal("home");}}><House size={17} /><span>首页</span></button>
+            <button onClick={() => {if (page === "user-management" && !confirmDiscardUnsavedPermissions("使用指南")) return; openPortal("guide");}}><BookOpen size={17} /><span>使用指南</span></button>
+            <button onClick={() => {if (page === "user-management" && !confirmDiscardUnsavedPermissions("产品矩阵")) return; openPortal("products");}}><Box size={17} /><span>产品矩阵</span></button>
+            <button onClick={() => {if (page === "user-management" && !confirmDiscardUnsavedPermissions("账户概览")) return; setPage("overview");}}><CircleUserRound size={17} /><span>控制台</span></button>
           </nav>
           <div className="account-control">
             <CircleUserRound size={18} />
@@ -338,7 +369,12 @@ export default function App() {
               id="account"
               value={account?.id || selected || ""}
               onChange={(e) => {
+                if (!confirmDiscardUnsavedPermissions(`账户「${accounts.data?.find(account => account.id === e.target.value)?.name || e.target.value}」`)) {
+                  e.target.value = account?.id || selected || "";
+                  return;
+                }
                 setSelected(e.target.value);
+                if (accountHintKey) window.sessionStorage.setItem(accountHintKey, e.target.value);
                 const location = new URL(window.location.href);
                 location.searchParams.set("account", e.target.value);
                 window.history.replaceState(null, "", location);

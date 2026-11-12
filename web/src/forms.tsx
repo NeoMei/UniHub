@@ -6,7 +6,9 @@ import {
   Plus,
 } from "lucide-react";
 import { accountPath, idempotencyKey, request } from "./api";
+import { useResource } from "./useResource";
 import type {
+  Account,
   Authorization,
   Capabilities,
   Invitation,
@@ -20,7 +22,7 @@ import type {
   Product,
 } from "./types";
 import { activeSubscription, date, financeRole, fixed, parseCash } from "./money";
-import type { Shared } from "./App";
+import type { Shared, ActionSpec } from "./App";
 import { OperationTable } from "./App";
 import type { Resource } from "./useResource";
 import {
@@ -407,6 +409,46 @@ type WalletsProps = Shared & {
 export function Wallets(props: WalletsProps) {
   return <AccountWallets key={`${props.account.id}/${props.account.role}`} {...props} />;
 }
+// Team owner's conserved transfer to one of its own members. Source is the
+// owner's own personal unified wallet (server-derived), destination is the
+// selected member's personal wallet. Server re-checks owner + membership.
+function MemberTransfer({account, products, act}: {account: Account; products: Product[]; act: (spec: ActionSpec) => void}) {
+  const members = useResource<Member[]>(accountPath(account.id, "members"));
+  const [user, setUser] = useState("");
+  const [product, setProduct] = useState("");
+  const [amount, setAmount] = useState("");
+  const [error, setError] = useState("");
+  function submit() {
+    setError("");
+    try {
+      if (!user) throw new Error("请选择要划款的组员。");
+      if (!products.some(item => item.id === product) && product !== "") throw new Error("请选择有效的目标钱包。");
+      const value = parseCash(amount);
+      act({
+        title: "确认划款给组员",
+        path: accountPath(account.id, "member-transfers"),
+        body: {user_id: user, product_id: product, amount: value},
+        content: <><dl>
+          <Detail label="接收组员">{members.data?.find(m => m.user_id === user)?.name || user}</Detail>
+          <Detail label="目标钱包">{product ? products.find(item => item.id === product)?.name : "统一钱包"}</Detail>
+          <Detail label="金额">¥ {fixed(value)}</Detail>
+        </dl><Notice>从你本人账户的统一钱包划出，计入该组员本人账户，资金守恒、不经真实支付。由后台记账，稍后刷新查看结果。</Notice></>,
+        onResult: () => {setAmount(""); setUser("");},
+      });
+    } catch (e) {setError((e as Error).message);}
+  }
+  return <Panel title="划款给组员">
+    <Notice>仅团队所有者可用：从你本人账户的统一钱包，划款给你团队中的组员本人账户（统一钱包或指定产品钱包）。</Notice>
+    {members.loading ? <p role="status">正在加载组员…</p> : members.error && <Notice kind="error">组员加载失败：{members.error}</Notice>}
+    <div className="inline-form">
+      <label>接收组员<select value={user} onChange={event => setUser(event.target.value)}><option value="">请选择组员</option>{members.data?.map(m => <option key={m.user_id} value={m.user_id}>{m.name || m.email || m.user_id}</option>)}</select></label>
+      <label>目标钱包<select value={product} onChange={event => setProduct(event.target.value)}><option value="">统一钱包</option>{products.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <label>划款金额（元）<input aria-label="划款给组员金额（元）" inputMode="decimal" placeholder="0.00" value={amount} onChange={event => setAmount(event.target.value)} /></label>
+      <div className="form-buttons"><button disabled={!user || members.loading} onClick={submit}>划款给组员</button></div>
+    </div>
+    {error && <Notice kind="error">{error}</Notice>}
+  </Panel>;
+}
 function AccountWallets({account, session, products, act, wallets, operations, refresh, initialProductId, initialWalletDestination, productCatalog = {loading: false}, capabilities = {loading: false}}: WalletsProps) {
   const [amount, setAmount] = useState("");
   const [product, setProduct] = useState<string | undefined>(initialWalletDestination === "unified" ? "" : initialWalletDestination === "invalid" || initialProductId ? undefined : "");
@@ -414,6 +456,8 @@ function AccountWallets({account, session, products, act, wallets, operations, r
   const [transferAmount, setTransferAmount] = useState("");
   const [error, setError] = useState("");
   const [recharge, setRecharge] = useState<Recharge>();
+  const [manualProduct, setManualProduct] = useState<string>(initialProductId || "");
+  const [manualAmount, setManualAmount] = useState("");
   const rechargePresets = [100, 500, 1000];
   const catalogReady = !productCatalog.loading && !productCatalog.error;
   useEffect(() => {
@@ -422,6 +466,10 @@ function AccountWallets({account, session, products, act, wallets, operations, r
   const targetValid = catalogReady && product !== undefined && (product === "" || products.some(item => item.id === product));
   const unifiedRechargeDisabled = product === "" && capabilities.data?.unified_wallet_recharge === false;
   const canRecharge = session.sandbox && !capabilities.loading && !capabilities.error && capabilities.data?.product_wallet_recharge !== false && !unifiedRechargeDisabled;
+  // Manual recharge (no real payment) for the allowlisted platform operator; it
+  // is independent of sandbox mode and gated server-side by the allowlist.
+  const canManualRecharge = !capabilities.loading && !capabilities.error && capabilities.data?.manual_recharge === true;
+  const manualTargetValid = manualProduct === "" || products.some(item => item.id === manualProduct);
   function prepare(kind: "recharge" | "transfer") {
     setError("");
     try {
@@ -441,8 +489,27 @@ function AccountWallets({account, session, products, act, wallets, operations, r
       });
     } catch (e) {setError((e as Error).message);}
   }
+  function prepareManual() {
+    setError("");
+    try {
+      if (!manualTargetValid) throw new Error("请选择有效的充值钱包。");
+      const value = parseCash(manualAmount);
+      act({
+        title: "确认手工充值",
+        path: accountPath(account.id, "manual-recharges"),
+        body: {product_id: manualProduct, amount: value},
+        confirm: "确认充值",
+        content: <><dl>
+          <Detail label="目标钱包">{products.find(item => item.id === manualProduct)?.name || "统一钱包"}</Detail>
+          <Detail label="金额">¥ {fixed(value)}</Detail>
+        </dl><Notice>无真实交易的手工入账，计入审计，仅授权账户可用。提交后由后台记账，稍后刷新查看余额。</Notice></>,
+        onResult: () => {setManualAmount(""); refresh();},
+      });
+    } catch (e) {setError((e as Error).message);}
+  }
   return (<>
     <Panel title="现金钱包"><WalletBalances wallets={wallets} products={products} focusProductId={product} /></Panel>
+    {account.kind === "team" && account.role === "owner" && <MemberTransfer account={account} products={products} act={act} />}
     <Panel title={session.sandbox ? "测试充值" : "充值"}>
       {session.sandbox ? <Notice>测试充值仅用于验证流程，不涉及真实支付；充值单需要手动确认测试入账。</Notice> : <Notice>真实支付渠道尚未开通。可在下方手动划拨已有统一钱包余额。</Notice>}
       {capabilities.error && <Notice kind="error">{capabilities.error}</Notice>}
@@ -461,6 +528,17 @@ function AccountWallets({account, session, products, act, wallets, operations, r
       {targetValid && product === "llmrouter" && <p>LLMRouter 产品钱包用于 SuperWagie 托管模型调用，与原生 Key 的统一钱包分开记账。</p>}
       {catalogReady && !targetValid && <p>{initialWalletDestination === "invalid" ? "链接中的充值目标无效或存在冲突，请明确选择目标钱包。" : "链接中的产品尚未核验；不会自动改充其他钱包，请等待产品目录或明确选择。"}</p>}
     </Panel>
+    {canManualRecharge && <Panel title="手工充值（无真实交易）">
+      <Notice>仅授权账户可用：直接把人民币现金计入所选钱包，不经过真实支付，用于平台运维补款。计入审计。</Notice>
+      <div className="inline-form">
+        <label>手工充值目标钱包<select value={manualTargetValid ? manualProduct : "__unconfirmed__"} onChange={event => setManualProduct(event.target.value)}>
+          {!manualTargetValid && <option value="__unconfirmed__" disabled>请等待产品核验或明确选择钱包</option>}
+          <option value="">统一钱包</option>{products.map(item => <option value={item.id} key={item.id}>{item.name}{item.id === "llmrouter" ? " · 托管模型调用" : ""}</option>)}
+        </select></label>
+        <label>充值金额（元）<input aria-label="手工充值金额（元）" inputMode="decimal" placeholder="0.00" value={manualAmount} onChange={event => setManualAmount(event.target.value)} /></label>
+        <div className="form-buttons"><button disabled={!manualTargetValid} onClick={prepareManual}>确认手工充值</button></div>
+      </div>
+    </Panel>}
     {product === "llmrouter" && <Panel title="在 SuperWagie 配置模型连接"><p>返回 SuperWagie 的模型连接设置，登录 UniHub 后按界面指引预览并确认托管连接，再选择模型。钱包余额不能证明密钥已经配置或模型当前可调用。</p><p>LLMRouter 原生 API Key 继续在 LLMRouter 原生控制台管理；这里不创建或替换产品密钥。</p></Panel>}
     <details className="wallet-transfer"><summary>手动划拨（可选）</summary><Panel title="从统一钱包划拨">
       <p>只划拨当前账户已有人民币余额。会员购买与模型调用分别使用各自产品钱包，请核对目标。</p>

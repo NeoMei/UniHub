@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.46"
+  "version": "0.4.51"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -1691,6 +1691,66 @@
                 "value":
                   "product_id": "llmrouter"
                   "amount": "10000000"
+  "/v1/accounts/{account}/manual-recharges":
+    "post":
+      "operationId": "createManualRecharge"
+      "summary": "createManualRecharge"
+      "description": "Console-only manual cash credit with no real payment behind it. Gated by the recharge allowlist plus the account finance role; deliberately absent from product-token scopes, so only the platform operator's console session can call it. Available in every payment mode (unlike the sandbox-only /recharges). The audited world->cash posting is applied asynchronously by the wallet worker; poll GET /v1/accounts/{account}/operations/{operation} for APPLIED."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "202":
+          "description": "Manual recharge queued"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": ""
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "product_id":
+                  "type": "string"
+                  "description": "Empty credits the unified wallet; a product id credits that product wallet."
+                "amount":
+                  "$ref": "#/components/schemas/IntegerString"
+              "required":
+                - "amount"
+              "additionalProperties": false
+            "examples":
+              "llmrouterCash":
+                "summary": "Manually credit the account llmrouter product wallet (whole cents, CNY/6)"
+                "value":
+                  "product_id": "llmrouter"
+                  "amount": "10000000"
   "/v1/accounts/{account}/recharges/{order}":
     "get":
       "operationId": "getRecharge"
@@ -2740,6 +2800,118 @@
           "schema":
             "type": "string"
           "description": ""
+  "/admin/v1/transfers":
+    "post":
+      "operationId": "createAdminTransfer"
+      "summary": "createAdminTransfer"
+      "description": "Console-only conserved cross-account cash transfer for a platform super_admin. Debits the operator's own personal unified wallet and credits an arbitrary target account's unified wallet or a named product wallet; never mints from world and never uses the manual-recharge path. The destination account must be a live account. Gate: the central console wrapper rejects any product origin, and admins:manage (held only by super_admin, not finance_admin) is re-checked inside the posting transaction. Requires CSRF and an Idempotency-Key. The audited posting is applied asynchronously by the wallet worker with kind admin_transfer; poll GET /v1/accounts/{account}/operations/{operation} for APPLIED."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "202":
+          "description": "Conserved transfer queued"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "parameters":
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "account_id":
+                  "type": "string"
+                  "description": "Destination account id; may be any account, including a team or personal account."
+                "product_id":
+                  "type": "string"
+                  "description": "Empty credits the target unified wallet; a product id credits that product wallet."
+                "amount":
+                  "$ref": "#/components/schemas/IntegerString"
+                "reason":
+                  "type": "string"
+                  "description": "Operator reason attached by the admin form; accepted but not persisted."
+              "required":
+                - "account_id"
+                - "amount"
+              "additionalProperties": false
+  "/v1/accounts/{account}/member-transfers":
+    "post":
+      "operationId": "createMemberTransfer"
+      "summary": "createMemberTransfer"
+      "description": "Console-only conserved transfer for a team owner to one of its own members. {account} must be a team owned by the caller; the target user_id must be a member of that team. Debits the owner's own personal unified wallet and credits the selected member's personal unified wallet or a named product wallet; the team shared wallet is neither source nor destination. Gate is re-checked inside the posting transaction. Deliberately absent from product-token scopes, so a product token gets 403. Requires CSRF and an Idempotency-Key. Posted asynchronously with kind admin_transfer; poll GET /v1/accounts/{account}/operations/{operation} for APPLIED."
+      "security":
+        -
+          "BearerAuth": []
+      "responses":
+        "202":
+          "description": "Conserved member transfer queued"
+          "content":
+            "application/json":
+              "schema":
+                "$ref": "#/components/schemas/Operation"
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      "parameters":
+        -
+          "name": "account"
+          "in": "path"
+          "required": true
+          "schema":
+            "type": "string"
+          "description": "Team account id; the caller must be its owner."
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "properties":
+                "user_id":
+                  "type": "string"
+                  "description": "Destination member user id; must be a member of the team."
+                "product_id":
+                  "type": "string"
+                  "description": "Empty credits the member's unified wallet; a product id credits that product wallet."
+                "amount":
+                  "$ref": "#/components/schemas/IntegerString"
+              "required":
+                - "user_id"
+                - "amount"
+              "additionalProperties": false
   "/admin/v1/overview/timeseries":
     "get":
       "operationId": "adminOverviewTimeseries"
@@ -3706,6 +3878,9 @@
           "type": "boolean"
         "product_wallet_recharge":
           "type": "boolean"
+        "manual_recharge":
+          "type": "boolean"
+          "description": "Console-only allowlisted operator may credit a cash wallet with no real payment; available in every payment mode."
         "refresh_token":
           "type": "boolean"
         "server_logout":
@@ -3723,6 +3898,7 @@
         - "real_payments_configured"
         - "unified_wallet_recharge"
         - "product_wallet_recharge"
+        - "manual_recharge"
         - "refresh_token"
         - "server_logout"
         - "model_pool"
