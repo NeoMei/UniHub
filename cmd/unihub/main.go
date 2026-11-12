@@ -206,7 +206,7 @@ func run() error {
 	baseHandler := identity.Handler(handler)
 	if c.PublicURL != "" {
 		recovery := platformAdmin.RecoveryHandler(c.PublicURL)
-		baseHandler = recoveryRoute(baseHandler, recovery)
+		baseHandler = recoveryRoute(baseHandler, recovery, platformAdmin.SelfServiceRecoveryHandler(c.PublicURL))
 	}
 	if productAuth != nil {
 		handler = productAuth.BrowserHandler(baseHandler)
@@ -234,10 +234,14 @@ func run() error {
 	return e
 }
 
-func recoveryRoute(next, recovery http.Handler) http.Handler {
+func recoveryRoute(next, recovery, request http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/auth/recovery" {
+		switch r.URL.Path {
+		case "/auth/recovery":
 			recovery.ServeHTTP(w, r)
+			return
+		case "/auth/recovery/request":
+			request.ServeHTTP(w, r)
 			return
 		}
 		next.ServeHTTP(w, r)

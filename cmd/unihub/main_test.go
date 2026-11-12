@@ -13,7 +13,10 @@ func TestRecoveryRouteDoesNotRecurseIntoItself(t *testing.T) {
 	recovery := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
-	h := recoveryRoute(next, recovery)
+	request := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusFound)
+	})
+	h := recoveryRoute(next, recovery, request)
 
 	for _, tc := range []struct {
 		name string
@@ -21,6 +24,7 @@ func TestRecoveryRouteDoesNotRecurseIntoItself(t *testing.T) {
 		want int
 	}{
 		{name: "recovery", path: "/auth/recovery", want: http.StatusAccepted},
+		{name: "recovery request", path: "/auth/recovery/request", want: http.StatusFound},
 		{name: "normal", path: "/v1/me", want: http.StatusNoContent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

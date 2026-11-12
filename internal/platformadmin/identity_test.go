@@ -74,6 +74,11 @@ func (p *identityFixtureProvider) RevokeIdentitySessions(context.Context, Provid
 func identityRecoveryFixture(t *testing.T) (*Store, []string, *identityFixtureProvider) {
 	s, ids := coreFixture(t)
 	p := &identityFixtureProvider{id: ProviderIdentity{Issuer: "fixture", Subject: "1", Email: "owner@example.test", EmailVerified: true, Manageable: true}}
+	// Self-service finds the account by its verified email, which the central
+	// mirror of the fixture user has to carry too.
+	if _, e := s.pool.Exec(context.Background(), `UPDATE users SET email=$2 WHERE id=$1`, ids[1], p.id.Email); e != nil {
+		t.Fatal(e)
+	}
 	s.SetIdentityProvider(p)
 	return s, ids, p
 }
