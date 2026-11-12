@@ -84,7 +84,7 @@ func (l *waiverLedger) Find(_ context.Context, ref string) (*ledger.Transaction,
 func (l *waiverLedger) Balance(_ context.Context, address, asset string) (int64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if asset != billing.CashAsset {
+	if asset != billing.CashAsset && asset != billing.CreditAsset {
 		return 0, ledger.ErrConflict
 	}
 	return l.balances[address], nil
@@ -477,5 +477,73 @@ func TestPlatformFaultWaiverNativePricingPreservesFrozenQuoteAndFunding(t *testi
 				t.Fatalf("waiver replay moved funds twice: %v", e)
 			}
 		})
+	}
+}
+
+// A credit-priced call holds its funds in batch reservations, not in a cash
+// address; the waiver must return exactly those reservations.
+func TestPlatformFaultWaiverReleasesCreditReservations(t *testing.T) {
+	ctx := context.Background()
+	p := testutil.Database(t)
+	if e := database.Migrate(ctx, p); e != nil {
+		t.Fatal(e)
+	}
+	store := accounts.New(p)
+	u, e := store.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://waiver.test", Subject: "credit-customer"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	op, e := store.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://waiver.test", Subject: "credit-operator"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	as, e := store.ListAccounts(ctx, u.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	account := as[0].ID
+	if _, e = p.Exec(ctx, `INSERT INTO platform_admin_roles(user_id,roles,source,granted_by) VALUES($1,'["finance_admin"]','test',$1)`, op.ID); e != nil {
+		t.Fatal(e)
+	}
+	const batch, held = "batch-waiver", int64(6862)
+	call := billing.Call{CallID: "credit-waiver-call", ServiceID: "llmrouter", ActorID: u.ID, AccountID: account, OriginProductID: "superwagie", InstanceID: "default",
+		ChargeAsset: billing.CreditAsset, FundingMode: billing.FundingCredits, FundingProductID: "llmrouter", Held: fmt.Sprint(held), Charged: "0", Status: "RESERVED",
+		RequestDigest: "credit-digest", CredentialID: "credit-credential", TaskID: "credit-task", WireOperation: "chat.completions.create",
+		Rate:        billing.Rate{ID: "credit-rate", Model: "qwen3-vl-plus", Asset: billing.CreditAsset},
+		Allocations: []billing.Allocation{{BatchID: batch, Amount: fmt.Sprint(held)}}}
+	raw, _ := json.Marshal(call)
+	if _, e = p.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,'credit-request',$3)`, call.CallID, account, raw); e != nil {
+		t.Fatal(e)
+	}
+	reserved, available := "credits:batch:"+batch+":reserved", "credits:batch:"+batch+":available"
+	reserve := ledger.Command{Reference: "unihub:billing:credit-hold", Postings: []ledger.Posting{{Source: available, Destination: reserved, Asset: billing.CreditAsset, Amount: held}}}
+	rc, _ := json.Marshal(reserve)
+	effect, _ := json.Marshal(map[string]any{"call": call})
+	if _, e = p.Exec(ctx, `INSERT INTO billing_commands(id,account_id,actor_id,kind,request_key,request_digest,command,effect,status,ledger_transaction_id) VALUES('credit-hold',$1,$2,'reserve',$3,'credit-hash',$4,$5,'APPLIED','credit-ledger-id')`, account, u.ID, call.CallID, rc, effect); e != nil {
+		t.Fatal(e)
+	}
+	var row json.RawMessage
+	if e = p.QueryRow(ctx, `SELECT to_jsonb(c) FROM billing_calls c WHERE id=$1`, call.CallID).Scan(&row); e != nil {
+		t.Fatal(e)
+	}
+	rateRaw, _ := json.Marshal(call.Rate)
+	gateway, _ := json.Marshal(map[string]any{"Digest": call.RequestDigest, "CredentialID": call.CredentialID, "TaskID": call.TaskID, "WireOperation": call.WireOperation, "Model": call.Rate.Model, "RateID": call.Rate.ID, "RateSnapshot": string(rateRaw), "BillingProfileVersion": call.BillingProfileVersion, "CallID": call.CallID, "ActorID": u.ID, "AccountID": account, "OriginProductID": "superwagie", "InstanceID": "default", "Asset": billing.CreditAsset, "FundingMode": billing.FundingCredits, "FundingProductID": "llmrouter", "Amount": fmt.Sprint(held), "Status": "UNKNOWN", "Evidence": "", "Intent": "", "Charged": "", "EvidenceConflict": false})
+	attempts, _ := json.Marshal([]map[string]any{{"ID": 58, "ChannelID": 102, "CallID": call.CallID, "Status": "DISPATCHED"}})
+	a := billing.PlatformFaultWaiverApproval{ApprovalStatement: "Explicitly approved full credit return for platform fault; supplier unresolved", ApprovalSourceSHA256: fmt.Sprintf("%064d", 3), Schema: 1, CaseID: "credit-incident", OperatorID: op.ID, Reason: "Customer waiver approved for platform failure; supplier result unresolved", CallID: call.CallID, ActorID: u.ID, AccountID: account, OriginProductID: "superwagie", InstanceID: "default", Asset: billing.CreditAsset, Held: fmt.Sprint(held), ProviderState: "PROVIDER_UNRESOLVED", OriginalEvidenceSHA256: fmt.Sprintf("%064d", 1), FollowupEvidenceSHA256: fmt.Sprintf("%064d", 2), ExpectedCentralRow: row, GatewayCall: gateway, GatewayAttempts: attempts}
+	l := &waiverLedger{balances: map[string]int64{reserved: held}, txs: map[string]ledger.Transaction{reserve.Reference: {ID: "credit-ledger-id", Reference: reserve.Reference, Postings: reserve.Postings}}}
+	f := waiverFixture{s: billing.New(p, store, l), p: p, authority: platformadmin.New(p, nil), l: l, approval: a, call: call, operator: op.ID}
+
+	got, e := f.apply()
+	if e != nil {
+		t.Fatalf("credit waiver rejected: %v", e)
+	}
+	if got.Status != "RELEASED" || got.Charged != "0" || got.ChargeAsset != billing.CreditAsset {
+		t.Fatalf("false settlement: %+v", got)
+	}
+	if n, _ := l.Balance(ctx, reserved, billing.CreditAsset); n != 0 {
+		t.Fatalf("reservation not returned: %d", n)
+	}
+	if n, _ := l.Balance(ctx, available, billing.CreditAsset); n != held {
+		t.Fatalf("credits not restored: %d", n)
 	}
 }
