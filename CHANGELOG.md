@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.53 - 2026-11-13
+
+- 补齐上一条：CREDIT 计价的托管调用在豁免校验里记录的 `pricing_source` 是 `llmrouter_native_credit`（不是 `llmrouter_native`），且计价版本为 `lr-native-credit-v1`；豁免的 native 报价分支原先只认后者，这类调用仍会被拒绝。现在两种来源都按同一份 native 报价契约校验。
+- 不改权限、幂等、证据不可改写等既有约束。
+
 ## 0.4.52 - 2026-11-13
 
 - 修复平台故障豁免（`unihub-call-waiver`）只支持现金预扣的问题：批准校验、账本预留交易校验和释放分录都把资产写死为 `CNY/6` + `prepaid_cash`，导致 CREDIT 计费（`CREDIT/6` + `credits`）的调用无法豁免。

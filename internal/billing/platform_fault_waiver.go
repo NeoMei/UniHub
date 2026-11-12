@@ -258,12 +258,14 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 			return out, ErrConflict
 		}
 		priceDigest := sha256.Sum256([]byte(gateway.NativePriceSnapshot))
-		if gateway.PricingSource != "llmrouter_native" || gateway.RateSnapshot != "" || gateway.CredentialVersion != out.CredentialVersion || gateway.CredentialVersion <= 0 || gateway.NativePriceSnapshot == "" || !reflect.DeepEqual(quote, *out.NativePricing) || validateNativeQuote(quote, out.WireOperation) != nil || quote.PricingDigest != hex.EncodeToString(priceDigest[:]) || quote.MaxAmount != out.Held {
+		// Credit-priced managed calls record the credit pricing source; both are
+		// the same native quote contract.
+		if (gateway.PricingSource != "llmrouter_native" && gateway.PricingSource != "llmrouter_native_credit") || gateway.RateSnapshot != "" || gateway.CredentialVersion != out.CredentialVersion || gateway.CredentialVersion <= 0 || gateway.NativePriceSnapshot == "" || !reflect.DeepEqual(quote, *out.NativePricing) || validateNativeQuote(quote, out.WireOperation) != nil || quote.PricingDigest != hex.EncodeToString(priceDigest[:]) || quote.MaxAmount != out.Held {
 			return out, ErrConflict
 		}
 	} else {
 		var gatewayRate Rate
-		if gateway.PricingSource == "llmrouter_native" || gateway.NativeQuoteJSON != "" || gateway.NativePriceSnapshot != "" || json.Unmarshal([]byte(gateway.RateSnapshot), &gatewayRate) != nil || !reflect.DeepEqual(gatewayRate, out.Rate) {
+		if gateway.PricingSource == "llmrouter_native" || gateway.PricingSource == "llmrouter_native_credit" || gateway.NativeQuoteJSON != "" || gateway.NativePriceSnapshot != "" || json.Unmarshal([]byte(gateway.RateSnapshot), &gatewayRate) != nil || !reflect.DeepEqual(gatewayRate, out.Rate) {
 			return out, ErrConflict
 		}
 	}
