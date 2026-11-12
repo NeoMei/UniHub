@@ -112,6 +112,41 @@ it("restores an account selection only for the currently signed-in user", async 
   render(<App />);
   await waitFor(() => expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("team"));
 });
+
+it("keeps the current payer when the user declines to abandon an unsaved user-permission edit", async () => {
+  window.history.replaceState(null, "", "/?account=personal&view=user-management");
+  vi.stubGlobal("confirm", vi.fn(() => false));
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/auth/session" ? { authenticated: true, user: { id: "admin", name: "Admin" }, sandbox: true, csrf_token: "csrf" }
+    : path === "/v1/user-management" ? { enabled: true, can_manage: true }
+    : path === "/v1/accounts" ? [
+      { id: "personal", name: "个人账户", kind: "personal", role: "owner" },
+      { id: "team", name: "团队账户", kind: "team", role: "owner" },
+    ]
+    : path === "/v1/user-management/products" ? [{
+      product_id: "llmrouter", instance_id: "default", name: "LLMRouter", entry_url: "https://router.test",
+      version: 1, default_roles: ["member"], roles: [
+        { id: "member", name: "Member", permissions: ["product:use"] },
+      ],
+    }]
+    : path.startsWith("/v1/user-management/users?") ? [
+      { id: "alice", name: "Alice", email: "alice@test", active: true, version: 1 },
+    ]
+    : path.endsWith("/access") ? [{
+      product_id: "llmrouter", instance_id: "default", roles: ["member"], active: true,
+      assignment_version: 0, manifest_version: 1, explicit: false,
+    }] : []
+  ), { status: 200 })));
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "管理 Alice" }));
+  fireEvent.click(await screen.findByLabelText("Member"));
+  expect(await screen.findByText("有未保存更改", { exact: false })).toBeDefined();
+  const payer = screen.getByLabelText("当前付费账户") as HTMLSelectElement;
+  fireEvent.change(payer, { target: { value: "team" } });
+  expect(payer.value).toBe("personal");
+  expect(window.confirm).toHaveBeenCalled();
+});
+
 it("shows the UniHub product portal before login", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     const data = path === "/auth/session"
