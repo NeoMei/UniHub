@@ -86,6 +86,32 @@ it("keeps a product-linked team selected across login and never falls back to pe
   await screen.findByText("所选账户不可访问，请明确选择一个账户。");
   expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("revoked");
 });
+it("ignores a stale account selection left by another login", async () => {
+  window.sessionStorage.setItem("unihub.account", "other-users-account");
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/auth/session"
+      ? { authenticated: true, user: { id: "xuefeng", name: "NeoMei" }, sandbox: true, csrf_token: "csrf" }
+      : path === "/v1/accounts"
+        ? [{ id: "personal", name: "NeoMei", kind: "personal", role: "owner" }]
+        : []
+  ), { status: 200 })));
+  render(<App />);
+  await waitFor(() => expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("personal"));
+  expect(screen.queryByText("所选账户不可访问，请明确选择一个账户。")).toBeNull();
+  expect(window.sessionStorage.getItem("unihub.account")).toBeNull();
+});
+it("restores an account selection only for the currently signed-in user", async () => {
+  window.sessionStorage.setItem("unihub.account:xuefeng", "team");
+  vi.stubGlobal("fetch", vi.fn(async (path: string) => new Response(JSON.stringify(
+    path === "/auth/session"
+      ? { authenticated: true, user: { id: "xuefeng", name: "NeoMei" }, sandbox: true, csrf_token: "csrf" }
+      : path === "/v1/accounts"
+        ? [{ id: "personal", name: "NeoMei", kind: "personal", role: "owner" }, { id: "team", name: "quukk", kind: "team", role: "member" }]
+        : []
+  ), { status: 200 })));
+  render(<App />);
+  await waitFor(() => expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("team"));
+});
 it("shows the UniHub product portal before login", async () => {
   vi.stubGlobal("fetch", vi.fn(async (path: string) => {
     const data = path === "/auth/session"

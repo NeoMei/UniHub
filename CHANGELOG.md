@@ -1,11 +1,17 @@
 # Changelog
 
-## 0.4.48 - 2026-11-12
+## 0.4.49 - 2026-11-12
 
-- 新增「跨账户守恒划款」：从操作者本人账户的统一钱包扣款、计入目标账户的统一钱包或指定产品钱包，不经 `world` 增发、不复用手工充值。以独立 `admin_transfer` 钱包操作类型落入既有 `wallet_operations` + 审计 + worker 异步账本提交，源账户锁串行、幂等键防重、整分校验，复用 `insufficient_funds→REJECTED` 与 `Find`/`APPLIED` 语义；新增迁移 030 扩展 kind 约束，worker 不改。
+- 新增「跨账户守恒划款」：从操作者本人账户的统一钱包扣款、计入目标账户的统一钱包或指定产品钱包，不经 `world` 增发、不复用手工充值。以独立 `admin_transfer` 钱包操作类型落入既有 `wallet_operations` + 审计 + worker 异步账本提交，源账户锁串行、幂等键防重、整分校验，复用 `insufficient_funds→REJECTED` 与 `Find`/`APPLIED` 语义；新增迁移 030 扩展 kind 约束，worker 不改。本版基于已上线的 0.4.48，保留其账户切换修复与 0.4.47 手工充值。
 - 两套 console 专属入口：`POST /admin/v1/transfers`（super_admin 凭 `admins:manage` 可划给任意账户，`finance_admin`/普通用户/产品令牌 403）与 `POST /v1/accounts/{account}/member-transfers`（团队 owner 划给自己的组员本人账户，服务端在同一事务内硬校验 owner 身份与组员关系，团队共用账户既不是源也不是目标）。两个端点均不进入 product-token scope 白名单，产品令牌 403；console 层统一 CSRF 覆盖；均要求 `Idempotency-Key`、202 异步。
 - 管理端 transactions 页为 `admins:manage` 新增「跨账户守恒划款」表单；钱包页为 `account.kind === "team" && account.role === "owner"` 新增「划款给组员」面板（组员来自 `GET /v1/accounts/{account}/members`，服务端硬校验兜底，不新增 capability）。
 - 新增 wallet 层 8 个测试（守恒/审计/产品目标/余额不足/幂等/整分/门禁回调/存储命令）、httpapi 两套路由门禁测试、前端面板可见性与提交契约测试；同步 OpenAPI 契约与 5 处版本元数据。不改变既有真实支付、商户配置、费率、手工充值或 sandbox 充值流程。
+
+## 0.4.48 - 2026-11-12
+
+- 修复同一浏览器标签页切换 UniHub 账号后，旧账号的付款账户提示导致当前账号显示“所选账户不可访问 / 暂无可访问的账户”的问题。
+- 明确链接中的账户仍按当前会话严格校验；普通进入时，属于当前用户的账户选择分开保存并恢复，无法访问的旧提示自动丢弃并选择本人的默认账户。
+- 新增账号切换与按用户恢复付款账户的浏览器回归测试。本次仅修改控制台前端和发布元数据，保持 0.4.47 的手工充值及其他后端能力不变。
 
 ## 0.4.47 - 2026-11-11
 
