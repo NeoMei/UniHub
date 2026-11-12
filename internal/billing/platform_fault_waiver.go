@@ -106,7 +106,9 @@ func ParsePlatformFaultWaiverApproval(raw []byte, expectedSHA string) (PlatformF
 		ChannelID int64
 		Status    string
 	}
-	if json.Unmarshal(a.GatewayAttempts, &attempts) != nil || len(attempts) != 1 || attempts[0].ID <= 0 || attempts[0].ChannelID <= 0 || attempts[0].CallID != a.CallID || attempts[0].Status != "DISPATCHED" {
+	// DISPATCHED means the request left for the supplier; UNKNOWN means it left and
+	// the answer was lost. Both are exactly the unresolved sends a waiver exists for.
+	if json.Unmarshal(a.GatewayAttempts, &attempts) != nil || len(attempts) != 1 || attempts[0].ID <= 0 || attempts[0].ChannelID <= 0 || attempts[0].CallID != a.CallID || (attempts[0].Status != "DISPATCHED" && attempts[0].Status != "UNKNOWN") {
 		return a, ErrInvalid
 	}
 	return a, nil
