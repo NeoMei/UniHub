@@ -2019,7 +2019,7 @@ td strong {
 .user-access-toggle input:disabled + .user-access-track { opacity: .55; }
 .user-role-fieldset { min-width: 0; margin: 0; padding: 15px 18px 17px; border: 0; }
 .user-role-fieldset legend { padding: 0; color: #526b74; font-size: 13px; }
-.user-role-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 9px; }
+.user-role-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 9px; }
 .user-role-card { display: flex; min-width: 0; flex-direction: column; overflow: hidden; border: 1px solid #dce6e8; border-radius: 6px; background: #fff; transition: border-color .12s, background .12s; }
 .user-role-card:hover { border-color: #c7dade; }
 .user-role-card.is-selected { border-color: #78b8bc; background: #f6fbfb; }
@@ -2062,7 +2062,7 @@ td strong {
   .user-profile-summary { grid-template-columns: 1fr 1fr; }
   .user-profile-summary > div:nth-child(2) { border-right: 0; }
   .user-profile-summary > div:last-child { grid-column: 1 / -1; border-top: 1px solid var(--user-soft-line); }
-  .user-role-grid { grid-template-columns: repeat(auto-fit, minmax(195px, 1fr)); }
+  .user-role-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 800px) {
   .user-admin-heading { flex-direction: column; gap: 14px; padding-bottom: 20px; }
@@ -2084,7 +2084,7 @@ td strong {
   .user-product-head { flex-direction: column; gap: 6px; padding: 13px 14px 11px; }
   .user-access-toggle { align-self: flex-start; }
   .user-role-fieldset { padding: 13px 14px 14px; }
-  .user-role-grid { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+  .user-role-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .user-product-footer { align-items: stretch; flex-direction: column; padding: 10px 14px; }
   .user-product-footer button { width: 100%; }
 }
