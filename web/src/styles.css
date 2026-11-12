@@ -2092,7 +2092,7 @@ td strong {
 .user-directory-limit, .user-mobile-directory-toggle { display: none; }
 .user-modal-body { padding: 20px 23px; font-size: 13px; line-height: 1.7; }
 .user-modal-body > p { color: var(--user-text); }
-.user-directory.is-mobile-collapsed { display: block; }
+.user-directory.is-mobile-collapsed { display: none; }
 @media (max-width: 800px) {
   .user-directory.is-mobile-collapsed { display: none; }
   .user-mobile-directory-toggle { display: inline-flex; width: 100%; justify-content: center; margin: 0 0 14px; }
