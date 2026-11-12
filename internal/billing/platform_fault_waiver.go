@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
+	"unihub/internal/ledger"
 	"unihub/internal/wallet"
 )
 
@@ -63,7 +64,7 @@ func ParsePlatformFaultWaiverApproval(raw []byte, expectedSHA string) (PlatformF
 		return a, ErrInvalid
 	}
 	n, err := integer(a.Held, true)
-	if err != nil || str(n) != a.Held || a.Schema != 1 || strings.TrimSpace(a.ApprovalStatement) == "" || len(a.ApprovalStatement) > 16000 || !keyOK(a.CaseID) || !keyOK(a.CallID) || !keyOK(a.OperatorID) || !keyOK(a.ActorID) || !keyOK(a.AccountID) || strings.TrimSpace(a.Reason) == "" || len(a.Reason) > 2000 || (a.OriginProductID != "llmrouter" && a.OriginProductID != "superwagie") || a.InstanceID == "" || a.Asset != CashAsset || a.ProviderState != "PROVIDER_UNRESOLVED" {
+	if err != nil || str(n) != a.Held || a.Schema != 1 || strings.TrimSpace(a.ApprovalStatement) == "" || len(a.ApprovalStatement) > 16000 || !keyOK(a.CaseID) || !keyOK(a.CallID) || !keyOK(a.OperatorID) || !keyOK(a.ActorID) || !keyOK(a.AccountID) || strings.TrimSpace(a.Reason) == "" || len(a.Reason) > 2000 || (a.OriginProductID != "llmrouter" && a.OriginProductID != "superwagie") || a.InstanceID == "" || (a.Asset != CashAsset && a.Asset != CreditAsset) || a.ProviderState != "PROVIDER_UNRESOLVED" {
 		return a, ErrInvalid
 	}
 	for _, v := range []string{a.ApprovalSourceSHA256, a.OriginalEvidenceSHA256, a.FollowupEvidenceSHA256} {
@@ -80,7 +81,11 @@ func ParsePlatformFaultWaiverApproval(raw []byte, expectedSHA string) (PlatformF
 	if json.Unmarshal(a.GatewayCall, &g) != nil {
 		return a, ErrInvalid
 	}
-	required := map[string]string{"CallID": a.CallID, "ActorID": a.ActorID, "AccountID": a.AccountID, "OriginProductID": a.OriginProductID, "InstanceID": a.InstanceID, "Asset": a.Asset, "FundingMode": FundingPrepaidCash, "FundingProductID": "llmrouter", "Amount": a.Held, "Status": "UNKNOWN", "Evidence": "", "Intent": ""}
+	wantMode := FundingPrepaidCash
+	if a.Asset == CreditAsset {
+		wantMode = FundingCredits
+	}
+	required := map[string]string{"CallID": a.CallID, "ActorID": a.ActorID, "AccountID": a.AccountID, "OriginProductID": a.OriginProductID, "InstanceID": a.InstanceID, "Asset": a.Asset, "FundingMode": wantMode, "FundingProductID": "llmrouter", "Amount": a.Held, "Status": "UNKNOWN", "Evidence": "", "Intent": ""}
 	for k, w := range required {
 		var v string
 		if json.Unmarshal(g[k], &v) != nil || v != w {
@@ -101,7 +106,9 @@ func ParsePlatformFaultWaiverApproval(raw []byte, expectedSHA string) (PlatformF
 		ChannelID int64
 		Status    string
 	}
-	if json.Unmarshal(a.GatewayAttempts, &attempts) != nil || len(attempts) != 1 || attempts[0].ID <= 0 || attempts[0].ChannelID <= 0 || attempts[0].CallID != a.CallID || attempts[0].Status != "DISPATCHED" {
+	// DISPATCHED means the request left for the supplier; UNKNOWN means it left and
+	// the answer was lost. Both are exactly the unresolved sends a waiver exists for.
+	if json.Unmarshal(a.GatewayAttempts, &attempts) != nil || len(attempts) != 1 || attempts[0].ID <= 0 || attempts[0].ChannelID <= 0 || attempts[0].CallID != a.CallID || (attempts[0].Status != "DISPATCHED" && attempts[0].Status != "UNKNOWN") {
 		return a, ErrInvalid
 	}
 	return a, nil
@@ -218,7 +225,13 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 	if json.Unmarshal(snapshot, &out) != nil {
 		return out, ErrInvalid
 	}
-	if out.CallID != a.CallID || out.ActorID != a.ActorID || out.AccountID != a.AccountID || out.ServiceID != "llmrouter" || out.OriginProductID != a.OriginProductID || out.InstanceID != a.InstanceID || out.ChargeAsset != CashAsset || out.Rate.Asset != CashAsset || out.FundingMode != FundingPrepaidCash || out.FundingProductID != "llmrouter" || out.Held != a.Held || out.Charged != "0" || out.Status != "RESERVED" || out.Usage != nil || out.ProviderCost != "" || out.FinalDigest != "" {
+	// Cash and credits hold their funds in different ledgers, so the row must
+	// match the approved asset exactly rather than assume cash.
+	wantMode := FundingPrepaidCash
+	if a.Asset == CreditAsset {
+		wantMode = FundingCredits
+	}
+	if out.CallID != a.CallID || out.ActorID != a.ActorID || out.AccountID != a.AccountID || out.ServiceID != "llmrouter" || out.OriginProductID != a.OriginProductID || out.InstanceID != a.InstanceID || out.ChargeAsset != a.Asset || out.Rate.Asset != a.Asset || out.FundingMode != wantMode || out.FundingProductID != "llmrouter" || out.Held != a.Held || out.Charged != "0" || out.Status != "RESERVED" || out.Usage != nil || out.ProviderCost != "" || out.FinalDigest != "" {
 		return out, ErrConflict
 	}
 	var gateway struct {
@@ -247,12 +260,14 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 			return out, ErrConflict
 		}
 		priceDigest := sha256.Sum256([]byte(gateway.NativePriceSnapshot))
-		if gateway.PricingSource != "llmrouter_native" || gateway.RateSnapshot != "" || gateway.CredentialVersion != out.CredentialVersion || gateway.CredentialVersion <= 0 || gateway.NativePriceSnapshot == "" || !reflect.DeepEqual(quote, *out.NativePricing) || validateNativeQuote(quote, out.WireOperation) != nil || quote.PricingDigest != hex.EncodeToString(priceDigest[:]) || quote.MaxAmount != out.Held {
+		// Credit-priced managed calls record the credit pricing source; both are
+		// the same native quote contract.
+		if (gateway.PricingSource != "llmrouter_native" && gateway.PricingSource != "llmrouter_native_credit") || gateway.RateSnapshot != "" || gateway.CredentialVersion != out.CredentialVersion || gateway.CredentialVersion <= 0 || gateway.NativePriceSnapshot == "" || !reflect.DeepEqual(quote, *out.NativePricing) || validateNativeQuote(quote, out.WireOperation) != nil || quote.PricingDigest != hex.EncodeToString(priceDigest[:]) || quote.MaxAmount != out.Held {
 			return out, ErrConflict
 		}
 	} else {
 		var gatewayRate Rate
-		if gateway.PricingSource == "llmrouter_native" || gateway.NativeQuoteJSON != "" || gateway.NativePriceSnapshot != "" || json.Unmarshal([]byte(gateway.RateSnapshot), &gatewayRate) != nil || !reflect.DeepEqual(gatewayRate, out.Rate) {
+		if gateway.PricingSource == "llmrouter_native" || gateway.PricingSource == "llmrouter_native_credit" || gateway.NativeQuoteJSON != "" || gateway.NativePriceSnapshot != "" || json.Unmarshal([]byte(gateway.RateSnapshot), &gatewayRate) != nil || !reflect.DeepEqual(gatewayRate, out.Rate) {
 			return out, ErrConflict
 		}
 	}
@@ -265,7 +280,29 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 		return out, ErrPending
 	}
 	n, _ := integer(a.Held, true)
-	balance, e := s.ledger.Balance(ctx, cashHoldForCall(out), CashAsset)
+	// The hold lives in the cash ledger or in batch addresses, never both.
+	holdBalance := func(asset string) (int64, error) {
+		if asset == CreditAsset {
+			total := int64(0)
+			for _, alloc := range out.Allocations {
+				amount, e := integer(alloc.Amount, false)
+				if e != nil {
+					return 0, e
+				}
+				balance, e := s.ledger.Balance(ctx, BatchAddress(alloc.BatchID, "reserved"), CreditAsset)
+				if e != nil {
+					return 0, e
+				}
+				if balance != amount {
+					return 0, ErrConflict
+				}
+				total += amount
+			}
+			return total, nil
+		}
+		return s.ledger.Balance(ctx, cashHoldForCall(out), CashAsset)
+	}
+	balance, e := holdBalance(a.Asset)
 	if e != nil {
 		return out, e
 	}
@@ -289,14 +326,17 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 	if e != nil {
 		return out, e
 	}
-	if originalTx == nil || originalTx.Reference != reserve.Ledger.Reference || originalTx.ID == "" || originalTx.ID != reserveLedgerID || !reflect.DeepEqual(originalTx.Postings, reserve.Ledger.Postings) || len(reserve.Ledger.Postings) != 1 || reserve.Ledger.Postings[0].Source != wallet.Address(a.AccountID, "llmrouter") || reserve.Ledger.Postings[0].Destination != cashHoldForCall(out) || reserve.Ledger.Postings[0].Asset != CashAsset || reserve.Ledger.Postings[0].Amount != n {
+	if originalTx == nil || originalTx.Reference != reserve.Ledger.Reference || originalTx.ID == "" || originalTx.ID != reserveLedgerID || !reflect.DeepEqual(originalTx.Postings, reserve.Ledger.Postings) {
+		return out, ErrConflict
+	}
+	if !waiverHoldPostsMatch(out, a, reserve.Ledger.Postings, n) {
 		return out, ErrConflict
 	}
 	if !apply {
 		return out, nil
 	}
 	// A current ledger hold and the exact approved database row are independent checks.
-	posts, e := cashFinalPosts(out, 0)
+	posts, e := waiverReleasePosts(out, a)
 	if e != nil {
 		return out, e
 	}
@@ -312,7 +352,7 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 	if err != nil {
 		return out, err
 	}
-	if err = authority.WriteAudit(ctx, tx, actor, "finance.platform_fault_waiver", a.CallID, a.Reason, map[string]any{"case_id": a.CaseID, "approval_sha256": approvalSHA, "release_command_id": commandID, "original_central_row": json.RawMessage(original), "original_commands": json.RawMessage(commands), "provider_state": a.ProviderState, "held": a.Held, "asset": CashAsset}); err != nil {
+	if err = authority.WriteAudit(ctx, tx, actor, "finance.platform_fault_waiver", a.CallID, a.Reason, map[string]any{"case_id": a.CaseID, "approval_sha256": approvalSHA, "release_command_id": commandID, "original_central_row": json.RawMessage(original), "original_commands": json.RawMessage(commands), "provider_state": a.ProviderState, "held": a.Held, "asset": a.Asset}); err != nil {
 		return out, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -324,4 +364,55 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 		return out, e
 	}
 	return saved, err
+}
+
+// waiverHoldPostsMatch proves the recorded reserve moved exactly the approved
+// amount out of the payer, in the asset the approval names. Cash holds sit in a
+// per-call address; credits sit in each batch's reserved bucket.
+func waiverHoldPostsMatch(call Call, a PlatformFaultWaiverApproval, posts []ledger.Posting, held int64) bool {
+	if a.Asset == CreditAsset {
+		if len(call.Allocations) == 0 || len(posts) != len(call.Allocations) {
+			return false
+		}
+		total := int64(0)
+		for _, p := range posts {
+			matched := false
+			for _, alloc := range call.Allocations {
+				amount, e := integer(alloc.Amount, false)
+				if e != nil {
+					return false
+				}
+				if p.Source == BatchAddress(alloc.BatchID, "available") && p.Destination == BatchAddress(alloc.BatchID, "reserved") && p.Amount == amount {
+					matched = true
+					total += amount
+					break
+				}
+			}
+			if !matched || p.Asset != CreditAsset {
+				return false
+			}
+		}
+		return total == held
+	}
+	return len(posts) == 1 && posts[0].Source == wallet.Address(a.AccountID, "llmrouter") && posts[0].Destination == cashHoldForCall(call) && posts[0].Asset == CashAsset && posts[0].Amount == held
+}
+
+// waiverReleasePosts returns the postings that give the whole hold back. The
+// customer owes nothing for a call whose provider outcome cannot be resolved.
+func waiverReleasePosts(call Call, a PlatformFaultWaiverApproval) ([]ledger.Posting, error) {
+	if a.Asset == CreditAsset {
+		posts := []ledger.Posting{}
+		for _, alloc := range call.Allocations {
+			amount, e := integer(alloc.Amount, false)
+			if e != nil {
+				return nil, e
+			}
+			posts = append(posts, ledger.Posting{Source: BatchAddress(alloc.BatchID, "reserved"), Destination: BatchAddress(alloc.BatchID, "available"), Asset: CreditAsset, Amount: amount})
+		}
+		if len(posts) == 0 {
+			return nil, ErrConflict
+		}
+		return posts, nil
+	}
+	return cashFinalPosts(call, 0)
 }
