@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.55 - 2026-11-14
+
+- 消费汇总现在接受 credit-v1 托管调用里带 `metered_v2` 的有效用量观察，并沿用结算时的 native 校验和冻结扣费；畸形观察、混合旧计数和无效扣费仍返回错误。
+- 已结算的调用计入 `native_metered_calls` 与 `native_usage`；历史快照不改写，缺失 usage 的记录仍会反映在覆盖标记里。
+
 ## 0.4.54 - 2026-11-13
 
 - 豁免校验接受的网关尝试状态从仅 `DISPATCHED` 放宽到 `DISPATCHED` 或 `UNKNOWN`：`UNKNOWN` 正是「请求已发出但结果丢失」的标记，本就是该机制要处理的场景；11-11 那批卡住的调用全部是 `UNKNOWN`。
