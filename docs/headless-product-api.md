@@ -269,6 +269,12 @@ quantity or number of dimensions. Pending, unknown, released and rejected record
 do not count. Missing legacy usage does not count. Invalid stored native evidence
 still fails the summary instead of yielding coverage. Product-runtime arbitrary
 usage is not projected into either aggregate and therefore is not covered.
+A product-native `lr-native-credit-v1` call may keep `rate.semantics="llmrouter_native"`
+and still carry a validated `metered_v2` observation; such a settled call counts
+in `native_metered_calls` and its dimensions appear in `native_usage`. Its frozen
+native quota and conversion remain the authoritative charge, so the summary does
+not recalculate it with a central metered tariff. Malformed observations, mixed
+legacy counters and invalid `charged` amounts still fail the summary.
 
 Counts and quantities share the existing repeatable-read snapshot and all
 account, actor, product, source, instance, model, asset and time filters. Members

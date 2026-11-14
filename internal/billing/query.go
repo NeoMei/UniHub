@@ -475,7 +475,15 @@ func (s *Service) QueryCallWithFilter(ctx context.Context, actor, account, callI
 const validLegacyUsageSQL = `(c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND (c.snapshot#>>'{usage,input}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,output}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,cache_read}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,cache_write}') ~ '^(0|[1-9][0-9]*)$' AND (c.snapshot#>>'{usage,reasoning}') ~ '^(0|[1-9][0-9]*)$')`
 
 const nativeUsageSQL = `(c.snapshot#>>'{rate,semantics}'='metered_v2' AND c.snapshot#>>'{usage,metered,state}'='confirmed')`
-const validUsageSQL = `(` + validLegacyUsageSQL + ` OR ` + nativeUsageSQL + `)`
+
+// Product-native credit-v1 stores rate.semantics='llmrouter_native' together
+// with an optional metered_v2 observation. Its charge comes from the frozen
+// native quota and conversion, so reporting must not recalculate it with a
+// central metered tariff. The native scan below applies validateNativeUsage
+// to every selected observation, keeping malformed stored evidence an error.
+const nativeCreditUsageSQL = `(c.snapshot#>>'{native_pricing,pricing_version}'='` + NativeCreditPricingVersion + `' AND c.snapshot#>>'{rate,semantics}'='llmrouter_native' AND c.snapshot#>>'{usage,metered,version}'='metered_v2' AND c.snapshot#>>'{usage,metered,state}'='confirmed')`
+const validUsageSQL = `(` + validLegacyUsageSQL + ` OR ` + nativeUsageSQL + ` OR ` + nativeCreditUsageSQL + `)`
+const nativeUsageSelectSQL = `(` + nativeUsageSQL + ` OR ` + nativeCreditUsageSQL + `)`
 
 func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, f CallFilter) (UsageSummary, error) {
 	out := UsageSummary{Asset: CreditAsset, ByStatus: map[string]string{}, UsageCoverage: UsageCoverage{LegacyTokenCalls: "0", NativeMeteredCalls: "0"}}
@@ -508,7 +516,7 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 		return out, fmt.Errorf("billing: invalid stored call counters")
 	}
 	// Aggregate native quantities independently of money and legacy counters.
-	nativeRows, nativeErr := tx.Query(ctx, `SELECT c.snapshot FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere+` AND `+callReportStatus+`='SETTLED' AND c.snapshot#>>'{rate,semantics}'='metered_v2'`, args...)
+	nativeRows, nativeErr := tx.Query(ctx, `SELECT c.snapshot FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere+` AND `+callReportStatus+`='SETTLED' AND `+nativeUsageSelectSQL, args...)
 	if nativeErr != nil {
 		return out, nativeErr
 	}
@@ -528,7 +536,12 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 			nativeErr = ErrInvalid
 			break
 		}
-		if _, nativeErr = CalculateCharge(call.Rate, *call.Usage); nativeErr != nil {
+		if call.NativePricing != nil && call.NativePricing.PricingVersion == NativeCreditPricingVersion && call.Rate.Semantics == "llmrouter_native" {
+			nativeErr = validateNativeUsage(call.Usage)
+		} else {
+			_, nativeErr = CalculateCharge(call.Rate, *call.Usage)
+		}
+		if nativeErr != nil {
 			break
 		}
 		nativeCount.Add(nativeCount, big.NewInt(1))

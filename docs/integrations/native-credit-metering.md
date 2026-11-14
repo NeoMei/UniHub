@@ -61,6 +61,14 @@ A point quote has `pricing_version=lr-native-credit-v1`, `asset=CREDIT/6`, and t
 
 The native quote and LLMRouter price snapshot freeze conversion and native pricing together. Native quota remains the provider-metered quantity. `provider_cost` remains an independent optional CNY/6 observation and never determines the point charge.
 
+An optional settlement `usage.metered` observation may use `metered_v2` even
+though the call rate retains `semantics="llmrouter_native"`. This is audit
+evidence, not a central tariff: `QueryUsageSummary` validates it with the same
+native usage rules as `SettleNative`, includes its dimensions in
+`native_usage` / `native_metered_calls`, and preserves the frozen native charge.
+Malformed measurements or mixed legacy counters keep the summary in an error
+state. Historical call snapshots are not rewritten.
+
 UniHub allocates eligible CREDIT sources in earliest-expiry order and reserves source batches. Frozen, future, or expired batches are ineligible. Insufficient credits never trigger a CNY wallet fallback. Limits and reports use the key/call's `CREDIT/6` asset. Settlement consumes original reservations; unused amounts return to the original source, or its expired bucket if its term ended. Release uses the same source-aware path. Existing source-freeze and commercial-refund controls apply to these same real batches.
 
 Unknown reserve/top-up/settlement outcomes retain durable commands and original idempotency. LLMRouter top-up recovery validates that old CREDIT allocations remain an unchanged prefix before accepting appended source allocations, then persists the new funding snapshot. It never adopts a changed payer or replaced original batch. An over-hold actual charge remains pending until a successful budgeted top-up; it is not truncated or moved to cash. Service recovery does not dispatch another model request.
