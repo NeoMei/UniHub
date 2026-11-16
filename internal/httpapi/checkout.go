@@ -117,16 +117,30 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 			fail(w, 400, "invalid_notification")
 			return
 		}
+		// Cash-topup notifications share this route; cash service verifies the
+		// provider signature and ignores non-cash orders.
+		if handled, ce := s.notifyCashTopup(r, provider, r.Header, body); handled {
+			if ce != nil {
+				fail(w, 400, "invalid_notification")
+				return
+			}
+			respondNotification(w, provider)
+			return
+		}
 		if e = b.NotifyCheckout(r.Context(), provider, r.Header, body); e != nil {
 			fail(w, 400, "invalid_notification")
 			return
 		}
-		if provider == "alipay" {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(200)
-			_, _ = w.Write([]byte("success"))
-			return
-		}
-		respond(w, 200, map[string]string{"code": "SUCCESS", "message": "成功"})
+		respondNotification(w, provider)
 	})
+}
+
+func respondNotification(w http.ResponseWriter, provider string) {
+	if provider == "alipay" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("success"))
+		return
+	}
+	respond(w, 200, map[string]string{"code": "SUCCESS", "message": "成功"})
 }

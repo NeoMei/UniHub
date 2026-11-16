@@ -15,6 +15,7 @@ import (
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
 	"unihub/internal/billing"
+	"unihub/internal/cashtopup"
 	"unihub/internal/identityapi"
 	"unihub/internal/ledger"
 	"unihub/internal/modelaccess"
@@ -37,6 +38,7 @@ type Options struct {
 	Merchant             string
 	SigningKey           []byte
 	Billing              *billing.Service
+	CashTopup            *cashtopup.Service
 	ServiceToken         string
 	ModelAccess          *modelaccess.Service
 	OperatorVerifier     auth.Verifier
@@ -72,6 +74,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 			o.ModelAccess.ConfigureProductUsers(o.ProductUsers)
 		}
 	}
+	if o.CashTopup != nil && o.PaymentProviders != nil {
+		o.CashTopup.ConfigureProviders(o.PaymentProviders)
+	}
 	if o.Billing != nil && o.PaymentProviders != nil {
 		o.Billing.ConfigurePayments(o.PaymentProviders)
 	}
@@ -97,6 +102,9 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 	}
 	if o.Billing != nil {
 		s.billingRoutes(m, add)
+	}
+	if o.CashTopup != nil {
+		s.cashTopupRoutes(add)
 	}
 	if o.Billing != nil && o.ModelAccess != nil {
 		s.modelRoutes(m, add)
