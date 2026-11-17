@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"net/url"
 
 	"unihub/internal/accounts"
 	"unihub/internal/cashtopup"
@@ -25,6 +26,7 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		if e := requireBillingProduct(r, body.ProductID); e != nil {
 			return e
 		}
+		body.ReturnURL = cashTopupReturnURL(r)
 		x, e := c.Create(r.Context(), u.ID, r.PathValue("account"), body)
 		if e != nil {
 			return e
@@ -59,6 +61,22 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		}
 		return respond(w, 200, x)
 	})
+}
+
+// Return destinations come only from the verified client's registered origin.
+// Other products and central-console payments retain their merchant defaults.
+func cashTopupReturnURL(r *http.Request) string {
+	policy, ok := productPolicy(r)
+	if !ok || policy.ProductID != "llmrouter" {
+		return ""
+	}
+	for _, origin := range policy.Origins {
+		u, err := url.Parse(origin)
+		if err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" {
+			return origin + "/wallet"
+		}
+	}
+	return ""
 }
 
 // notifyCashTopup is called by the shared /payments/{provider}/notify route.

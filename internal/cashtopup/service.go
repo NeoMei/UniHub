@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"regexp"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ type Request struct {
 	ProductID string `json:"product_id,omitempty"`
 	Amount    string `json:"amount"`
 	Key       string `json:"-"`
+	ReturnURL string `json:"-"`
 }
 
 type Checkout struct {
@@ -209,7 +211,11 @@ func (s *Service) Create(ctx context.Context, actor, account string, r Request) 
 		}
 	}
 	e = s.locked(ctx, account, func(c *pgxpool.Conn) error {
-		d := digest([]string{actor, r.Provider, r.ProductID, r.Amount})
+		parts := []string{actor, r.Provider, r.ProductID, r.Amount}
+		if r.ReturnURL != "" {
+			parts = append(parts, r.ReturnURL)
+		}
+		d := digest(parts)
 		var old record
 		old, e = load(ctx, c, account, r.Key)
 		if e == nil {
@@ -228,7 +234,18 @@ func (s *Service) Create(ctx context.Context, actor, account string, r Request) 
 		now := s.now().UTC()
 		expires := now.Add(15 * time.Minute)
 		id := newID()
-		sess, e := p.Create(ctx, payments.Request{OrderID: id, Amount: r.Amount, Description: "Cash wallet topup", ExpiresAt: expires})
+		returnURL := ""
+		if r.ReturnURL != "" {
+			u, err := url.Parse(r.ReturnURL)
+			if err != nil {
+				return ErrInvalid
+			}
+			q := u.Query()
+			q.Set("cash_checkout", id)
+			u.RawQuery = q.Encode()
+			returnURL = u.String()
+		}
+		sess, e := p.Create(ctx, payments.Request{OrderID: id, Amount: r.Amount, Description: "Cash wallet topup", ExpiresAt: expires, ReturnURL: returnURL})
 		if e != nil {
 			return e
 		}

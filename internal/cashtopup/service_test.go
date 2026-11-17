@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -20,12 +23,13 @@ type fakeProvider struct {
 	id        string
 	merchant  string
 	createErr error
+	requests  map[string]payments.Request
 	sessions  map[string]payments.Session
 	paid      map[string]payments.Result
 }
 
 func newFakeProvider(id string) *fakeProvider {
-	return &fakeProvider{id: id, merchant: "m-" + id, sessions: map[string]payments.Session{}, paid: map[string]payments.Result{}}
+	return &fakeProvider{id: id, merchant: "m-" + id, requests: map[string]payments.Request{}, sessions: map[string]payments.Session{}, paid: map[string]payments.Result{}}
 }
 func (p *fakeProvider) ID() string         { return p.id }
 func (p *fakeProvider) MerchantID() string { return p.merchant }
@@ -35,6 +39,7 @@ func (p *fakeProvider) Create(_ context.Context, r payments.Request) (payments.S
 	}
 	s := payments.Session{Kind: "redirect", URL: "https://pay.example/" + r.OrderID, ExpiresAt: r.ExpiresAt}
 	p.sessions[r.OrderID] = s
+	p.requests[r.OrderID] = r
 	return s, nil
 }
 func (p *fakeProvider) Query(_ context.Context, id string) (payments.Result, error) {
@@ -198,4 +203,23 @@ func TestInvalidInput(t *testing.T) {
 	if _, e := f.svc.Create(ctx, f.user.ID, f.account.ID, Request{Provider: "bogus", Amount: "1000000", Key: "k"}); !errors.Is(e, ErrInvalid) {
 		t.Fatalf("expected invalid provider, got %v", e)
 	}
+}
+
+func TestCheckoutReturnBindsOrderAndIdempotency(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	req := Request{Provider: "wechat", ProductID: "llmrouter", Amount: "20000000", Key: "return-1", ReturnURL: "https://llmrouter.quukk.com/wallet"}
+	x, err := f.svc.Create(ctx, f.user.ID, f.account.ID, req)
+	require.NoError(t, err)
+	u, err := url.Parse(f.provider.requests[x.ID].ReturnURL)
+	require.NoError(t, err)
+	assert.Equal(t, "https://llmrouter.quukk.com", u.Scheme+"://"+u.Host)
+	assert.Equal(t, "/wallet", u.Path)
+	assert.Equal(t, x.ID, u.Query().Get("cash_checkout"))
+	replay, err := f.svc.Create(ctx, f.user.ID, f.account.ID, req)
+	require.NoError(t, err)
+	assert.Equal(t, x.ID, replay.ID)
+	req.ReturnURL = "https://other.example/wallet"
+	_, err = f.svc.Create(ctx, f.user.ID, f.account.ID, req)
+	assert.ErrorIs(t, err, ErrConflict)
 }

@@ -18,7 +18,9 @@ var (
 
 type Request struct {
 	OrderID, Amount, Description string
-	ExpiresAt                    time.Time
+	// ReturnURL is supplied by trusted product policy, never by a payment receipt.
+	ReturnURL string
+	ExpiresAt time.Time
 }
 type Session struct {
 	Kind      string    `json:"kind"`

@@ -79,6 +79,15 @@ func (a *Alipay) Create(ctx context.Context, r Request) (Session, error) {
 	if e := validRequest(r); e != nil {
 		return Session{}, e
 	}
+	if r.ReturnURL != "" {
+		if !trustedHTTPS(r.ReturnURL) {
+			return Session{}, ErrInvalid
+		}
+		// A per-checkout copy keeps other products' merchant defaults unchanged.
+		copy := *a
+		copy.cfg.ReturnURL = r.ReturnURL
+		a = &copy
+	}
 	fen, _ := toFen(r.Amount)
 	biz := map[string]string{"out_trade_no": r.OrderID, "total_amount": fenYuan(fen), "subject": r.Description, "product_code": "FAST_INSTANT_TRADE_PAY", "time_expire": r.ExpiresAt.In(chinaTime).Format(alipayTime)}
 	v, e := a.params("alipay.trade.page.pay", biz, true)
