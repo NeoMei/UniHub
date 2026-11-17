@@ -494,7 +494,7 @@ func writeError(w http.ResponseWriter, e error) {
 		fail(w, 400, "invalid_request")
 	case errors.Is(e, paymentconfig.ErrUnavailable):
 		fail(w, 503, "payment_configuration_unavailable")
-	case errors.Is(e, paymentUnavailable) || errors.Is(e, billing.ErrPaymentUnavailable):
+	case errors.Is(e, paymentUnavailable) || errors.Is(e, billing.ErrPaymentUnavailable) || errors.Is(e, cashtopup.ErrPaymentUnavailable):
 		fail(w, 503, "payment_not_configured")
 	case errors.Is(e, billing.ErrInvalid):
 		fail(w, 400, "invalid_request")

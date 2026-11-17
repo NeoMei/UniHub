@@ -25,7 +25,11 @@ import (
 const maxBody = 1 << 20
 
 var integer = regexp.MustCompile(`^[1-9][0-9]*$`)
-var identifier = regexp.MustCompile(`^[A-Za-z0-9]{1,32}$`)
+
+// identifier validates provider-facing order ids. Billing checkouts use 32
+// hex chars, while cash wallet checkouts use a ct_ prefix plus 24 hex chars
+// (cashtopup.CheckoutIDPrefix); both must pass Create/Query/Close/notify.
+var identifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var refundIdentifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 var yuanPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]{1,2})?$`)
 
