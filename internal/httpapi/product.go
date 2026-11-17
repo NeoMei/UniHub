@@ -44,6 +44,7 @@ func productScopeAllowed(pattern string, c products.Client) bool {
 		"POST /v1/accounts/{account}/recharges/{order}/sandbox-settle": "recharges:write", "POST /v1/accounts/{account}/transfers": "transfers:write",
 		"GET /v1/accounts/{account}/operations": "operations:read", "GET /v1/accounts/{account}/operations/{operation}": "operations:read",
 		"GET /v1/accounts/{account}/checkouts": "orders:read", "GET /v1/accounts/{account}/checkouts/{checkout}": "orders:read", "POST /v1/accounts/{account}/checkouts": "orders:write", "POST /v1/accounts/{account}/checkouts/{checkout}/reconcile": "orders:write", "POST /v1/accounts/{account}/checkouts/{checkout}/close": "orders:write", "POST /v1/accounts/{account}/checkouts/{checkout}/refund": "refunds:write",
+		"POST /v1/accounts/{account}/cash-checkouts": "recharges:write", "GET /v1/accounts/{account}/cash-checkouts": "recharges:read", "GET /v1/accounts/{account}/cash-checkouts/{checkout}": "recharges:read", "POST /v1/accounts/{account}/cash-checkouts/{checkout}/reconcile": "recharges:write", "POST /v1/accounts/{account}/cash-checkouts/{checkout}/close": "recharges:write",
 		"GET /v1/accounts/{account}/orders": "orders:read", "POST /v1/accounts/{account}/orders": "orders:write",
 		"POST /v1/accounts/{account}/quotes": "orders:write", "POST /v1/accounts/{account}/quotes/{quote}/accept": "orders:write",
 		"GET /v1/accounts/{account}/settings": "settings:read", "PUT /v1/accounts/{account}/settings": "settings:write",

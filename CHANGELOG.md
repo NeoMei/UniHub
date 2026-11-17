@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.58 - 2026-11-17
+
+- 修复内部产品资金通道未注册 cash-checkouts 路由，导致 LLMRouter 原生钱包充值经 BFF 透传后返回 404：在 internal product-finance lane 注册现金充值下单/列表/详情/对账/关闭 5 条路由，按 recharges:read/write scope 放行，并要求 Idempotency-Key。业务资金逻辑、商户配置与数据库结构不变，无新增迁移。
+
 ## 0.4.57 - 2026-11-17
 
 - 新增真实现金钱包充值：用户可通过微信支付/支付宝为产品钱包充值，回调验签后以 cash_topup 幂等入账；独立于商业订单结算，新增 cash_checkouts/cash_payment_receipts 表与 031 迁移。复用既有支付配置与共享回调路由，不新增商户凭据。

@@ -17,6 +17,7 @@ import (
 // second set of account, role, ledger, or model-key rules.
 var productFinanceRoutes = []string{
 	"POST /v1/accounts/{account}/checkouts", "GET /v1/accounts/{account}/checkouts", "GET /v1/accounts/{account}/checkouts/{checkout}", "POST /v1/accounts/{account}/checkouts/{checkout}/reconcile", "POST /v1/accounts/{account}/checkouts/{checkout}/close", "POST /v1/accounts/{account}/checkouts/{checkout}/refund",
+	"POST /v1/accounts/{account}/cash-checkouts", "GET /v1/accounts/{account}/cash-checkouts", "GET /v1/accounts/{account}/cash-checkouts/{checkout}", "POST /v1/accounts/{account}/cash-checkouts/{checkout}/reconcile", "POST /v1/accounts/{account}/cash-checkouts/{checkout}/close",
 	"GET /v1/me", "GET /v1/accounts", "GET /v1/capabilities", "GET /v1/catalog", "GET /v1/billing-presets", "GET /v1/products",
 	"GET /v1/products/{product}/billing-profile", "GET /v1/products/{product}/model-consistency",
 	"GET /v1/accounts/{account}/resources", "GET /v1/accounts/{account}/wallets", "GET /v1/accounts/{account}/subscriptions", "GET /v1/accounts/{account}/orders", "GET /v1/accounts/{account}/usage-budget",
@@ -70,7 +71,7 @@ func (s *api) financeAuthenticated(original, op string, next action) http.Handle
 		query, queryErr := url.ParseQuery(r.URL.RawQuery)
 		idempotencyValues := r.Header.Values("Idempotency-Key")
 		idempotencyInvalid := len(idempotencyValues) > 1 || (len(idempotencyValues) == 1 && !financeIdempotencyKey.MatchString(idempotencyValues[0]))
-		if (original == "POST /v1/accounts/{account}/checkouts" || original == "POST /v1/accounts/{account}/checkouts/{checkout}/refund" || original == "POST /v1/accounts/{account}/recharges" || original == "POST /v1/accounts/{account}/orders" || original == "POST /v1/accounts/{account}/quotes/{quote}/accept") && len(idempotencyValues) != 1 {
+		if (original == "POST /v1/accounts/{account}/checkouts" || original == "POST /v1/accounts/{account}/checkouts/{checkout}/refund" || original == "POST /v1/accounts/{account}/cash-checkouts" || original == "POST /v1/accounts/{account}/recharges" || original == "POST /v1/accounts/{account}/orders" || original == "POST /v1/accounts/{account}/quotes/{quote}/accept") && len(idempotencyValues) != 1 {
 			idempotencyInvalid = true
 		}
 		if len(r.Header.Values("Origin")) != 0 || queryErr != nil || len(r.URL.RawQuery) > 4096 || len(query) > 20 || r.ContentLength > 1<<20 || ((r.Method == http.MethodGet || r.Method == http.MethodDelete) && r.ContentLength != 0) || idempotencyInvalid {
