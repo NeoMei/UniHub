@@ -27,6 +27,7 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 			return e
 		}
 		body.ReturnURL = cashTopupReturnURL(r)
+		body.UnifiedWallet = cashTopupUsesUnifiedWallet(r, body.ProductID)
 		x, e := c.Create(r.Context(), u.ID, r.PathValue("account"), body)
 		if e != nil {
 			return e
@@ -34,7 +35,11 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		return respond(w, 202, x)
 	})
 	add("GET /v1/accounts/{account}/cash-checkouts", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		xs, e := c.List(r.Context(), u.ID, r.PathValue("account"))
+		var scope []string
+		if originProduct(r) != "" {
+			scope = billingProducts(r)
+		}
+		xs, e := c.List(r.Context(), u.ID, r.PathValue("account"), scope...)
 		if e != nil {
 			return e
 		}
@@ -45,22 +50,53 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		if e != nil {
 			return e
 		}
+		if e = requireBillingProduct(r, x.ProductID); e != nil {
+			return e
+		}
 		return respond(w, 200, x)
 	})
 	add("POST /v1/accounts/{account}/cash-checkouts/{checkout}/reconcile", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		previous, e := c.Get(r.Context(), u.ID, r.PathValue("account"), r.PathValue("checkout"))
+		if e != nil {
+			return e
+		}
+		if e = requireBillingProduct(r, previous.ProductID); e != nil {
+			return e
+		}
 		x, e := c.Reconcile(r.Context(), u.ID, r.PathValue("account"), r.PathValue("checkout"))
 		if e != nil {
+			return e
+		}
+		if e = requireBillingProduct(r, x.ProductID); e != nil {
 			return e
 		}
 		return respond(w, 200, x)
 	})
 	add("POST /v1/accounts/{account}/cash-checkouts/{checkout}/close", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		previous, e := c.Get(r.Context(), u.ID, r.PathValue("account"), r.PathValue("checkout"))
+		if e != nil {
+			return e
+		}
+		if e = requireBillingProduct(r, previous.ProductID); e != nil {
+			return e
+		}
 		x, e := c.Close(r.Context(), u.ID, r.PathValue("account"), r.PathValue("checkout"))
 		if e != nil {
 			return e
 		}
+		if e = requireBillingProduct(r, x.ProductID); e != nil {
+			return e
+		}
 		return respond(w, 200, x)
 	})
+}
+
+// Attribution stays on the originating product even though LLMRouter native
+// inference and subscriptions spend from the account's unified cash wallet.
+func cashTopupUsesUnifiedWallet(r *http.Request, product string) bool {
+	policy, ok := productPolicy(r)
+	return ok && policy.ProductID == "llmrouter" && originProduct(r) == policy.ProductID &&
+		product == policy.ProductID
 }
 
 // Return destinations come only from the verified client's registered origin.

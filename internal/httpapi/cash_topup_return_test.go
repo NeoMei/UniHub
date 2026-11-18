@@ -24,3 +24,15 @@ func TestCashTopupReturnUsesVerifiedProductOrigin(t *testing.T) {
 		})
 	}
 }
+
+func TestCashTopupUsesVerifiedProductForUnifiedWallet(t *testing.T) {
+	r := httptest.NewRequest("POST", "/v1/accounts/a/cash-checkouts?wallet_target=unified", nil)
+	assert.False(t, cashTopupUsesUnifiedWallet(r, "llmrouter"))
+	for _, id := range []string{"llmrouter", "superwagie"} {
+		ctx := context.WithValue(r.Context(), productPolicyKey{}, products.Client{ProductID: id})
+		ctx = context.WithValue(ctx, productIdentityKey{}, id)
+		assert.Equal(t, id == "llmrouter", cashTopupUsesUnifiedWallet(r.WithContext(ctx), "llmrouter"))
+		assert.False(t, cashTopupUsesUnifiedWallet(r.WithContext(ctx), ""))
+		assert.False(t, cashTopupUsesUnifiedWallet(r.WithContext(ctx), "superwagie"))
+	}
+}

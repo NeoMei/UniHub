@@ -68,54 +68,51 @@ func (s *Service) accept(ctx context.Context, p payments.Provider, rec record, r
 			return e
 		}
 		rec = cur
-		if rec.Receipt != nil {
+		newReceipt := rec.Receipt == nil
+		if !newReceipt {
 			if rec.Receipt.TransactionID != r.TransactionID || rec.Receipt.Amount != r.Amount {
 				return ErrConflict
 			}
-			return nil
-		}
-		wasClosed := rec.PaymentStatus == "CLOSED"
-		late := wasClosed || !s.now().Before(rec.ExpiresAt) || (!r.PaidAt.IsZero() && (!r.PaidAt.Before(rec.ExpiresAt) || r.PaidAt.Before(rec.CreatedAt.Add(-time.Minute))))
-		rec.Receipt = &r
-		rec.PaymentStatus = "PAID"
-		rec.Session = nil
-		rec.ErrorCode = ""
-		if late {
-			rec.PaymentStatus = "REVIEW"
-			rec.ErrorCode = "late_payment"
+			if rec.PaymentStatus != "PAID" || rec.OperationID != "" {
+				return nil
+			}
+		} else {
+			late := rec.PaymentStatus == "CLOSED" || !s.now().Before(rec.ExpiresAt) ||
+				(!r.PaidAt.IsZero() && (!r.PaidAt.Before(rec.ExpiresAt) || r.PaidAt.Before(rec.CreatedAt.Add(-time.Minute))))
+			rec.Receipt = &r
+			rec.PaymentStatus = "PAID"
+			rec.Session = nil
+			rec.ErrorCode = ""
+			if late {
+				rec.PaymentStatus = "REVIEW"
+				rec.ErrorCode = "late_payment"
+			}
 		}
 		tx, e := c.Begin(ctx)
 		if e != nil {
 			return e
 		}
 		defer database.Rollback(tx)
-		if _, e = tx.Exec(ctx, "INSERT INTO cash_payment_receipts(checkout_id,provider,merchant_id,transaction_id,snapshot) VALUES($1,$2,$3,$4,$5)", rec.ID, rec.Provider, rec.MerchantID, r.TransactionID, encode(r)); e != nil {
-			return dbErr(e)
+		if newReceipt {
+			if _, e = tx.Exec(ctx, "INSERT INTO cash_payment_receipts(checkout_id,provider,merchant_id,transaction_id,snapshot) VALUES($1,$2,$3,$4,$5)", rec.ID, rec.Provider, rec.MerchantID, r.TransactionID, encode(r)); e != nil {
+				return dbErr(e)
+			}
+		}
+		if rec.PaymentStatus == "PAID" {
+			destination := rec.ProductID
+			if rec.WalletTarget == "unified" {
+				destination = ""
+			}
+			op, err := s.wallet.CreditCashTopupTx(ctx, tx, rec.AccountID, rec.ActorID, destination, rec.Amount, rec.ID, r.TransactionID)
+			if err != nil {
+				return err
+			}
+			rec.OperationID = op.ID
 		}
 		if _, e = tx.Exec(ctx, "UPDATE cash_checkouts SET snapshot=$2 WHERE id=$1", rec.ID, encode(rec)); e != nil {
 			return e
 		}
-		if e = tx.Commit(ctx); e != nil {
-			return e
-		}
-		if late {
-			return nil // funds received but require review; no auto-credit
-		}
-		// Credit the cash wallet. Idempotency key is the checkout id, so a replay
-		// after a crash never double-credits.
-		op, e := s.wallet.CreditCashTopup(ctx, rec.AccountID, rec.ActorID, rec.ProductID, rec.Amount, rec.ID, r.TransactionID)
-		if e != nil {
-			return e
-		}
-		cur, e = loadByID(ctx, c, rec.AccountID, rec.ID)
-		if e != nil {
-			return e
-		}
-		cur.OperationID = op.ID
-		if _, e = c.Exec(ctx, "UPDATE cash_checkouts SET snapshot=$2 WHERE id=$1", cur.ID, encode(cur)); e != nil {
-			return e
-		}
-		return nil
+		return tx.Commit(ctx)
 	})
 }
 
@@ -156,10 +153,7 @@ func (s *Service) Reconcile(ctx context.Context, actor, account, id string) (Che
 			return Checkout{}, e
 		}
 	} else if result.Status == "CLOSED" || result.Status == "FAILED" {
-		rec.PaymentStatus = "CLOSED"
-		if _, e = s.pool.Exec(ctx, "UPDATE cash_checkouts SET snapshot=$2 WHERE id=$1", rec.ID, encode(rec)); e != nil {
-			return Checkout{}, e
-		}
+		return s.recordClosed(ctx, account, id)
 	}
 	cur, e := loadByID(ctx, s.pool, account, id)
 	if e != nil {
@@ -197,10 +191,27 @@ func (s *Service) Close(ctx context.Context, actor, account, id string) (Checkou
 	if e = p.Close(ctx, rec.ID); e != nil {
 		return Checkout{}, e
 	}
-	rec.PaymentStatus = "CLOSED"
-	rec.Session = nil
-	if _, e = s.pool.Exec(ctx, "UPDATE cash_checkouts SET snapshot=$2 WHERE id=$1", rec.ID, encode(rec)); e != nil {
-		return Checkout{}, e
-	}
-	return rec.Checkout, nil
+	return s.recordClosed(ctx, account, id)
+}
+
+// A verified receipt can arrive while the close or query request is in
+// flight. Reload under the same account lock as accept before changing state.
+func (s *Service) recordClosed(ctx context.Context, account, id string) (Checkout, error) {
+	var out Checkout
+	err := s.locked(ctx, account, func(c *pgxpool.Conn) error {
+		rec, err := loadByID(ctx, c, account, id)
+		if err != nil {
+			return err
+		}
+		if rec.Receipt == nil && rec.PaymentStatus != "PAID" {
+			rec.PaymentStatus = "CLOSED"
+			rec.Session = nil
+			if _, err = c.Exec(ctx, "UPDATE cash_checkouts SET snapshot=$2 WHERE id=$1", id, encode(rec)); err != nil {
+				return err
+			}
+		}
+		out = rec.Checkout
+		return nil
+	})
+	return out, err
 }

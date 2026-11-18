@@ -6,39 +6,34 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/jackc/pgx/v5"
 	"unihub/internal/accounts"
-	"unihub/internal/database"
 	"unihub/internal/ledger"
 	"unihub/internal/money"
 )
 
-// CreditCashTopup records a verified real-money payment as a durable
+// CreditCashTopupTx records a verified real-money payment as a durable
 // world->cash posting. The payment adapter has already authenticated the
 // receipt; this method only freezes the amount, destination and idempotency
 // key. The wallet worker applies the posting like any other operation.
 // key must be stable per checkout so replays never double-credit.
-func (s *Service) CreditCashTopup(ctx context.Context, account, actor, product, amount, key, transactionID string) (Operation, error) {
+func (s *Service) CreditCashTopupTx(ctx context.Context, tx pgx.Tx, account, actor, product, amount, key, transactionID string) (Operation, error) {
 	n, e := money.ParseRecharge(amount)
 	if e != nil || !validKey(key) || !validKey(transactionID) {
 		return Operation{}, ErrInvalid
 	}
-	if e = checkProduct(ctx, s.pool, product); e != nil {
+	if e = checkProduct(ctx, tx, product); e != nil {
 		return Operation{}, e
 	}
 	// The caller (cashtopup service) already verified account membership and
 	// receipt authenticity. A second authority check keeps the boundary explicit.
-	role, e := s.accounts.RoleOn(ctx, s.pool, actor, account)
+	role, e := s.accounts.RoleOn(ctx, tx, actor, account)
 	if e != nil {
 		return Operation{}, e
 	}
 	if role != "owner" && role != "billing_admin" {
 		return Operation{}, accounts.ErrForbidden
 	}
-	tx, e := s.pool.Begin(ctx)
-	if e != nil {
-		return Operation{}, e
-	}
-	defer database.Rollback(tx)
 	h := digest([]string{"cash-topup", account, product, strconv.FormatInt(n, 10), transactionID})
 	var old string
 	op, e := scanOpWithHash(tx.QueryRow(ctx, "SELECT "+opColumns+",payload_hash FROM wallet_operations WHERE account_id=$1 AND kind='cash_topup' AND request_key=$2", account, key), &old)
@@ -46,7 +41,7 @@ func (s *Service) CreditCashTopup(ctx context.Context, account, actor, product, 
 		if h != old {
 			return Operation{}, ErrConflict
 		}
-		return op, tx.Commit(ctx)
+		return op, nil
 	}
 	if !errors.Is(e, accounts.ErrNotFound) {
 		return Operation{}, e
@@ -61,5 +56,5 @@ func (s *Service) CreditCashTopup(ctx context.Context, account, actor, product, 
 	if e = audit(ctx, tx, account, actor, id, "payment.cash_topup"); e != nil {
 		return Operation{}, e
 	}
-	return op, tx.Commit(ctx)
+	return op, nil
 }

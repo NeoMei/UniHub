@@ -223,3 +223,42 @@ func TestCheckoutReturnBindsOrderAndIdempotency(t *testing.T) {
 	_, err = f.svc.Create(ctx, f.user.ID, f.account.ID, req)
 	assert.ErrorIs(t, err, ErrConflict)
 }
+
+func TestNativeCheckoutCreditsUnifiedWalletExactlyOnce(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	req := Request{Provider: "wechat", ProductID: "llmrouter", Amount: "20000000", Key: "native-1", UnifiedWallet: true}
+	x, err := f.svc.Create(ctx, f.user.ID, f.account.ID, req)
+	require.NoError(t, err)
+	assert.Equal(t, "llmrouter", x.ProductID)
+	assert.Equal(t, "unified", x.WalletTarget)
+
+	r := payments.Result{OrderID: x.ID, TransactionID: "native-transaction", Amount: req.Amount, Currency: "CNY", Status: "PAID", PaidAt: time.Now()}
+	body, err := json.Marshal(r)
+	require.NoError(t, err)
+	for range 2 {
+		require.NoError(t, f.svc.Notify(ctx, "wechat", http.Header{}, body))
+		cur, err := f.svc.Get(ctx, f.user.ID, f.account.ID, x.ID)
+		require.NoError(t, err)
+		require.NotEmpty(t, cur.OperationID)
+		require.NoError(t, f.wallet.Process(ctx, cur.OperationID))
+	}
+	assert.Equal(t, int64(20000000), f.ledger.balance[wallet.Address(f.account.ID, "")])
+	assert.Zero(t, f.ledger.balance[wallet.Address(f.account.ID, "llmrouter")])
+	cur, err := f.svc.Get(ctx, f.user.ID, f.account.ID, x.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "APPLIED", cur.CreditStatus)
+	closed, err := f.svc.recordClosed(ctx, f.account.ID, x.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "PAID", closed.PaymentStatus)
+	assert.Equal(t, cur.OperationID, closed.OperationID)
+	orders, err := f.svc.List(ctx, f.user.ID, f.account.ID, "llmrouter")
+	require.NoError(t, err)
+	require.Len(t, orders, 1)
+	assert.Equal(t, x.ID, orders[0].ID)
+	assert.Equal(t, "APPLIED", orders[0].CreditStatus)
+	assert.Nil(t, orders[0].Session)
+	orders, err = f.svc.List(ctx, f.user.ID, f.account.ID, "superwagie")
+	require.NoError(t, err)
+	assert.Empty(t, orders)
+}

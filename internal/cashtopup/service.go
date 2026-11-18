@@ -39,11 +39,12 @@ var (
 )
 
 type Request struct {
-	Provider  string `json:"provider"`
-	ProductID string `json:"product_id,omitempty"`
-	Amount    string `json:"amount"`
-	Key       string `json:"-"`
-	ReturnURL string `json:"-"`
+	Provider      string `json:"provider"`
+	ProductID     string `json:"product_id,omitempty"`
+	Amount        string `json:"amount"`
+	Key           string `json:"-"`
+	ReturnURL     string `json:"-"`
+	UnifiedWallet bool   `json:"-"`
 }
 
 type Checkout struct {
@@ -59,6 +60,8 @@ type Checkout struct {
 	Session       *payments.Session `json:"session,omitempty"`
 	ErrorCode     string            `json:"error_code,omitempty"`
 	OperationID   string            `json:"operation_id,omitempty"`
+	WalletTarget  string            `json:"wallet_target,omitempty"`
+	CreditStatus  string            `json:"credit_status,omitempty"`
 }
 
 type record struct {
@@ -250,6 +253,11 @@ func (s *Service) Create(ctx context.Context, actor, account string, r Request) 
 			return e
 		}
 		rec := record{Checkout: Checkout{ID: id, AccountID: account, ProductID: r.ProductID, Provider: r.Provider, Amount: r.Amount, Currency: "CNY", PaymentStatus: "CREATED", ExpiresAt: expires, CreatedAt: now, Session: &sess}, ActorID: actor, MerchantID: p.MerchantID(), MerchantVersion: paymentConfigurationID(p), RequestDigest: d}
+		if r.UnifiedWallet || r.ProductID == "" {
+			rec.WalletTarget = "unified"
+		} else {
+			rec.WalletTarget = "product"
+		}
 		tx, e := c.Begin(ctx)
 		if e != nil {
 			return e
@@ -278,14 +286,22 @@ func (s *Service) Get(ctx context.Context, actor, account, id string) (Checkout,
 	if e != nil {
 		return Checkout{}, e
 	}
+	if rec.OperationID != "" {
+		if err := s.pool.QueryRow(ctx, "SELECT status FROM wallet_operations WHERE account_id=$1 AND id=$2", account, rec.OperationID).Scan(&rec.CreditStatus); err != nil {
+			return Checkout{}, dbErr(err)
+		}
+	}
 	return rec.Checkout, nil
 }
 
-func (s *Service) List(ctx context.Context, actor, account string) ([]Checkout, error) {
+func (s *Service) List(ctx context.Context, actor, account string, products ...string) ([]Checkout, error) {
 	if e := s.finance(ctx, s.pool, actor, account); e != nil {
 		return nil, e
 	}
-	rows, e := s.pool.Query(ctx, "SELECT snapshot FROM cash_checkouts WHERE account_id=$1 ORDER BY created_at DESC,id LIMIT 100", account)
+	rows, e := s.pool.Query(ctx, `SELECT c.snapshot, COALESCE(o.status,'') FROM cash_checkouts c
+		LEFT JOIN wallet_operations o ON o.account_id=c.account_id AND o.id=c.snapshot->>'operation_id'
+		WHERE c.account_id=$1 AND (COALESCE(cardinality($2::text[]),0)=0 OR c.product_id=ANY($2))
+		ORDER BY c.created_at DESC,c.id LIMIT 100`, account, products)
 	if e != nil {
 		return nil, e
 	}
@@ -293,7 +309,8 @@ func (s *Service) List(ctx context.Context, actor, account string) ([]Checkout, 
 	out := []Checkout{}
 	for rows.Next() {
 		var b []byte
-		if e = rows.Scan(&b); e != nil {
+		var creditStatus string
+		if e = rows.Scan(&b, &creditStatus); e != nil {
 			return nil, e
 		}
 		var rec record
@@ -302,6 +319,7 @@ func (s *Service) List(ctx context.Context, actor, account string) ([]Checkout, 
 		}
 		c := rec.Checkout
 		c.Session = nil
+		c.CreditStatus = creditStatus
 		out = append(out, c)
 	}
 	return out, rows.Err()
