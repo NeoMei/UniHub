@@ -11,6 +11,53 @@
   -
     "BearerAuth": []
 "paths":
+  "/v1/accounts/{account}/product-credits":
+    "get":
+      "operationId": "productCreditWallet"
+      "description": "Product-specific credit projection. Requires a registered downstream client, credits:read and account membership. Available is spendable only while membership is active. Batches retain original amounts and expiration dates."
+      "parameters":
+        - {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "X-UniHub-Product-Credit-Wallet", "in": "header", "required": true, "schema": {"const": "product_v1"}}
+      "responses":
+        "200": {"description": "product_id, credit_scope, available, reserved, active_membership, optional membership_paid_through, and owned credit batches"}
+        "403": {"$ref": "#/components/responses/Error"}
+  "/v1/accounts/{account}/product-wallet":
+    "get":
+      "operationId": "sharedProductWallet"
+      "description": "Unified cash and downstream product purchase and renewal projection. Requires wallets:read and the account owner or billing administrator role. Limited to authorized downstream products."
+      "parameters":
+        - {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "X-UniHub-Product-Credit-Wallet", "in": "header", "required": true, "schema": {"const": "product_v1"}}
+      "responses":
+        "200": {"description": "Versioned shared cash, product orders, eligible add-on offers and renewal policies"}
+        "403": {"$ref": "#/components/responses/Error"}
+  "/v1/accounts/{account}/product-wallet/{product}/renewal":
+    "put":
+      "operationId": "setProductWalletRenewal"
+      "description": "Versioned renewal mandate. Requires settings:write, permission to manage the target product, and the account finance role. Threshold is in CREDIT/6."
+      "parameters":
+        - {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "product", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "X-UniHub-Product-Credit-Wallet", "in": "header", "required": true, "schema": {"const": "product_v1"}}
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "additionalProperties": false
+              "required": ["kind", "enabled", "expected_version"]
+              "properties":
+                "kind": {"enum": ["subscription", "addon"]}
+                "enabled": {"type": "boolean"}
+                "expected_version": {"type": "integer", "minimum": 0}
+                "offer_id": {"type": "string"}
+                "trigger": {"enum": ["exhausted", "threshold"]}
+                "threshold": {"type": "string", "pattern": "^[0-9]+$"}
+      "responses":
+        "200": {"description": "Updated shared wallet projection"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
   "/v1/accounts/{account}/checkouts": {"get": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "X-UniHub-Alipay-QR", "in": "header", "schema": {"type": "string", "enum": ["1"]}, "description": "Opt in to receiving the Alipay scan session. Legacy clients receive the same checkout status and identity."}, {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Checkout"}}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}, "post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "X-UniHub-Alipay-QR", "in": "header", "schema": {"type": "string", "enum": ["1"]}, "description": "Opt in to receiving the Alipay scan session. Legacy clients receive the same checkout status and identity."}, {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}], "responses": {"202": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "properties": {"offer_id": {"type": "string"}, "quote_id": {"type": "string"}, "provider": {"enum": ["wechat", "alipay"]}, "require_qr": {"type": "boolean", "description": "For a new Alipay order, request a scan session. A replay preserves the original merchant order and session."}}, "required": ["provider"], "oneOf": [{"required": ["offer_id"], "not": {"required": ["quote_id"]}}, {"required": ["quote_id"], "not": {"required": ["offer_id"]}}]}}}}}}
   "/v1/accounts/{account}/checkouts/{checkout}": {"get": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "X-UniHub-Alipay-QR", "in": "header", "schema": {"type": "string", "enum": ["1"]}, "description": "Opt in to receiving the Alipay scan session. Legacy clients receive the same checkout status and identity."}, {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}}
   "/v1/accounts/{account}/checkouts/{checkout}/reconcile": {"post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "X-UniHub-Alipay-QR", "in": "header", "schema": {"type": "string", "enum": ["1"]}, "description": "Opt in to receiving the Alipay scan session. Legacy clients receive the same checkout status and identity."}, {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}}}}

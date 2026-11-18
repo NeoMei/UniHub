@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"unihub/internal/accounts"
+	"unihub/internal/billing"
 	"unihub/internal/modelaccess"
 )
 
@@ -46,6 +47,14 @@ func (s *api) modelList(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if discovery.CreditScope == billing.ProductCreditScopeV1 {
+		proof, ok := singleProductModelProof(r)
+		grant, err := s.options.ModelAccess.VerifyForInstance(r.Context(), token, "", discovery.InstanceID)
+		if !ok || err != nil || s.authorizeProductModelGrant(&grant, proof) != nil {
+			fail(w, http.StatusForbidden, "forbidden")
+			return
+		}
+	}
 	setDiscoveryHeaders(w, discovery)
 	_ = respond(w, http.StatusOK, modelListResponse{Object: "list", Data: discovery.Models})
 }
@@ -60,7 +69,8 @@ func setDiscoveryHeaders(w http.ResponseWriter, discovery modelaccess.Discovery)
 }
 
 func (s *api) modelDiscoveryRoute(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-	if originProduct(r) != "superwagie" {
+	product := originProduct(r)
+	if product != "superwagie" && !productWalletRequested(r) {
 		return accounts.ErrForbidden
 	}
 	client, ok := productPolicy(r)
@@ -80,7 +90,14 @@ func (s *api) modelDiscoveryRoute(w http.ResponseWriter, r *http.Request, u acco
 			return e
 		}
 	}
-	discovery, e := s.options.ModelAccess.DiscoverAccountWithFundingScope(r.Context(), u.ID, r.PathValue("account"), "superwagie", instance, body.ModelScope, body.FundingMode)
+	creditScope := ""
+	if productWalletRequested(r) {
+		if err := s.requireProductWallet(r); err != nil {
+			return err
+		}
+		creditScope = billing.ProductCreditScopeV1
+	}
+	discovery, e := s.options.ModelAccess.DiscoverAccountWithCreditScope(r.Context(), u.ID, r.PathValue("account"), product, instance, body.ModelScope, body.FundingMode, creditScope)
 	if e != nil {
 		return e
 	}

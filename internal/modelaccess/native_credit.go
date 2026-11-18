@@ -102,6 +102,22 @@ func (s *Service) NativeCreditsRuntimeReadiness(ctx context.Context, product str
 	if e != nil || !ready.Ready {
 		return ready, e
 	}
+	return s.probeNativeCreditsRuntime(ctx, product, ready)
+}
+
+func (s *Service) NativeCreditsRuntimeReadinessForScope(ctx context.Context, product, scope string) (billing.NativeCreditReadiness, error) {
+	policy, ok := s.eligibility.(nativeCreditEligibility)
+	if !ok {
+		return billing.NativeCreditReadiness{Reason: "native_credits_disabled"}, nil
+	}
+	ready, e := nativeCreditReadinessForScope(ctx, s.pool, policy, product, scope)
+	if e != nil || !ready.Ready {
+		return ready, e
+	}
+	return s.probeNativeCreditsRuntime(ctx, product, ready)
+}
+
+func (s *Service) probeNativeCreditsRuntime(ctx context.Context, product string, ready billing.NativeCreditReadiness) (billing.NativeCreditReadiness, error) {
 	if ready.CreditScope != "" {
 		provider, ok := s.providerCatalog.(interface {
 			NativeCreditCapabilities(context.Context, string) (ProviderCatalogResponse, error)

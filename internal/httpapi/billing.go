@@ -14,6 +14,7 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 	b := s.options.Billing
 	s.checkoutRoutes(m, add)
 	s.productQueryRoutes(add)
+	s.productCreditRoutes(add)
 	addOps := func(pattern string, fn action) {
 		m.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if s.options.OperatorVerifier == nil || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") || len(r.Header.Values("Authorization")) != 1 {
@@ -32,6 +33,17 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 			return e
 		}
 		v = filterProducts(r, v, func(o billing.CatalogOffer) string { return o.ProductID })
+		if originProduct(r) != "" {
+			out := []billing.CatalogOffer{}
+			negotiated := productWalletRequested(r)
+			for _, offer := range v {
+				if negotiated && offer.CreditScope == billing.ProductCreditScopeV1 && offer.ProductID == originProduct(r) ||
+					!negotiated && offer.CreditScope == "" {
+					out = append(out, offer)
+				}
+			}
+			v = out
+		}
 		return respond(w, 200, v)
 	})
 	add("GET /v1/accounts/{account}/subscriptions", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {

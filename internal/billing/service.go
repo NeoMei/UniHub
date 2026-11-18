@@ -19,17 +19,18 @@ import (
 )
 
 type Service struct {
-	pool               *pgxpool.Pool
-	accounts           *accounts.Store
-	ledger             ledger.Ledger
-	now                func() time.Time
-	mu                 sync.RWMutex
-	operators, trusted map[string]bool
-	sandbox            bool
-	productUsers       *productusers.Store
-	paymentProviders   map[string]payments.Provider
-	paymentSource      func(context.Context) ([]payments.Provider, []payments.Provider, error)
-	checkoutReadiness  func(context.Context, string, string, string) (NativeCreditReadiness, error)
+	pool                    *pgxpool.Pool
+	accounts                *accounts.Store
+	ledger                  ledger.Ledger
+	now                     func() time.Time
+	mu                      sync.RWMutex
+	operators, trusted      map[string]bool
+	sandbox                 bool
+	productUsers            *productusers.Store
+	paymentProviders        map[string]payments.Provider
+	paymentSource           func(context.Context) ([]payments.Provider, []payments.Provider, error)
+	checkoutReadiness       func(context.Context, string, string, string) (NativeCreditReadiness, error)
+	scopedCheckoutReadiness func(context.Context, string, string, string, string) (NativeCreditReadiness, error)
 }
 
 func New(p *pgxpool.Pool, a *accounts.Store, l ledger.Ledger) *Service {

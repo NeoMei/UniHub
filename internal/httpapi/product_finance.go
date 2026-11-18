@@ -22,6 +22,7 @@ var productFinanceRoutes = []string{
 	"GET /v1/products/{product}/billing-profile", "GET /v1/products/{product}/model-consistency",
 	"GET /v1/accounts/{account}/resources", "GET /v1/accounts/{account}/wallets", "GET /v1/accounts/{account}/subscriptions", "GET /v1/accounts/{account}/orders", "GET /v1/accounts/{account}/usage-budget",
 	"GET /v1/accounts/{account}/credits",
+	"GET /v1/accounts/{account}/product-wallet", "GET /v1/accounts/{account}/product-credits", "PUT /v1/accounts/{account}/product-wallet/{product}/renewal",
 	"POST /v1/accounts/{account}/orders", "POST /v1/accounts/{account}/quotes", "POST /v1/accounts/{account}/quotes/{quote}/accept",
 	"GET /v1/accounts/{account}/api-keys", "GET /v1/accounts/{account}/calls", "GET /v1/accounts/{account}/calls/{call}",
 	"GET /v1/accounts/{account}/usage/summary", "GET /v1/accounts/{account}/operations", "GET /v1/accounts/{account}/operations/{operation}",

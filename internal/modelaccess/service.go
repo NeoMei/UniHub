@@ -425,18 +425,21 @@ func (s *Service) verifyScoped(ctx context.Context, token, model, instance strin
 		if c.CredentialKind != "api_key" || !nativeFundingMatches(c.FundingMode, c.Asset, c.PricingSource) {
 			return Claims{}, ErrCredential
 		}
-		if c.CreditScope == billing.ProductCreditScopeV1 && !enforceRate {
+		if c.CreditScope == billing.ProductCreditScopeV1 {
 			if e := s.nativePrincipalOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID); e != nil {
 				return Claims{}, ErrCredential
+			}
+			if enforceRate {
+				c.NativeCreditConversion, e = s.nativeCreditConversionOn(ctx, s.pool, c.OriginProductID, c.CreditScope)
+				if e != nil {
+					return Claims{}, ErrCredential
+				}
 			}
 			c.FundingProductID = c.OriginProductID
 			c.Audience = "llmrouter"
 			return c, nil
 		}
 		if _, e := s.nativeAuthorityOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID, c.FundingMode, c.CreditScope); e != nil {
-			if c.CreditScope == billing.ProductCreditScopeV1 && errors.Is(e, billing.ErrSubscriptionRequired) {
-				return Claims{}, e
-			}
 			return Claims{}, ErrCredential
 		}
 		if c.Asset == billing.CreditAsset {
@@ -444,9 +447,6 @@ func (s *Service) verifyScoped(ctx context.Context, token, model, instance strin
 			if e != nil {
 				return Claims{}, ErrCredential
 			}
-		}
-		if c.CreditScope == billing.ProductCreditScopeV1 {
-			c.FundingProductID = c.OriginProductID
 		}
 		c.Audience = "llmrouter"
 		return c, nil

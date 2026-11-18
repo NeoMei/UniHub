@@ -143,6 +143,7 @@ func (s *api) productRuntimeRoutes(m *http.ServeMux) {
 	route := func(pattern, op string, next func(http.ResponseWriter, *http.Request, RuntimeService) error) {
 		m.HandleFunc(pattern, s.runtimeAuthenticated(op, next))
 	}
+	route("POST /internal/v1/product-runtime/model-proofs", productModelProofOperation, s.createProductModelProof)
 	route("POST /internal/v1/product-runtime/bindings", "bindings:write", func(w http.ResponseWriter, r *http.Request, service RuntimeService) error {
 		var in struct {
 			LocalUserID string `json:"local_user_id"`

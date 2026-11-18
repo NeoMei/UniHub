@@ -88,11 +88,12 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 	})
 	m.HandleFunc("POST /internal/v1/model-credentials/verify", s.serviceAuthenticated(func(w http.ResponseWriter, r *http.Request) error {
 		var body struct {
-			WireOperation string `json:"wire_operation"`
-			Token         string `json:"token"`
-			Model         string `json:"model"`
-			Purpose       string `json:"purpose"`
-			InstanceID    string `json:"instance_id"`
+			WireOperation        string `json:"wire_operation"`
+			Token                string `json:"token"`
+			Model                string `json:"model"`
+			Purpose              string `json:"purpose"`
+			InstanceID           string `json:"instance_id"`
+			ProductAuthorization string `json:"product_authorization"`
 		}
 		if e := decode(w, r, &body); e != nil {
 			return e
@@ -119,7 +120,14 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		} else {
 			v, e = a.VerifyForInstance(r.Context(), body.Token, body.Model, body.InstanceID)
 		}
+		if errors.Is(e, billing.ErrSubscriptionRequired) {
+			fail(w, http.StatusForbidden, "product_membership_expired")
+			return nil
+		}
 		if e != nil {
+			return e
+		}
+		if e = s.authorizeProductModelGrant(&v, body.ProductAuthorization); e != nil {
 			return e
 		}
 		return respond(w, 200, modelCredentialVerificationResponse{Claims: v, ActorExpiresAt: actorExpiresAt})
@@ -154,7 +162,7 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 				if verifyErr != nil {
 					return verifyErr
 				}
-				if grant.ID != old.CredentialID || grant.ActorID != old.ActorID || grant.AccountID != old.AccountID || grant.OriginProductID != old.OriginProductID || old.Rate.ID != body.RateID || (old.InstanceID != "" && old.InstanceID != grant.InstanceID) || (old.TaskID != "" && old.TaskID != body.TaskID) || (grant.CredentialKind != "api_key" && grant.TaskID != body.TaskID) || (grant.CredentialKind == "api_key" && (body.TaskID == "" || len(body.TaskID) > 128)) {
+				if grant.CreditScope != "" || grant.ID != old.CredentialID || grant.ActorID != old.ActorID || grant.AccountID != old.AccountID || grant.OriginProductID != old.OriginProductID || old.Rate.ID != body.RateID || (old.InstanceID != "" && old.InstanceID != grant.InstanceID) || (old.TaskID != "" && old.TaskID != body.TaskID) || (grant.CredentialKind != "api_key" && grant.TaskID != body.TaskID) || (grant.CredentialKind == "api_key" && (body.TaskID == "" || len(body.TaskID) > 128)) {
 					return accounts.ErrForbidden
 				}
 				request := billing.ReserveRequest{CredentialID: grant.ID, CallID: body.CallID, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, RequestDigest: body.RequestDigest, RateID: body.RateID, Amount: body.Amount}
@@ -194,7 +202,7 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
-		if (grant.CredentialKind != "api_key" && grant.TaskID != body.TaskID) || (grant.CredentialKind == "api_key" && (body.TaskID == "" || len(body.TaskID) > 128)) {
+		if grant.CreditScope != "" || (grant.CredentialKind != "api_key" && grant.TaskID != body.TaskID) || (grant.CredentialKind == "api_key" && (body.TaskID == "" || len(body.TaskID) > 128)) {
 			return accounts.ErrForbidden
 		}
 		request := billing.ReserveRequest{CredentialID: grant.ID, CallID: body.CallID, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, RequestDigest: body.RequestDigest, RateID: body.RateID, Amount: body.Amount}

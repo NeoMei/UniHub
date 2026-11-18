@@ -221,6 +221,11 @@ func (s *Service) ConfigureCheckoutReadiness(probe func(context.Context, string,
 	defer s.mu.Unlock()
 	s.checkoutReadiness = probe
 }
+func (s *Service) ConfigureScopedCheckoutReadiness(probe func(context.Context, string, string, string, string) (NativeCreditReadiness, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scopedCheckoutReadiness = probe
+}
 func nativePointsOffer(o Offer) bool {
 	return o.CreditScope == ProductCreditScopeV1 || !o.Sandbox && o.Entitlements["pricing_program"] == "superwagie-ai-points-v1"
 }
@@ -233,25 +238,47 @@ func (s *Service) NativeCheckoutReadiness(ctx context.Context, actor, account, p
 	if e != nil || !policy.Ready {
 		return policy, e
 	}
+	return s.probeCheckoutReadiness(ctx, actor, account, product, policy)
+}
+
+func (s *Service) NativeCheckoutReadinessForScope(ctx context.Context, actor, account, product, scope string) (NativeCreditReadiness, error) {
+	policy, e := s.NativeCreditsReadinessForScopeOn(ctx, s.pool, product, scope)
+	if e != nil || !policy.Ready {
+		return policy, e
+	}
+	return s.probeCheckoutReadiness(ctx, actor, account, product, policy)
+}
+
+func (s *Service) probeCheckoutReadiness(ctx context.Context, actor, account, product string, policy NativeCreditReadiness) (NativeCreditReadiness, error) {
 	s.mu.RLock()
 	probe := s.checkoutReadiness
+	scopedProbe := s.scopedCheckoutReadiness
 	s.mu.RUnlock()
+	if scopedProbe != nil {
+		return scopedProbe(ctx, actor, account, product, policy.CreditScope)
+	}
 	if probe == nil {
 		policy.Ready = false
 		policy.Reason = "native_credit_runtime_unverified"
 		return policy, nil
 	}
-	return probe(ctx, actor, account, product)
+	result, e := probe(ctx, actor, account, product)
+	if e == nil && result.Ready && result.CreditScope != policy.CreditScope {
+		policy.Ready = false
+		policy.Reason = "native_credit_scope_unverified"
+		return policy, nil
+	}
+	return result, e
 }
 func (s *Service) externalCheckoutReady(ctx context.Context, actor, account string, o Offer) error {
 	if !nativePointsOffer(o) {
 		return nil
 	}
-	r, e := s.NativeCheckoutReadiness(ctx, actor, account, o.ProductID)
+	r, e := s.NativeCheckoutReadinessForScope(ctx, actor, account, o.ProductID, o.CreditScope)
 	if e != nil {
 		return e
 	}
-	if !r.Ready || o.CreditScope == ProductCreditScopeV1 && r.CreditScope != o.CreditScope {
+	if !r.Ready || r.CreditScope != o.CreditScope {
 		return ErrCreditRatesUnavailable
 	}
 	return nil
