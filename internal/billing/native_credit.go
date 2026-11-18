@@ -24,9 +24,10 @@ func validNativeCreditConversion(c NativeConversion) bool {
 // NativeCreditReadiness describes server policy, not provider reachability,
 // account membership, balance, or a production merchant acceptance result.
 type NativeCreditReadiness struct {
-	Ready      bool              `json:"ready"`
-	Reason     string            `json:"reason,omitempty"`
-	Conversion *NativeConversion `json:"conversion,omitempty"`
+	CreditScope string            `json:"credit_scope,omitempty"`
+	Ready       bool              `json:"ready"`
+	Reason      string            `json:"reason,omitempty"`
+	Conversion  *NativeConversion `json:"conversion,omitempty"`
 }
 
 func (s *Service) NativeCreditsReadiness(ctx context.Context, product string) (NativeCreditReadiness, error) {
@@ -38,14 +39,14 @@ func (s *Service) NativeCreditsReadinessOn(ctx context.Context, q accounts.Queri
 	if e != nil {
 		return NativeCreditReadiness{}, e
 	}
-	if product != "superwagie" || p.Version < 1 || !p.Usage.Enabled || !slices.Contains(p.Usage.FundingModes, FundingCredits) {
+	if (product != "superwagie" && p.CreditScope != ProductCreditScopeV1) || p.Version < 1 || !p.Usage.Enabled || !slices.Contains(p.Usage.FundingModes, FundingCredits) {
 		return NativeCreditReadiness{Reason: "native_credits_disabled"}, nil
 	}
 	if p.NativeCreditConversion == nil || !validNativeCreditConversion(*p.NativeCreditConversion) {
 		return NativeCreditReadiness{Reason: "native_credit_conversion_unconfigured"}, nil
 	}
 	conversion := *p.NativeCreditConversion
-	return NativeCreditReadiness{Ready: true, Conversion: &conversion}, nil
+	return NativeCreditReadiness{Ready: true, CreditScope: p.CreditScope, Conversion: &conversion}, nil
 }
 
 // Product policy versions are append-only; a tariff identifier cannot acquire a

@@ -114,6 +114,11 @@ func (s *Service) apply(ctx context.Context, c *pgxpool.Conn, x command, ledgerI
 		if e = saveCall(ctx, tx, *x.Effect.Call); e != nil {
 			return e
 		}
+		if x.Kind == "settle" && x.Effect.Call.Status == "SETTLED" && x.Effect.Call.Charged != "0" {
+			if e = queueProductCreditAutoAddon(ctx, tx, *x.Effect.Call, "settled", 0); e != nil {
+				return e
+			}
+		}
 	}
 	if _, e = tx.Exec(ctx, `UPDATE billing_commands SET status='APPLIED',ledger_transaction_id=$2 WHERE id=$1`, x.ID, ledgerID); e != nil {
 		return e
@@ -370,7 +375,14 @@ func (s *Service) Maintain(ctx context.Context, now time.Time) (MaintenanceResul
 	if e != nil {
 		return out, e
 	}
+	runtimeReadiness := map[string]bool{}
 	for _, sub := range subs {
+		if sub.Offer.CreditScope == ProductCreditScopeV1 && sub.Status == "active" && !now.Before(sub.PaidThrough) {
+			if _, seen := runtimeReadiness[sub.ProductID]; !seen {
+				ready, _ := s.NativeCheckoutReadiness(ctx, "", "", sub.ProductID)
+				runtimeReadiness[sub.ProductID] = ready.Ready && ready.CreditScope == ProductCreditScopeV1
+			}
+		}
 		e = s.locked(ctx, sub.AccountID, func(c *pgxpool.Conn) error {
 			if e := s.clear(ctx, c, sub.AccountID); e != nil {
 				return e
@@ -383,7 +395,7 @@ func (s *Service) Maintain(ctx context.Context, now time.Time) (MaintenanceResul
 				return nil
 			}
 			if !now.Before(current.PaidThrough) {
-				return s.renewLocked(ctx, c, current, now.UTC())
+				return s.renewLocked(ctx, c, current, now.UTC(), runtimeReadiness[current.ProductID])
 			}
 			return s.monthlyLocked(ctx, c, current, now.UTC())
 		})
@@ -409,7 +421,10 @@ func (s *Service) Maintain(ctx context.Context, now time.Time) (MaintenanceResul
 			failures = errors.Join(failures, e)
 		}
 	}
-	return out, failures
+	autoAddons, autoErr := s.maintainProductCreditAutoAddons(ctx, now.UTC())
+	out.Processed += autoAddons.Processed
+	out.Pending += autoAddons.Pending
+	return out, errors.Join(failures, autoErr)
 }
 
 func (s *Service) validateNewAllocation(ctx context.Context, q accounts.Querier, x command) error {
@@ -428,7 +443,7 @@ func (s *Service) validateNewAllocation(ctx context.Context, q accounts.Querier,
 			if e != nil {
 				return e
 			}
-			if b.AccountID != x.Account || b.Frozen || now.Before(b.StartsAt) || !now.Before(b.ExpiresAt) {
+			if !batchFundsCall(b, *x.Effect.Call) || b.Frozen || now.Before(b.StartsAt) || !now.Before(b.ExpiresAt) {
 				return ErrInvalid
 			}
 			break

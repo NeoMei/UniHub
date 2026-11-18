@@ -222,7 +222,7 @@ func (s *Service) ConfigureCheckoutReadiness(probe func(context.Context, string,
 	s.checkoutReadiness = probe
 }
 func nativePointsOffer(o Offer) bool {
-	return !o.Sandbox && o.Entitlements["pricing_program"] == "superwagie-ai-points-v1"
+	return o.CreditScope == ProductCreditScopeV1 || !o.Sandbox && o.Entitlements["pricing_program"] == "superwagie-ai-points-v1"
 }
 
 // NativeCheckoutReadiness is the runtime readiness used both for advertised
@@ -251,7 +251,7 @@ func (s *Service) externalCheckoutReady(ctx context.Context, actor, account stri
 	if e != nil {
 		return e
 	}
-	if !r.Ready {
+	if !r.Ready || o.CreditScope == ProductCreditScopeV1 && r.CreditScope != o.CreditScope {
 		return ErrCreditRatesUnavailable
 	}
 	return nil

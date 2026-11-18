@@ -143,6 +143,9 @@ func (s *Service) releaseBudget(ctx context.Context, tx pgx.Tx, o Order) error {
 // The authorization cap is already reserved in the order snapshot. This check
 // never consumes twice; it only prevents a CREATED command crossing revocation.
 func (s *Service) validatePaymentAuthorization(ctx context.Context, q accounts.Querier, o Order) error {
+	if o.AutoAddonPolicyVersion != 0 {
+		return s.validateAutoAddonPayment(ctx, q, o)
+	}
 	for _, x := range []struct {
 		purpose string
 		version int64

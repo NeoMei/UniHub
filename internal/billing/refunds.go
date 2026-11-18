@@ -146,12 +146,14 @@ func (s *Service) RequestRefund(ctx context.Context, actor, account, orderID, ke
 		}
 		productAmount, _ := integer(o.ProductFunding, false)
 		unifiedAmount, _ := integer(o.UnifiedFunding, false)
-		if productAmount > 0 {
-			posts = append(posts, ledger.Posting{Source: "commercial:revenue:" + o.ProductID, Destination: wallet.Address(account, o.ProductID), Asset: wallet.Asset, Amount: productAmount})
+		cashRefund, e := orderRefundPostings(o, []orderCashAllocation{
+			{address: wallet.Address(account, o.ProductID), amount: productAmount},
+			{address: wallet.Address(account, ""), amount: unifiedAmount},
+		})
+		if e != nil {
+			return e
 		}
-		if unifiedAmount > 0 {
-			posts = append(posts, ledger.Posting{Source: "commercial:revenue:" + o.ProductID, Destination: wallet.Address(account, ""), Asset: wallet.Asset, Amount: unifiedAmount})
-		}
+		posts = append(posts, cashRefund...)
 		o.RefundStatus = "REFUNDED"
 		o.RefundReason = "unused_credits_revoked"
 		o.FulfillmentStatus = "CANCELED"

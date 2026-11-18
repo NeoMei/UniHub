@@ -27,6 +27,9 @@ func (s *Service) QuoteUpgrade(ctx context.Context, actor, account, subID, offer
 		if offer.Kind != "membership" || offer.ProductID != sub.ProductID || sub.Status != "active" || offer.Rank <= sub.Offer.Rank {
 			return ErrInvalid
 		}
+		if offer.CreditScope != "" || sub.Offer.CreditScope != "" {
+			return ErrUnsupported
+		}
 		if offer.Period != sub.Offer.Period {
 			return ErrUnsupported
 		}

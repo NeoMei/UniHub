@@ -10,6 +10,7 @@ import (
 // It is independent of identity clients and contains no runtime credentials.
 func ParseBillingProfiles(raw []byte) ([]BillingProfile, error) {
 	type entry struct {
+		CreditScope            string            `json:"credit_scope,omitempty"`
 		NativeCreditConversion *NativeConversion `json:"native_credit_conversion,omitempty"`
 		ProductID              string            `json:"product_id"`
 		Version                int64             `json:"version"`
@@ -61,6 +62,7 @@ func ParseBillingProfiles(raw []byte) ([]BillingProfile, error) {
 			}
 		}
 		p.NativeCreditConversion = e.NativeCreditConversion
+		p.CreditScope = e.CreditScope
 		if err := p.Validate(); err != nil {
 			return nil, err
 		}

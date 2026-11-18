@@ -31,6 +31,8 @@ type Model struct {
 // Discovery is safe to return to a trusted product client. Token material is
 // intentionally absent; callers may persist this response as public state.
 type Discovery struct {
+	CreditScope            string                    `json:"credit_scope,omitempty"`
+	FundingProductID       string                    `json:"funding_product_id,omitempty"`
 	NativeCreditConversion *billing.NativeConversion `json:"native_credit_conversion,omitempty"`
 	SchemaVersion          int                       `json:"schema_version,omitempty"`
 	CatalogVersion         string                    `json:"catalog_version,omitempty"`
@@ -132,7 +134,7 @@ func (s *Service) DiscoverAPIKey(ctx context.Context, token, expectedProduct, ex
 	var data []byte
 	var funding, asset string
 	var actor string
-	e := s.pool.QueryRow(ctx, `SELECT actor_id,account_id,origin_product_id,instance_id,models,expires_at,funding_mode,asset,model_scope,pricing_source,credential_version FROM model_credentials WHERE token_hash=$1 AND credential_kind='api_key' AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&actor, &out.AccountID, &out.OriginProductID, &out.InstanceID, &data, &out.ExpiresAt, &funding, &asset, &out.ModelScope, &out.PricingSource, &out.CredentialVersion)
+	e := s.pool.QueryRow(ctx, `SELECT actor_id,account_id,origin_product_id,instance_id,models,expires_at,funding_mode,asset,model_scope,pricing_source,credential_version,credit_scope FROM model_credentials WHERE token_hash=$1 AND credential_kind='api_key' AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&actor, &out.AccountID, &out.OriginProductID, &out.InstanceID, &data, &out.ExpiresAt, &funding, &asset, &out.ModelScope, &out.PricingSource, &out.CredentialVersion, &out.CreditScope)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return Discovery{}, ErrCredential
 	}
@@ -157,7 +159,7 @@ func (s *Service) DiscoverAPIKey(ctx context.Context, token, expectedProduct, ex
 		return Discovery{}, ErrCredential
 	}
 	if out.ModelScope == ScopeLLMRouterAvailable {
-		if _, e := s.nativeAuthorityOn(ctx, s.pool, actor, out.AccountID, out.OriginProductID, out.InstanceID, funding); e != nil || !nativeFundingMatches(funding, asset, out.PricingSource) {
+		if _, e := s.nativeAuthorityOn(ctx, s.pool, actor, out.AccountID, out.OriginProductID, out.InstanceID, funding, out.CreditScope); e != nil || !nativeFundingMatches(funding, asset, out.PricingSource) {
 			return Discovery{}, ErrCredential
 		}
 		return s.nativeDiscovery(ctx, actor, out)

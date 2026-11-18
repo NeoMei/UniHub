@@ -22,7 +22,8 @@ var (
 )
 
 const (
-	CreditAsset = "CREDIT/6"
+	CreditAsset          = "CREDIT/6"
+	ProductCreditScopeV1 = "product_v1"
 )
 
 // Empty assets in historical rates and calls denote model credits.
@@ -43,6 +44,9 @@ type UsageAuthorization struct {
 }
 
 type Offer struct {
+	CreditScope    string            `json:"credit_scope,omitempty"`
+	ServiceAmount  string            `json:"service_amount,omitempty"`
+	ComputeAmount  string            `json:"compute_amount,omitempty"`
 	ID             string            `json:"id"`
 	ProductID      string            `json:"product_id"`
 	Name           string            `json:"name"`
@@ -70,6 +74,10 @@ type Subscription struct {
 	Status      string    `json:"status"`
 }
 type Order struct {
+	CreditScope                 string    `json:"credit_scope,omitempty"`
+	ServiceAmount               string    `json:"service_amount,omitempty"`
+	ComputeAmount               string    `json:"compute_amount,omitempty"`
+	AutoAddonPolicyVersion      int64     `json:"auto_addon_policy_version,omitempty"`
 	PaymentSource               string    `json:"payment_source,omitempty"`
 	CheckoutID                  string    `json:"checkout_id,omitempty"`
 	ProviderTransactionID       string    `json:"provider_transaction_id,omitempty"`
@@ -130,6 +138,7 @@ type Authorization struct {
 	ActorID         string    `json:"actor_id"`
 }
 type Batch struct {
+	CreditScope    string    `json:"credit_scope,omitempty"`
 	ID             string    `json:"id"`
 	AccountID      string    `json:"account_id"`
 	ProductID      string    `json:"product_id"`
@@ -188,6 +197,7 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type Call struct {
+	CreditScope           string       `json:"credit_scope,omitempty"`
 	NativePricing         *NativeQuote `json:"native_pricing,omitempty"`
 	NativeQuota           string       `json:"native_quota,omitempty"`
 	CredentialVersion     int64        `json:"credential_version,omitempty"`

@@ -36,6 +36,10 @@ func (s *Service) requireAddonSubscriptionOn(ctx context.Context, q accounts.Que
 	if err != nil {
 		return err
 	}
+	if offer.CreditScope == ProductCreditScopeV1 {
+		_, err = activeSubscriptionOn(ctx, q, account, offer.ProductID, now)
+		return err
+	}
 	if profile.Version == 0 || (!profile.Usage.RequireSubscription && !profile.Usage.RequireSubscriptionForCredits) {
 		return nil
 	}
@@ -125,21 +129,24 @@ func (s *Service) Purchase(ctx context.Context, actor, account string, r Purchas
 }
 func (s *Service) payLocked(ctx context.Context, c *pgxpool.Conn, o Order, key, digest string, renewal *Authorization) (Order, error) {
 	o.PaymentSource = "wallet"
-	amount, _ := integer(o.Amount, true)
-	balance, e := s.ledger.Balance(ctx, wallet.Address(o.AccountID, o.ProductID), wallet.Asset)
-	if e != nil {
+	if e := freezeProductCreditOrder(&o); e != nil {
 		return o, e
 	}
-	if balance < 0 {
-		return o, ErrConflict
-	}
-	fromProduct := balance
-	if fromProduct > amount {
-		fromProduct = amount
+	amount, _ := integer(o.Amount, true)
+	var fromProduct int64
+	if o.CreditScope == "" {
+		balance, e := s.ledger.Balance(ctx, wallet.Address(o.AccountID, o.ProductID), wallet.Asset)
+		if e != nil {
+			return o, e
+		}
+		if balance < 0 {
+			return o, ErrConflict
+		}
+		fromProduct = min(amount, balance)
 	}
 	shortfall := amount - fromProduct
 	var funding *Authorization
-	if shortfall > 0 {
+	if shortfall > 0 && o.CreditScope == "" {
 		a, e := s.budget(ctx, c, o.ActorID, o.AccountID, o.ProductID, "funding", shortfall, s.now().UTC())
 		if e != nil {
 			if errors.Is(e, accounts.ErrForbidden) {
@@ -153,10 +160,17 @@ func (s *Service) payLocked(ctx context.Context, c *pgxpool.Conn, o Order, key, 
 	o.ProductFunding = str(fromProduct)
 	o.UnifiedFunding = str(shortfall)
 	posts := []ledger.Posting{}
-	if shortfall > 0 {
-		posts = append(posts, ledger.Posting{Source: wallet.Address(o.AccountID, ""), Destination: wallet.Address(o.AccountID, o.ProductID), Asset: wallet.Asset, Amount: shortfall})
+	source := wallet.Address(o.AccountID, o.ProductID)
+	if o.CreditScope == ProductCreditScopeV1 {
+		source = wallet.Address(o.AccountID, "")
+	} else if shortfall > 0 {
+		posts = append(posts, ledger.Posting{Source: wallet.Address(o.AccountID, ""), Destination: source, Asset: wallet.Asset, Amount: shortfall})
 	}
-	posts = append(posts, ledger.Posting{Source: wallet.Address(o.AccountID, o.ProductID), Destination: "commercial:revenue:" + o.ProductID, Asset: wallet.Asset, Amount: amount})
+	orderPosts, e := orderPaymentPostings(o, source)
+	if e != nil {
+		return o, e
+	}
+	posts = append(posts, orderPosts...)
 	tx, e := c.Begin(ctx)
 	if e != nil {
 		return o, e
@@ -293,8 +307,10 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 	eff := effect{Order: &o, Subscription: sub}
 	posts := []ledger.Posting{}
 	if o.PaymentSource == "external" {
-		amount, _ := integer(o.Amount, true)
-		posts = append(posts, ledger.Posting{Source: externalReceived(o.CheckoutID), Destination: "commercial:revenue:" + o.ProductID, Asset: wallet.Asset, Amount: amount})
+		posts, e = orderPaymentPostings(o, externalReceived(o.CheckoutID))
+		if e != nil {
+			return e
+		}
 	}
 	n, _ := integer(grant, false)
 	if n > 0 {
@@ -308,7 +324,7 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 			kind = "addon"
 			source = o.ID + ":addon"
 		}
-		b := Batch{ID: id("batch_"), AccountID: o.AccountID, ProductID: o.ProductID, OrderID: o.ID, SubscriptionID: o.SubscriptionID, SourceKey: source, Kind: kind, Original: grant, StartsAt: start, ExpiresAt: end, CreatedAt: now}
+		b := Batch{ID: id("batch_"), CreditScope: o.CreditScope, AccountID: o.AccountID, ProductID: o.ProductID, OrderID: o.ID, SubscriptionID: o.SubscriptionID, SourceKey: source, Kind: kind, Original: grant, StartsAt: start, ExpiresAt: end, CreatedAt: now}
 		eff.Batches = []Batch{b}
 		posts = append(posts, ledger.Posting{Source: "world", Destination: BatchAddress(b.ID, "available"), Asset: CreditAsset, Amount: n})
 	}
@@ -354,7 +370,7 @@ func (s *Service) monthlyLocked(ctx context.Context, c *pgxpool.Conn, sub Subscr
 	if e != nil {
 		return e
 	}
-	b := Batch{ID: id("batch_"), AccountID: sub.AccountID, ProductID: sub.ProductID, OrderID: orderID, SubscriptionID: sub.ID, SourceKey: source, Kind: "base", Original: sub.Offer.MonthlyCredit, StartsAt: start, ExpiresAt: end, CreatedAt: now}
+	b := Batch{ID: id("batch_"), CreditScope: sub.Offer.CreditScope, AccountID: sub.AccountID, ProductID: sub.ProductID, OrderID: orderID, SubscriptionID: sub.ID, SourceKey: source, Kind: "base", Original: sub.Offer.MonthlyCredit, StartsAt: start, ExpiresAt: end, CreatedAt: now}
 	tx, e := c.Begin(ctx)
 	if e != nil {
 		return e
@@ -369,7 +385,7 @@ func (s *Service) monthlyLocked(ctx context.Context, c *pgxpool.Conn, sub Subscr
 	}
 	return s.runLocked(ctx, c, cmd.ID)
 }
-func (s *Service) renewLocked(ctx context.Context, c *pgxpool.Conn, sub Subscription, now time.Time) error {
+func (s *Service) renewLocked(ctx context.Context, c *pgxpool.Conn, sub Subscription, now time.Time, runtimeReady bool) error {
 	if e := s.commercialClear(ctx, c, sub.AccountID); e != nil {
 		return e
 	}
@@ -407,6 +423,9 @@ func (s *Service) renewLocked(ctx context.Context, c *pgxpool.Conn, sub Subscrip
 	}
 	if !errors.Is(e, accounts.ErrNotFound) {
 		return e
+	}
+	if sub.Offer.CreditScope == ProductCreditScopeV1 && !runtimeReady {
+		return ErrPending
 	}
 	if _, e = s.buyable(ctx, c, sub.Offer.ID, sub.AccountID); e != nil {
 		return e

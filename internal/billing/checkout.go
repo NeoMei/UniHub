@@ -161,6 +161,9 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 			o.PeriodStart = now
 			o.PeriodEnd = o.End
 		}
+		if e = freezeProductCreditOrder(&o); e != nil {
+			return e
+		}
 		checkoutID := id("")
 		o.CheckoutID = checkoutID
 		x = checkoutRecord{Checkout: Checkout{ID: checkoutID, AccountID: account, ProductID: offer.ProductID, Provider: r.Provider, OfferName: offer.Name, Amount: amount, Currency: "CNY", PaymentStatus: "UNKNOWN", FulfillmentStatus: "NOT_STARTED", ExpiresAt: expires, CreatedAt: now}, ActorID: actor, MerchantID: p.MerchantID(), MerchantVersion: paymentConfigurationID(p), RequestDigest: digest, Order: o, Quote: quote}

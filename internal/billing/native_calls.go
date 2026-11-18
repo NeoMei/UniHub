@@ -43,12 +43,15 @@ type NativeQuote struct {
 
 type NativeReserveRequest struct {
 	ReserveRequest
-	Model             string      `json:"model"`
-	WireOperation     string      `json:"wire_operation"`
-	InstanceID        string      `json:"instance_id"`
-	TaskID            string      `json:"task_id"`
-	CredentialVersion int64       `json:"credential_version"`
-	Quote             NativeQuote `json:"quote"`
+	MinimumCreditAmount string      `json:"minimum_credit_amount,omitempty"`
+	CreditScope         string      `json:"credit_scope,omitempty"`
+	SourceVerified      bool        `json:"source_verified,omitempty"`
+	Model               string      `json:"model"`
+	WireOperation       string      `json:"wire_operation"`
+	InstanceID          string      `json:"instance_id"`
+	TaskID              string      `json:"task_id"`
+	CredentialVersion   int64       `json:"credential_version"`
+	Quote               NativeQuote `json:"quote"`
 }
 
 type NativeSettlementRequest struct {
@@ -144,19 +147,19 @@ func validateNativeUsage(u *Usage) error {
 var nativeQuantity = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
 
 func (s *Service) nativeUsageFundingOn(ctx context.Context, q accounts.Querier, call Call, now time.Time) (UsageAuthorization, error) {
-	var mode, asset, pricing string
+	var mode, asset, pricing, creditScope string
 	var profileVersion int64
-	if call.CredentialID == "" || call.CredentialVersion < 1 || call.OriginProductID != "superwagie" || call.InstanceID == "" {
+	if call.CredentialID == "" || call.CredentialVersion < 1 || (call.OriginProductID != "superwagie" && call.CreditScope != ProductCreditScopeV1) || call.InstanceID == "" {
 		return UsageAuthorization{}, accounts.ErrForbidden
 	}
-	e := q.QueryRow(ctx, `SELECT funding_mode,asset,billing_profile_version,pricing_source FROM model_credentials WHERE id=$1 AND actor_id=$2 AND account_id=$3 AND origin_product_id=$4 AND instance_id=$5 AND credential_kind='api_key' AND model_scope='llmrouter_available' AND credential_version=$6 AND expires_at>$7 AND revoked_at IS NULL`, call.CredentialID, call.ActorID, call.AccountID, call.OriginProductID, call.InstanceID, call.CredentialVersion, now).Scan(&mode, &asset, &profileVersion, &pricing)
+	e := q.QueryRow(ctx, `SELECT funding_mode,asset,billing_profile_version,pricing_source,credit_scope FROM model_credentials WHERE id=$1 AND actor_id=$2 AND account_id=$3 AND origin_product_id=$4 AND instance_id=$5 AND credential_kind='api_key' AND model_scope='llmrouter_available' AND credential_version=$6 AND expires_at>$7 AND revoked_at IS NULL`, call.CredentialID, call.ActorID, call.AccountID, call.OriginProductID, call.InstanceID, call.CredentialVersion, now).Scan(&mode, &asset, &profileVersion, &pricing, &creditScope)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return UsageAuthorization{}, accounts.ErrForbidden
 	}
 	if e != nil {
 		return UsageAuthorization{}, e
 	}
-	if asset != callAsset(call) || mode != callFundingMode(call) || !((mode == FundingPrepaidCash && asset == CashAsset && pricing == "llmrouter_native") || (mode == FundingCredits && asset == CreditAsset && pricing == NativeCreditPricingSource)) {
+	if creditScope != call.CreditScope || (creditScope == ProductCreditScopeV1 && (asset != CreditAsset || call.FundingProductID != call.OriginProductID)) || asset != callAsset(call) || mode != callFundingMode(call) || !((mode == FundingPrepaidCash && asset == CashAsset && pricing == "llmrouter_native") || (mode == FundingCredits && asset == CreditAsset && pricing == NativeCreditPricingSource)) {
 		return UsageAuthorization{}, accounts.ErrForbidden
 	}
 	if s.productUsers == nil || !s.productUsers.Managed(call.OriginProductID, call.InstanceID) {
@@ -164,6 +167,11 @@ func (s *Service) nativeUsageFundingOn(ctx context.Context, q accounts.Querier, 
 	}
 	if e = s.productUsers.RequirePermissionOn(ctx, q, call.ActorID, call.OriginProductID, call.InstanceID, "product:use"); e != nil {
 		return UsageAuthorization{}, e
+	}
+	if call.CreditScope == ProductCreditScopeV1 {
+		if _, e = activeSubscriptionOn(ctx, q, call.AccountID, call.OriginProductID, now); e != nil {
+			return UsageAuthorization{}, e
+		}
 	}
 	auth, e := s.authorizeUsageOn(ctx, q, call.ActorID, call.AccountID, call.OriginProductID, mode, now)
 	if e != nil {
@@ -186,6 +194,9 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 	if e := s.trust(service); e != nil {
 		return out, e
 	}
+	if (r.CreditScope == ProductCreditScopeV1 && (!r.SourceVerified || r.Quote.Asset != CreditAsset)) || (r.CreditScope != "" && r.CreditScope != ProductCreditScopeV1) {
+		return out, accounts.ErrForbidden
+	}
 	if e := validateNativeQuote(r.Quote, r.WireOperation); e != nil {
 		return out, e
 	}
@@ -193,6 +204,14 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 		return out, ErrInvalid
 	}
 	n, _ := integer(r.Quote.MaxAmount, false)
+	var minimum int64
+	if r.MinimumCreditAmount != "" {
+		var e error
+		minimum, e = integer(r.MinimumCreditAmount, false)
+		if e != nil || r.CreditScope != ProductCreditScopeV1 || minimum > n {
+			return out, ErrInvalid
+		}
+	}
 	requestHash := hash(struct {
 		Service string
 		Request NativeReserveRequest
@@ -225,6 +244,10 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 		if r.Quote.Asset == CreditAsset {
 			out.FundingMode = FundingCredits
 			out.CashHoldAddress = ""
+			out.CreditScope = r.CreditScope
+			if out.CreditScope == ProductCreditScopeV1 {
+				out.FundingProductID = out.OriginProductID
+			}
 			var productID string
 			if e = tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 FOR SHARE`, r.OriginProductID).Scan(&productID); e != nil {
 				return e
@@ -233,7 +256,7 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 			if e != nil {
 				return e
 			}
-			if !ready.Ready || *ready.Conversion != r.Quote.Conversion {
+			if !ready.Ready || *ready.Conversion != r.Quote.Conversion || (r.CreditScope == ProductCreditScopeV1 && ready.CreditScope != r.CreditScope) {
 				return accounts.ErrForbidden
 			}
 		}
@@ -253,11 +276,17 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 			if out.ChargeAsset == CashAsset {
 				posts, e = s.cashReservePosts(ctx, r.AccountID, out.CashHoldAddress, n)
 			} else {
-				out.Allocations, e = s.allocate(ctx, c, r.AccountID, n, s.now().UTC())
+				out.Allocations, e = s.allocateForCall(ctx, c, out, n, s.now().UTC())
 				for _, a := range out.Allocations {
 					amount, _ := integer(a.Amount, true)
 					posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "available"), Destination: BatchAddress(a.BatchID, "reserved"), Asset: CreditAsset, Amount: amount})
 				}
+			}
+			if errors.Is(e, ErrInsufficientCredits) && out.CreditScope == ProductCreditScopeV1 {
+				if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+					return errors.Join(e, rollbackErr)
+				}
+				return errors.Join(e, queueProductCreditAutoAddon(ctx, c, out, "insufficient", minimum))
 			}
 			if e != nil {
 				return e
@@ -351,6 +380,13 @@ func (s *Service) SettleNative(ctx context.Context, service string, r NativeSett
 		posts, e := s.finalPosts(ctx, c, call, cost, s.now().UTC())
 		if e != nil {
 			return e
+		}
+		if call.CreditScope == ProductCreditScopeV1 && cost > 0 {
+			recognition, e := s.productComputeRecognition(ctx, c, call, posts)
+			if e != nil {
+				return e
+			}
+			posts = append(posts, recognition...)
 		}
 		call.Status = "SETTLED"
 		call.Charged = r.Amount
