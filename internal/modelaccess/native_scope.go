@@ -98,7 +98,7 @@ func (s *Service) createNativeAPIKey(ctx context.Context, actor, account string,
 		return APIKey{}, billing.ErrInvalid
 	}
 	if r.FundingMode == billing.FundingCredits {
-		ready, e := s.NativeCreditsReadiness(ctx, actor, account, r.OriginProductID, r.InstanceID)
+		ready, e := s.nativeCreditsReadinessForKey(ctx, actor, account, r.OriginProductID, r.InstanceID, r.CreditScope)
 		if e != nil {
 			return APIKey{}, e
 		}

@@ -11,7 +11,8 @@ import (
 
 func productAutoAddonFixture(t *testing.T, trigger, threshold string) (fixture, string, NativeConversion) {
 	t.Helper()
-	f, cid, conversion := nativeCreditFixture(t)
+	f, cid, _ := nativeCreditFixture(t)
+	conversion := exactProductCreditTestConversion()
 	ctx := context.Background()
 	_, addon := publishProductCreditOffers(t, f, "month")
 	p, e := f.s.SetProductCreditAutoAddon(ctx, f.actor, f.account, "superwagie", AutoAddonPolicyRequest{Enabled: true, OfferID: addon.ID, Trigger: trigger, Threshold: threshold})
@@ -30,12 +31,12 @@ func productAutoAddonFixture(t *testing.T, trigger, threshold string) (fixture, 
 func TestAutoAddonDoesNotChargeFromARiskHold(t *testing.T) {
 	f, cid, conversion := productAutoAddonFixture(t, "threshold", "10")
 	ctx := context.Background()
-	r := creditNativeRequest(f, cid, "product-credit-hold", "10", conversion)
+	r := creditNativeRequest(f, cid, "product-credit-hold", "15", conversion)
 	r.CreditScope, r.SourceVerified = ProductCreditScopeV1, true
 	if _, e := f.s.ReserveNative(ctx, "llmrouter", r); e != nil {
 		t.Fatal(e)
 	}
-	next := creditNativeRequest(f, cid, "would-overcommit", "2", conversion)
+	next := creditNativeRequest(f, cid, "would-overcommit", "3", conversion)
 	next.CreditScope, next.SourceVerified, next.MinimumCreditAmount = ProductCreditScopeV1, true, "3"
 	if _, e := f.s.ReserveNative(ctx, "llmrouter", next); !errors.Is(e, ErrInsufficientCredits) {
 		t.Fatalf("short reserve: %v", e)
@@ -44,7 +45,7 @@ func TestAutoAddonDoesNotChargeFromARiskHold(t *testing.T) {
 		t.Fatal(e)
 	}
 	cashBalance(t, f, wallet.Address(f.account, ""), 4001000)
-	settle := NativeSettlementRequest{CallID: r.CallID, PricingDigest: r.Quote.PricingDigest, NativeQuota: "5", Amount: "8"}
+	settle := NativeSettlementRequest{CallID: r.CallID, PricingDigest: r.Quote.PricingDigest, NativeQuota: "8", Amount: "8"}
 	for range 2 {
 		if _, e := f.s.SettleNative(ctx, "llmrouter", settle); e != nil {
 			t.Fatal(e)
@@ -73,7 +74,7 @@ func TestAutoAddonDoesNotChargeFromARiskHold(t *testing.T) {
 func TestAutoAddonExhaustionRequiresConfirmedMinimum(t *testing.T) {
 	f, cid, conversion := productAutoAddonFixture(t, "exhausted", "")
 	ctx := context.Background()
-	r := creditNativeRequest(f, cid, "quote-risk-margin", "15", conversion)
+	r := creditNativeRequest(f, cid, "quote-risk-margin", "23", conversion)
 	r.CreditScope, r.SourceVerified = ProductCreditScopeV1, true
 	if _, e := f.s.ReserveNative(ctx, "llmrouter", r); !errors.Is(e, ErrInsufficientCredits) {
 		t.Fatalf("risk hold: %v", e)
@@ -95,4 +96,45 @@ func TestAutoAddonExhaustionRequiresConfirmedMinimum(t *testing.T) {
 	if _, e := f.s.ReserveNative(ctx, "llmrouter", r); e != nil {
 		t.Fatalf("retry failed after funding: %v", e)
 	}
+}
+
+func TestAutoAddonTriggersOnceAfterRealExpiryDuringActiveMembership(t *testing.T) {
+	f, _, _ := productAutoAddonFixture(t, "exhausted", "")
+	ctx := context.Background()
+	if _, e := f.s.pool.Exec(ctx, `UPDATE billing_subscriptions SET snapshot=jsonb_set(snapshot,'{offer,monthly_credit}','"0"') WHERE account_id=$1`, f.account); e != nil {
+		t.Fatal(e)
+	}
+	when := time.Now().UTC().Add(2 * time.Hour)
+	f.s.now = func() time.Time { return when }
+	for range 2 {
+		if _, e := f.s.Maintain(ctx, when); e != nil {
+			t.Fatal(e)
+		}
+	}
+	cashBalance(t, f, wallet.Address(f.account, ""), 2001000)
+	w, e := f.s.ProductCreditWallet(ctx, f.actor, f.account, "superwagie")
+	if e != nil || w.Available != "20000000" || len(w.Batches) != 2 || w.Batches[0].Expired != "16" {
+		t.Fatalf("real expiry didn't trigger exactly one add-on: %+v %v", w, e)
+	}
+}
+
+func TestPaidMonthlyGrantRearmsWithoutBuyingAnotherAddon(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	membership, addon := publishProductCreditOffers(t, f, "month")
+	if _, e := f.s.SetProductCreditAutoAddon(ctx, f.actor, f.account, "superwagie", AutoAddonPolicyRequest{Enabled: true, OfferID: addon.ID, Trigger: "threshold", Threshold: "5000000"}); e != nil {
+		t.Fatal(e)
+	}
+	if _, e := f.s.pool.Exec(ctx, `UPDATE billing_product_credit_auto_addon_policies SET armed=false WHERE account_id=$1 AND product_id='superwagie'`, f.account); e != nil {
+		t.Fatal(e)
+	}
+	f.buy(t, membership.ID, "new-current-grant")
+	if _, e := f.s.Maintain(ctx, f.s.now()); e != nil {
+		t.Fatal(e)
+	}
+	var armed bool
+	if e := f.s.pool.QueryRow(ctx, `SELECT armed FROM billing_product_credit_auto_addon_policies WHERE account_id=$1 AND product_id='superwagie'`, f.account).Scan(&armed); e != nil || !armed {
+		t.Fatalf("confirmed membership grant did not rearm the threshold: %v %v", armed, e)
+	}
+	cashBalance(t, f, wallet.Address(f.account, ""), 997000000)
 }

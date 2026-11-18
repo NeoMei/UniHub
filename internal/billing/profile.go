@@ -84,7 +84,7 @@ func (p BillingProfile) Validate() error {
 	if p.Addons.Enabled && !modes[FundingCredits] {
 		return ErrInvalid
 	}
-	if p.CreditScope != "" && (p.CreditScope != ProductCreditScopeV1 || !p.Usage.RequireSubscription && !p.Usage.RequireSubscriptionForCredits || p.NativeCreditConversion == nil) {
+	if p.CreditScope != "" && (p.CreditScope != ProductCreditScopeV1 || !p.Usage.RequireSubscription && !p.Usage.RequireSubscriptionForCredits || !exactProductCreditConversion(p.NativeCreditConversion)) {
 		return ErrInvalid
 	}
 	if p.NativeCreditConversion != nil && (p.ProductID != "superwagie" && p.CreditScope != ProductCreditScopeV1 || !p.Usage.Enabled || !modes[FundingCredits] || !validNativeCreditConversion(*p.NativeCreditConversion)) {

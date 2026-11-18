@@ -46,7 +46,7 @@ func creditSaleReadiness(p BillingProfile, rates []Rate) SalesReadiness {
 
 func (s *Service) saleReadinessOn(ctx context.Context, q accounts.Querier, o Offer) (SalesReadiness, error) {
 	if nativePointsOffer(o) {
-		r, e := s.NativeCreditsReadinessOn(ctx, q, o.ProductID)
+		r, e := s.NativeCreditsReadinessForScopeOn(ctx, q, o.ProductID, o.CreditScope)
 		if o.CreditScope == ProductCreditScopeV1 && r.CreditScope != o.CreditScope {
 			return SalesReadiness{Reason: "native_credits_disabled"}, e
 		}

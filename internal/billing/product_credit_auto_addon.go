@@ -113,25 +113,22 @@ type autoAddonTrigger struct {
 	AccountID     string `json:"account_id"`
 	ProductID     string `json:"product_id"`
 	PolicyVersion int64  `json:"policy_version"`
-	CallID        string `json:"call_id"`
+	SourceID      string `json:"source_id"`
 	Kind          string `json:"trigger_kind"`
 	MinimumCredit int64  `json:"minimum_credit"`
 	Status        string `json:"status"`
 }
 
 func (t autoAddonTrigger) orderKey() string {
-	return "auto-addon:" + hash([]string{t.ProductID, str(t.PolicyVersion), t.Kind, t.CallID})
+	return "auto-addon:" + hash([]string{t.ProductID, str(t.PolicyVersion), t.Kind, t.SourceID})
 }
 
 func queueProductCreditAutoAddon(ctx context.Context, q interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-}, call Call, kind string, minimum int64) error {
-	if call.CreditScope != ProductCreditScopeV1 {
-		return nil
-	}
-	_, e := q.Exec(ctx, `INSERT INTO billing_product_credit_auto_addon_triggers(account_id,product_id,policy_version,call_id,trigger_kind,minimum_credit)
+}, account, product, source, kind string, minimum int64) error {
+	_, e := q.Exec(ctx, `INSERT INTO billing_product_credit_auto_addon_triggers(account_id,product_id,policy_version,source_id,trigger_kind,minimum_credit)
 		SELECT account_id,product_id,(snapshot->>'version')::bigint,$3,$4,$5 FROM billing_product_credit_auto_addon_policies
-		WHERE account_id=$1 AND product_id=$2 AND (snapshot->>'enabled')::boolean ON CONFLICT DO NOTHING`, call.AccountID, call.OriginProductID, call.CallID, kind, minimum)
+		WHERE account_id=$1 AND product_id=$2 AND (snapshot->>'enabled')::boolean ON CONFLICT DO NOTHING`, account, product, source, kind, minimum)
 	return e
 }
 
@@ -219,7 +216,7 @@ func (s *Service) processAutoAddon(ctx context.Context, c *pgxpool.Conn, t autoA
 		return e
 	}
 	low := autoAddonBalanceLow(p, t, balance)
-	if !armed || !low {
+	if t.Kind == "funded" || !armed || !low {
 		return finishAutoAddon(ctx, c, t, "IGNORED", armed || !low)
 	}
 	if t.Kind == "insufficient" && balance > 0 && (t.MinimumCredit == 0 || balance >= t.MinimumCredit) {

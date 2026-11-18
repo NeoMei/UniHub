@@ -75,6 +75,7 @@ func TestNativeCreditKeyOptInAndCatalogPreservesLegacyCash(t *testing.T) {
 	}
 	profiles[0].Version = 2
 	profiles[0].CreditScope = billing.ProductCreditScopeV1
+	profiles[0].NativeCreditConversion = &billing.NativeConversion{Version: "product-microcredit-fixture", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
 	profiles[0].Subscription.Enabled = true
 	profiles[0].Usage.RequireSubscriptionForCredits = true
 	if e = b.ApplyConfiguredProfiles(ctx, profiles); e != nil {
@@ -110,7 +111,7 @@ func TestNativeCreditKeyOptInAndCatalogPreservesLegacyCash(t *testing.T) {
 	data, _ = json.Marshal(legacyClaim)
 	fields = nil
 	_ = json.Unmarshal(data, &fields)
-	if len(fields["credit_scope"]) != 0 {
+	if len(fields["credit_scope"]) != 0 || legacyClaim.NativeCreditConversion == nil || legacyClaim.NativeCreditConversion.Numerator != "3" || legacyClaim.NativeCreditConversion.Denominator != "2" {
 		t.Fatalf("legacy key was converted: %s", data)
 	}
 	if _, e = p.Exec(ctx, `UPDATE billing_subscriptions SET snapshot=jsonb_set(snapshot,'{paid_through}',to_jsonb(now()-interval '1 minute')) WHERE id='native-credit-membership'`); e != nil {

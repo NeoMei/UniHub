@@ -22,16 +22,25 @@ func nativeFundingMatches(mode, asset, pricing string) bool {
 	return mode == billing.FundingPrepaidCash && asset == billing.CashAsset && pricing == PricingLLMRouterNative || mode == billing.FundingCredits && asset == billing.CreditAsset && pricing == PricingLLMRouterNativeCredit
 }
 
+func nativeCreditReadinessForScope(ctx context.Context, q accounts.Querier, policy nativeCreditEligibility, product, scope string) (billing.NativeCreditReadiness, error) {
+	if scoped, ok := policy.(interface {
+		NativeCreditsReadinessForScopeOn(context.Context, accounts.Querier, string, string) (billing.NativeCreditReadiness, error)
+	}); ok {
+		return scoped.NativeCreditsReadinessForScopeOn(ctx, q, product, scope)
+	}
+	return policy.NativeCreditsReadinessOn(ctx, q, product)
+}
+
 func (s *Service) nativeCreditConversionOn(ctx context.Context, q accounts.Querier, product, creditScope string) (*billing.NativeConversion, error) {
 	policy, ok := s.eligibility.(nativeCreditEligibility)
 	if !ok {
 		return nil, accounts.ErrForbidden
 	}
-	ready, e := policy.NativeCreditsReadinessOn(ctx, q, product)
+	ready, e := nativeCreditReadinessForScope(ctx, q, policy, product, creditScope)
 	if e != nil {
 		return nil, e
 	}
-	if !ready.Ready || ready.Conversion == nil || creditScope != "" && ready.CreditScope != creditScope {
+	if !ready.Ready || ready.Conversion == nil || ready.CreditScope != creditScope {
 		return nil, accounts.ErrForbidden
 	}
 	return ready.Conversion, nil
@@ -49,10 +58,26 @@ func (s *Service) NativeCreditsReadiness(ctx context.Context, actor, account, pr
 	if e != nil || !ready.Ready {
 		return ready, e
 	}
+	return s.nativeCreditsProviderReadiness(ctx, actor, account, product, instance, ready)
+}
+
+func (s *Service) nativeCreditsReadinessForKey(ctx context.Context, actor, account, product, instance, scope string) (billing.NativeCreditReadiness, error) {
+	policy, ok := s.eligibility.(nativeCreditEligibility)
+	if !ok {
+		return billing.NativeCreditReadiness{Reason: "native_credits_disabled"}, nil
+	}
+	ready, e := nativeCreditReadinessForScope(ctx, s.pool, policy, product, scope)
+	if e != nil || !ready.Ready || ready.CreditScope != scope {
+		return ready, e
+	}
+	return s.nativeCreditsProviderReadiness(ctx, actor, account, product, instance, ready)
+}
+
+func (s *Service) nativeCreditsProviderReadiness(ctx context.Context, actor, account, product, instance string, ready billing.NativeCreditReadiness) (billing.NativeCreditReadiness, error) {
 	if s.providerCatalog == nil {
 		return billing.NativeCreditReadiness{Reason: "native_credit_provider_unavailable"}, nil
 	}
-	catalog, e := s.providerCatalog.Discover(ctx, ProviderCatalogRequest{ActorID: actor, AccountID: account, OriginProductID: product, InstanceID: instance})
+	catalog, e := s.providerCatalog.Discover(ctx, ProviderCatalogRequest{CreditScope: ready.CreditScope, ActorID: actor, AccountID: account, OriginProductID: product, InstanceID: instance})
 	if e != nil {
 		return billing.NativeCreditReadiness{Reason: "native_credit_provider_unavailable"}, nil
 	}

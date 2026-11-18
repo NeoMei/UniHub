@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
@@ -109,14 +111,41 @@ func (s *Service) apply(ctx context.Context, c *pgxpool.Conn, x command, ledgerI
 		if e = saveBatch(ctx, tx, b); e != nil {
 			return e
 		}
+		if b.CreditScope == ProductCreditScopeV1 && (x.Kind == "monthly" || x.Kind == "fulfillment") {
+			if e = queueProductCreditAutoAddon(ctx, tx, b.AccountID, b.ProductID, b.ID, "funded", 0); e != nil {
+				return e
+			}
+		}
 	}
-	if x.Effect.Call != nil {
-		if e = saveCall(ctx, tx, *x.Effect.Call); e != nil {
+	if x.Kind == "expire" {
+		b, e := load[Batch](ctx, tx, `SELECT snapshot FROM billing_batches WHERE id=$1 AND account_id=$2`, x.Key, x.Account)
+		if e != nil {
 			return e
 		}
-		if x.Kind == "settle" && x.Effect.Call.Status == "SETTLED" && x.Effect.Call.Charged != "0" {
-			if e = queueProductCreditAutoAddon(ctx, tx, *x.Effect.Call, "settled", 0); e != nil {
+		if b.CreditScope == ProductCreditScopeV1 {
+			if e = queueProductCreditAutoAddon(ctx, tx, b.AccountID, b.ProductID, b.ID, "expired", 0); e != nil {
 				return e
+			}
+		}
+	}
+	if call := x.Effect.Call; call != nil {
+		if e = saveCall(ctx, tx, *call); e != nil {
+			return e
+		}
+		if call.CreditScope == ProductCreditScopeV1 {
+			kind := ""
+			switch {
+			case x.Kind == "settle" && call.Status == "SETTLED" && call.Charged != "0":
+				kind = "settled"
+			case (x.Kind == "settle" || x.Kind == "release") && slices.ContainsFunc(x.Ledger.Postings, func(p ledger.Posting) bool {
+				return p.Asset == CreditAsset && strings.HasSuffix(p.Destination, ":expired")
+			}):
+				kind = "expired"
+			}
+			if kind != "" {
+				if e = queueProductCreditAutoAddon(ctx, tx, call.AccountID, call.OriginProductID, call.CallID, kind, 0); e != nil {
+					return e
+				}
 			}
 		}
 	}

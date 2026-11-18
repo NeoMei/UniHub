@@ -52,13 +52,26 @@ func TestLegacyNativeCreditCannotReserveProductGrant(t *testing.T) {
 	}
 }
 
+func exactProductCreditTestConversion() NativeConversion {
+	return NativeConversion{Version: "product-credit-fixture", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
+}
+
 func TestProductCreditReserveUsesOnlyAuthenticatedProductAndPrioritizesSubscription(t *testing.T) {
-	f, cid, conversion := nativeCreditFixture(t)
+	f, cid, legacyConversion := nativeCreditFixture(t)
+	conversion := exactProductCreditTestConversion()
 	ctx := context.Background()
 	now := time.Now().UTC()
 	p := nativeCreditProfile(t, 2, conversion.Version, conversion.Numerator)
+	p.NativeCreditConversion = &conversion
 	p.CreditScope = ProductCreditScopeV1
 	if _, e := f.s.SaveProfile(ctx, f.actor, "superwagie", p); e != nil {
+		t.Fatal(e)
+	}
+	legacyCall := creditNativeRequest(f, cid, "legacy-credit-after-opt-in", "3", legacyConversion)
+	if old, e := f.s.ReserveNative(ctx, "llmrouter", legacyCall); e != nil || old.Held != "5" || old.CreditScope != "" {
+		t.Fatalf("scoped profile changed the original legacy tariff: %+v %v", old, e)
+	}
+	if _, e := f.s.Release(ctx, "llmrouter", legacyCall.CallID, "fixture-complete"); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := f.s.pool.Exec(ctx, `UPDATE model_credentials SET credit_scope='product_v1' WHERE id=$1`, cid); e != nil {
@@ -67,7 +80,7 @@ func TestProductCreditReserveUsesOnlyAuthenticatedProductAndPrioritizesSubscript
 	seedProductCreditBatch(t, f, Batch{ProductID: "llmrouter", Kind: "base", Original: "70", StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Minute), CreatedAt: now}, ProductCreditScopeV1)
 	addon := seedProductCreditBatch(t, f, Batch{ProductID: "superwagie", Kind: "addon", Original: "7", StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Minute), CreatedAt: now}, ProductCreditScopeV1)
 	base := seedProductCreditBatch(t, f, Batch{ProductID: "superwagie", Kind: "base", Original: "6", StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour), CreatedAt: now}, ProductCreditScopeV1)
-	r := creditNativeRequest(f, cid, "product-holds", "7", conversion)
+	r := creditNativeRequest(f, cid, "product-holds", "11", conversion)
 	r.CreditScope = ProductCreditScopeV1
 	if _, e := f.s.ReserveNative(ctx, "llmrouter", r); !errors.Is(e, accounts.ErrForbidden) {
 		t.Fatalf("accepted without a trusted source: %v", e)
@@ -88,7 +101,7 @@ func TestProductCreditReserveUsesOnlyAuthenticatedProductAndPrioritizesSubscript
 		t.Fatalf("used credits of another contract: %v", e)
 	}
 	f.s.now = func() time.Time { return now.Add(2 * time.Minute) }
-	if _, e = f.s.SettleNative(ctx, "llmrouter", NativeSettlementRequest{CallID: "product-holds", PricingDigest: r.Quote.PricingDigest, NativeQuota: "3", Amount: "5"}); e != nil {
+	if _, e = f.s.SettleNative(ctx, "llmrouter", NativeSettlementRequest{CallID: "product-holds", PricingDigest: r.Quote.PricingDigest, NativeQuota: "5", Amount: "5"}); e != nil {
 		t.Fatal(e)
 	}
 	w, e := f.s.ProductCreditWallet(ctx, f.actor, f.account, "superwagie")
@@ -125,9 +138,8 @@ func publishProductCreditOffers(t *testing.T, f fixture, period string) (Offer, 
 	p.Usage.FundingModes = []string{FundingCredits}
 	p.Usage.RequireSubscriptionForCredits = true
 	p.CreditScope = ProductCreditScopeV1
-	if p.NativeCreditConversion == nil {
-		p.NativeCreditConversion = &NativeConversion{Version: "product-credit-fixture", Numerator: "3", Denominator: "2", Rounding: "lr-cumulative-ceil-v1"}
-	}
+	conversion := exactProductCreditTestConversion()
+	p.NativeCreditConversion = &conversion
 	if _, e = f.s.SaveProfile(ctx, f.actor, "superwagie", p); e != nil {
 		t.Fatal(e)
 	}
@@ -220,7 +232,8 @@ func TestProductOrderRefundRestoresWalletAndComputeSplit(t *testing.T) {
 }
 
 func TestProductComputeReconcilesFractionalCreditOnceOnRecoveredSettlement(t *testing.T) {
-	f, cid, conversion := nativeCreditFixture(t)
+	f, cid, _ := nativeCreditFixture(t)
+	conversion := exactProductCreditTestConversion()
 	ctx := context.Background()
 	membership, _ := publishProductCreditOffers(t, f, "month")
 	if _, e := f.s.pool.Exec(ctx, `UPDATE model_credentials SET credit_scope='product_v1' WHERE id=$1`, cid); e != nil {
@@ -231,7 +244,7 @@ func TestProductComputeReconcilesFractionalCreditOnceOnRecoveredSettlement(t *te
 	}
 	fundCash(t, f, "", 3000000)
 	order := f.buy(t, membership.ID, "scoped-recognition")
-	for _, sample := range []struct{ id, quota, charge string }{{"first-fraction", "3", "5"}, {"second-fraction", "4", "6"}} {
+	for _, sample := range []struct{ id, quota, charge string }{{"first-fraction", "5", "5"}, {"second-fraction", "6", "6"}} {
 		r := creditNativeRequest(f, cid, sample.id, sample.quota, conversion)
 		r.CreditScope, r.SourceVerified = ProductCreditScopeV1, true
 		if _, e := f.s.ReserveNative(ctx, "llmrouter", r); e != nil {
@@ -261,7 +274,8 @@ func TestProductComputeReconcilesFractionalCreditOnceOnRecoveredSettlement(t *te
 }
 
 func TestProductCreditAccountSeparatesTwoAuthenticatedOrigins(t *testing.T) {
-	f, firstKey, conversion := nativeCreditFixture(t)
+	f, firstKey, _ := nativeCreditFixture(t)
+	conversion := exactProductCreditTestConversion()
 	ctx := context.Background()
 	publishProductCreditOffers(t, f, "month")
 	p, e := f.s.Profile(ctx, "superwagie")
@@ -292,7 +306,7 @@ func TestProductCreditAccountSeparatesTwoAuthenticatedOrigins(t *testing.T) {
 	}
 	firstBatch := seedProductCreditBatch(t, f, Batch{ProductID: "superwagie", Kind: "base", Original: "6", StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour), CreatedAt: now}, ProductCreditScopeV1)
 	secondBatch := seedProductCreditBatch(t, f, Batch{ProductID: "agentwiki", Kind: "base", Original: "8", StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour), CreatedAt: now}, ProductCreditScopeV1)
-	first := creditNativeRequest(f, firstKey, "product-account-first", "4", conversion)
+	first := creditNativeRequest(f, firstKey, "product-account-first", "6", conversion)
 	first.CreditScope, first.SourceVerified = ProductCreditScopeV1, true
 	second := first
 	second.OriginProductID, second.CallID = "agentwiki", "product-account-second"
@@ -377,5 +391,17 @@ func TestScopedRenewalUsesUnifiedCashOnlyAfterRuntimeReady(t *testing.T) {
 	subs, e := f.s.Subscriptions(ctx, f.actor, f.account)
 	if e != nil || len(subs) != 1 || !subs[0].PaidThrough.Equal(MonthAnchor(start, 2)) {
 		t.Fatalf("wrong renewal period: %+v %v", subs, e)
+	}
+}
+
+func TestProductCreditProfileRejectsLegacyDoubleRounding(t *testing.T) {
+	p := nativeCreditProfile(t, 2, "legacy-test-quota", "3")
+	p.CreditScope = ProductCreditScopeV1
+	if e := p.Validate(); !errors.Is(e, ErrInvalid) {
+		t.Fatalf("product microcredit settlement accepted a conversion that would round again: %v", e)
+	}
+	p.NativeCreditConversion.Numerator, p.NativeCreditConversion.Denominator = "1", "1"
+	if e := p.Validate(); e != nil {
+		t.Fatalf("exact product microcredit conversion rejected: %v", e)
 	}
 }

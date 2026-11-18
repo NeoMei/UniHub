@@ -17,6 +17,7 @@ import (
 var ErrProviderCatalog = errors.New("provider model catalog unavailable")
 
 type ProviderCatalogRequest struct {
+	CreditScope     string `json:"credit_scope,omitempty"`
 	Purpose         string `json:"purpose,omitempty"`
 	OriginProductID string `json:"origin_product_id"`
 	InstanceID      string `json:"instance_id"`
@@ -76,7 +77,11 @@ func (c *providerCatalogClient) Discover(ctx context.Context, r ProviderCatalogR
 		return ProviderCatalogResponse{}, ErrProviderCatalog
 	}
 	var out ProviderCatalogResponse
-	if e = json.Unmarshal(raw, &out); e != nil || out.ProviderCatalogRequest != r || out.SchemaVersion != 1 || out.CatalogVersion == "" || len(out.CatalogVersion) > 256 || out.ModelScope != ScopeLLMRouterAvailable || out.PricingSource != PricingLLMRouterNative || out.Models == nil {
+	expectedPricing := PricingLLMRouterNative
+	if r.CreditScope == billing.ProductCreditScopeV1 {
+		expectedPricing = PricingLLMRouterNativeCredit
+	}
+	if e = json.Unmarshal(raw, &out); e != nil || out.ProviderCatalogRequest != r || out.SchemaVersion != 1 || out.CatalogVersion == "" || len(out.CatalogVersion) > 256 || out.ModelScope != ScopeLLMRouterAvailable || out.PricingSource != expectedPricing || out.Models == nil {
 		return ProviderCatalogResponse{}, ErrProviderCatalog
 	}
 	seen := map[string]bool{}
@@ -95,7 +100,7 @@ func (s *Service) nativeDiscovery(ctx context.Context, actor string, out Discove
 	if s.providerCatalog == nil {
 		return Discovery{}, ErrProviderCatalog
 	}
-	catalog, e := s.providerCatalog.Discover(ctx, ProviderCatalogRequest{OriginProductID: out.OriginProductID, InstanceID: out.InstanceID, ActorID: actor, AccountID: out.AccountID})
+	catalog, e := s.providerCatalog.Discover(ctx, ProviderCatalogRequest{CreditScope: out.CreditScope, OriginProductID: out.OriginProductID, InstanceID: out.InstanceID, ActorID: actor, AccountID: out.AccountID})
 	if e != nil {
 		return Discovery{}, e
 	}
@@ -151,10 +156,10 @@ func (s *Service) DiscoverAccountWithCreditScope(ctx context.Context, actor, acc
 // NativeCreditProtocol is a service-authenticated runtime negotiation. No
 // account or model credential is fabricated for this deployment check.
 func (c *providerCatalogClient) NativeCreditProtocol(ctx context.Context, product string) (string, error) {
-	out, e := c.NativeCreditCapabilities(ctx, product)
+	out, e := c.Discover(ctx, ProviderCatalogRequest{OriginProductID: product, Purpose: "native_credit_readiness"})
 	return out.NativeCreditProtocol, e
 }
 
 func (c *providerCatalogClient) NativeCreditCapabilities(ctx context.Context, product string) (ProviderCatalogResponse, error) {
-	return c.Discover(ctx, ProviderCatalogRequest{OriginProductID: product, Purpose: "native_credit_readiness"})
+	return c.Discover(ctx, ProviderCatalogRequest{CreditScope: billing.ProductCreditScopeV1, OriginProductID: product, Purpose: "native_credit_readiness"})
 }

@@ -252,7 +252,7 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 			if e = tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 FOR SHARE`, r.OriginProductID).Scan(&productID); e != nil {
 				return e
 			}
-			ready, e := s.NativeCreditsReadinessOn(ctx, tx, r.OriginProductID)
+			ready, e := s.NativeCreditsReadinessForScopeOn(ctx, tx, r.OriginProductID, r.CreditScope)
 			if e != nil {
 				return e
 			}
@@ -286,7 +286,7 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 				if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
 					return errors.Join(e, rollbackErr)
 				}
-				return errors.Join(e, queueProductCreditAutoAddon(ctx, c, out, "insufficient", minimum))
+				return errors.Join(e, queueProductCreditAutoAddon(ctx, c, out.AccountID, out.OriginProductID, out.CallID, "insufficient", minimum))
 			}
 			if e != nil {
 				return e
