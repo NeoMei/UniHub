@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"unihub/internal/payments"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // A replaced subscription must not leave an old refund freezing all usage.
@@ -132,6 +134,48 @@ func TestExternalCheckoutReplacedUpgradeKeepsPaymentReceipt(t *testing.T) {
 			var receipts, batches int
 			if e = f.s.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM billing_payment_receipts WHERE checkout_id=$1),(SELECT count(*) FROM billing_batches WHERE order_id=$2)`, x.ID, x.OrderID).Scan(&receipts, &batches); e != nil || receipts != 1 || batches != 0 {
 				t.Fatalf("receipt/grant %d/%d %v", receipts, batches, e)
+			}
+		})
+	}
+}
+
+type expiredCloseProvider struct {
+	*checkoutProvider
+	closeErr error
+}
+
+func (p *expiredCloseProvider) Close(context.Context, string) error { return p.closeErr }
+
+func TestExpiredCheckoutRecoveryRequiresMerchantEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		expiresIn time.Duration
+		closeErr  error
+		status    string
+	}{
+		{name: "confirmed close of expired order", expiresIn: -time.Hour, status: "CLOSED"},
+		{name: "lost close response", expiresIn: -time.Hour, closeErr: errors.New("close unavailable"), status: "UNKNOWN"},
+		{name: "active order needs terminal query", expiresIn: time.Hour, status: "UNKNOWN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := nativeFixture(t)
+			ctx := context.Background()
+			p := &expiredCloseProvider{checkoutProvider: &checkoutProvider{queryErr: errors.New("query unavailable")}, closeErr: tc.closeErr}
+			f.s.ConfigurePayments([]payments.Provider{p})
+			x := checkoutRecord{Checkout: Checkout{ID: "restorecheckout", AccountID: f.account, ProductID: "superwagie", Provider: "wechat", PaymentStatus: "UNKNOWN", FulfillmentStatus: "NOT_STARTED", CreatedAt: f.s.now().Add(-8 * 24 * time.Hour), ExpiresAt: f.s.now().Add(tc.expiresIn)}, MerchantID: p.MerchantID(), MerchantVersion: p.ConfigurationID(), CloseRequested: true}
+			if _, err := f.s.pool.Exec(ctx, `INSERT INTO billing_checkouts(id,account_id,product_id,request_key,request_digest,snapshot) VALUES($1,$2,'superwagie',$1,$1,$3)`, x.ID, f.account, encode(x)); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.s.RecoverCheckouts(ctx); err != nil {
+				t.Fatal(err)
+			}
+			rows, err := f.s.ListCheckouts(ctx, f.actor, f.account)
+			if err != nil || len(rows) != 1 || rows[0].PaymentStatus != tc.status {
+				t.Fatalf("listed checkouts: %+v, %v; want %s", rows, err, tc.status)
+			}
+			err = f.s.locked(ctx, f.account, func(c *pgxpool.Conn) error { return f.s.commercialClear(ctx, c, f.account) })
+			if (tc.status == "CLOSED" && err != nil) || (tc.status != "CLOSED" && !errors.Is(err, ErrPending)) {
+				t.Fatalf("commercial hold for %s: %v", tc.status, err)
 			}
 		})
 	}

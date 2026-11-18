@@ -110,7 +110,7 @@ func (s *Service) checkoutProvider(ctx context.Context, name, merchant string) (
 }
 func (s *Service) commercialClear(ctx context.Context, c *pgxpool.Conn, account string) error {
 	var pending bool
-	e := c.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM billing_checkouts WHERE account_id=$1 AND (snapshot->>'payment_status' IN ('CREATED','PENDING','UNKNOWN') OR (snapshot->>'payment_status' IN ('PAID','REVIEW') AND snapshot->>'fulfillment_status'<>'FULFILLED' AND COALESCE(snapshot->>'refund_status','')<>'SUCCEEDED') OR snapshot->>'refund_status' IN ('PENDING','REVIEW')))`, account).Scan(&pending)
+	e := c.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM billing_checkouts WHERE account_id=$1 AND COALESCE(snapshot->>'refund_status','')<>'SUCCEEDED' AND (snapshot->>'payment_status' IN ('CREATED','PENDING','UNKNOWN','REVIEW') OR (snapshot->>'payment_status'='PAID' AND snapshot->>'fulfillment_status'<>'FULFILLED') OR snapshot->>'refund_status' IN ('PENDING','REVIEW')))`, account).Scan(&pending)
 	if e != nil {
 		return e
 	}
@@ -140,38 +140,58 @@ func (s *Service) ListCheckouts(ctx context.Context, actor, account string) ([]C
 	if e := s.finance(ctx, s.pool, actor, account); e != nil {
 		return nil, e
 	}
-	xs, e := list[checkoutRecord](ctx, s.pool, `SELECT snapshot FROM billing_checkouts WHERE account_id=$1 ORDER BY (snapshot->>'created_at')::timestamptz DESC,id LIMIT 200`, account)
+	type checkoutWithOrder struct {
+		Checkout checkoutRecord `json:"checkout"`
+		Order    *Order         `json:"order"`
+	}
+	// Keep all blocking attempts visible even when newer historical orders fill
+	// the history window. The order projection uses one join for the entire page.
+	xs, e := list[checkoutWithOrder](ctx, s.pool, `SELECT jsonb_build_object('checkout', x.snapshot, 'order', o.snapshot)
+	  FROM billing_checkouts x
+	  LEFT JOIN billing_orders o ON o.account_id=x.account_id AND o.id=x.snapshot->>'order_id'
+	  WHERE x.account_id=$1
+	  ORDER BY (x.snapshot->>'payment_status' IN ('CREATED','PENDING','UNKNOWN','REVIEW')
+	    OR x.snapshot->>'refund_status' IN ('PENDING','REVIEW')
+	    OR (x.snapshot->>'payment_status'='PAID' AND x.snapshot->>'fulfillment_status'<>'FULFILLED'
+	      AND COALESCE(x.snapshot->>'refund_status','')<>'SUCCEEDED')) DESC NULLS LAST,
+	    (x.snapshot->>'created_at')::timestamptz DESC, x.id LIMIT 200`, account)
 	if e != nil {
 		return nil, e
 	}
-	out := []Checkout{}
+	out := make([]Checkout, 0, len(xs))
 	for _, x := range xs {
-		v, e := s.checkoutView(ctx, x)
-		if e != nil {
-			return nil, e
+		v := x.Checkout.Checkout
+		if x.Order != nil {
+			v = checkoutOrderView(v, *x.Order)
 		}
 		out = append(out, v)
 	}
 	return out, nil
 }
+
 func (s *Service) checkoutView(ctx context.Context, x checkoutRecord) (Checkout, error) {
 	v := x.Checkout
-	if v.OrderID != "" {
-		o, e := load[Order](ctx, s.pool, `SELECT snapshot FROM billing_orders WHERE id=$1`, v.OrderID)
-		if e != nil {
-			return v, e
-		}
-		v.FulfillmentStatus = o.FulfillmentStatus
-		if v.FulfillmentStatus == "CANCELED" {
-			v.FulfillmentStatus = "NOT_STARTED"
-		}
-		if o.RefundStatus == "REFUNDED" {
-			v.RefundStatus = "SUCCEEDED"
-		} else if o.RefundStatus == "MANUAL_REVIEW" {
-			v.RefundStatus = "REVIEW"
-		}
+	if v.OrderID == "" {
+		return v, nil
 	}
-	return v, nil
+	o, e := load[Order](ctx, s.pool, `SELECT snapshot FROM billing_orders WHERE account_id=$1 AND id=$2`, v.AccountID, v.OrderID)
+	if e != nil {
+		return v, e
+	}
+	return checkoutOrderView(v, o), nil
+}
+
+func checkoutOrderView(v Checkout, o Order) Checkout {
+	v.FulfillmentStatus = o.FulfillmentStatus
+	if v.FulfillmentStatus == "CANCELED" {
+		v.FulfillmentStatus = "NOT_STARTED"
+	}
+	if o.RefundStatus == "REFUNDED" {
+		v.RefundStatus = "SUCCEEDED"
+	} else if o.RefundStatus == "MANUAL_REVIEW" {
+		v.RefundStatus = "REVIEW"
+	}
+	return v
 }
 
 // ConfigureCheckoutReadiness binds the deployment's verified runtime protocol

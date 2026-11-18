@@ -38,6 +38,7 @@ type Provider interface {
 	MerchantID() string
 	Create(context.Context, Request) (Session, error)
 	Query(context.Context, string) (Result, error)
+	// Close returns nil only when the merchant confirms closure of the original order.
 	Close(context.Context, string) error
 	VerifyNotification(http.Header, []byte) (Result, error)
 	Refund(context.Context, RefundRequest) (RefundResult, error)

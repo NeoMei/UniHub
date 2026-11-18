@@ -230,6 +230,13 @@ func (s *Service) ReconcileCheckout(ctx context.Context, actor, account, checkou
 	if e := s.finance(ctx, s.pool, actor, account); e != nil {
 		return Checkout{}, e
 	}
+	x, e := readCheckout(ctx, s.pool, account, checkout)
+	if e != nil {
+		return x.Checkout, e
+	}
+	if x.RefundStatus == "PENDING" {
+		return s.recoverCheckoutRefund(ctx, account, checkout)
+	}
 	return s.reconcileCheckout(ctx, account, checkout)
 }
 func (s *Service) reconcileCheckout(ctx context.Context, account, checkout string) (Checkout, error) {
@@ -263,7 +270,7 @@ func (s *Service) reconcileCheckout(ctx context.Context, account, checkout strin
 			return e
 		}
 		x = current
-		if x.Receipt != nil {
+		if x.Receipt != nil || x.PaymentStatus == "CLOSED" {
 			return nil
 		}
 		switch result.Status {
@@ -315,39 +322,67 @@ func (s *Service) CloseCheckout(ctx context.Context, actor, account, checkout st
 	if e := s.finance(ctx, s.pool, actor, account); e != nil {
 		return Checkout{}, e
 	}
-	// Query first. A close success without a subsequent verified terminal query is
-	// never sufficient to release the commercial lock.
+	return s.closeCheckout(ctx, account, checkout)
+}
+
+func (s *Service) closeCheckout(ctx context.Context, account, checkout string) (Checkout, error) {
 	v, e := s.reconcileCheckout(ctx, account, checkout)
-	if e != nil {
+	if e != nil || v.PaymentStatus == "PAID" || v.PaymentStatus == "REVIEW" || v.PaymentStatus == "CLOSED" {
 		return v, e
 	}
-	if v.PaymentStatus == "PAID" || v.PaymentStatus == "REVIEW" || v.PaymentStatus == "CLOSED" {
-		return v, nil
-	}
-	x, e := readCheckout(ctx, s.pool, account, checkout)
-	if e != nil {
-		return v, e
-	}
-	p, e := s.checkoutBoundProvider(ctx, x)
-	if e != nil {
-		return v, e
-	}
+	var x checkoutRecord
 	e = s.locked(ctx, account, func(c *pgxpool.Conn) error {
 		current, e := readCheckout(ctx, c, account, checkout)
 		if e != nil {
 			return e
 		}
 		x = current
+		if x.Receipt != nil || x.PaymentStatus == "CLOSED" || x.PaymentStatus == "REVIEW" || x.CloseRequested {
+			return nil
+		}
 		x.CloseRequested = true
 		return saveCheckout(ctx, c, x)
 	})
 	if e != nil {
 		return v, e
 	}
-	if e = p.Close(ctx, checkout); e != nil {
-		return s.checkoutUnknown(ctx, x, "provider_close_unknown")
+	if x.Receipt != nil || x.PaymentStatus == "CLOSED" || x.PaymentStatus == "REVIEW" {
+		return s.checkoutView(ctx, x)
 	}
-	return s.reconcileCheckout(ctx, account, checkout)
+	p, e := s.checkoutBoundProvider(ctx, x)
+	if e != nil {
+		return v, e
+	}
+	closeErr := p.Close(ctx, checkout)
+	// Even an unsuccessful close can race an accepted payment or a completed close.
+	result, e := s.reconcileCheckout(ctx, account, checkout)
+	if e != nil || result.PaymentStatus != "UNKNOWN" || result.ErrorCode != "provider_query_unknown" {
+		return result, e
+	}
+	if closeErr != nil || s.now().Before(x.ExpiresAt) {
+		return result, nil
+	}
+	// A verified successful merchant close is terminal for this original expired
+	// order. A transient query failure cannot turn it back into an open checkout.
+	// A verified payment receipt always wins, including one received concurrently.
+	e = s.locked(ctx, account, func(c *pgxpool.Conn) error {
+		current, e := readCheckout(ctx, c, account, checkout)
+		if e != nil {
+			return e
+		}
+		x = current
+		if x.Receipt != nil || x.PaymentStatus != "UNKNOWN" || x.ErrorCode != "provider_query_unknown" {
+			return nil
+		}
+		x.PaymentStatus = "CLOSED"
+		x.ErrorCode = ""
+		x.Session = nil
+		return saveCheckout(ctx, c, x)
+	})
+	if e != nil {
+		return x.Checkout, e
+	}
+	return s.checkoutView(ctx, x)
 }
 
 // NotifyCheckout acknowledges a verified receipt only after its durable unique
@@ -520,20 +555,13 @@ func (s *Service) RecoverCheckouts(ctx context.Context) error {
 		if _, e = s.pool.Exec(ctx, `UPDATE billing_checkouts SET last_recovery_attempt=clock_timestamp() WHERE id=$1`, x.ID); e != nil {
 			return errors.Join(failures, e)
 		}
-		if x.RefundStatus == "PENDING" {
+		switch {
+		case x.RefundStatus == "PENDING":
 			_, e = s.recoverCheckoutRefund(ctx, x.AccountID, x.ID)
-		} else {
-			var v Checkout
-			v, e = s.reconcileCheckout(ctx, x.AccountID, x.ID)
-			if e == nil && x.CloseRequested && v.PaymentStatus != "CLOSED" && v.PaymentStatus != "PAID" && v.PaymentStatus != "REVIEW" {
-				p, pe := s.checkoutBoundProvider(ctx, x)
-				if pe == nil {
-					pe = p.Close(ctx, x.ID)
-				}
-				if pe == nil {
-					_, e = s.reconcileCheckout(ctx, x.AccountID, x.ID)
-				}
-			}
+		case x.CloseRequested || (!s.now().Before(x.ExpiresAt) && (x.PaymentStatus == "CREATED" || x.PaymentStatus == "PENDING" || x.PaymentStatus == "UNKNOWN")):
+			_, e = s.closeCheckout(ctx, x.AccountID, x.ID)
+		default:
+			_, e = s.reconcileCheckout(ctx, x.AccountID, x.ID)
 		}
 		if e != nil {
 			failures = errors.Join(failures, e)
