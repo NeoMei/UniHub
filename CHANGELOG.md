@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.64 - 2026-11-18
+
+- SuperWagie clients can opt in to in-panel Alipay QR checkout. Existing clients can still read the order and payment status.
+- Credit confirmed on-time payments when the receipt arrives late. After the signed checkout expires, close Alipay cash orders only when the provider confirms there is no transaction.
+
 ## 0.4.63 - 2026-11-18
 
 - Cash recharges keep the same merchant order ID when creation is retried.

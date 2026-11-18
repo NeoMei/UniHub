@@ -7,6 +7,15 @@ import (
 	"unihub/internal/billing"
 )
 
+// Legacy clients accept only an Alipay redirect. Keep the original status
+// and order ID readable when another client creates an Alipay QR checkout.
+func checkoutForClient(r *http.Request, x billing.Checkout) billing.Checkout {
+	if x.Provider == "alipay" && x.Session != nil && x.Session.Kind == "qr" && r.Header.Get("X-UniHub-Alipay-QR") != "1" {
+		x.Session = nil
+	}
+	return x
+}
+
 func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 	b := s.options.Billing
 	authorize := func(r *http.Request, u accounts.User) (billing.Checkout, error) {
@@ -42,7 +51,7 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
-		return respond(w, 202, x)
+		return respond(w, 202, checkoutForClient(r, x))
 	})
 	add("GET /v1/accounts/{account}/checkouts", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		xs, e := b.ListCheckouts(r.Context(), u.ID, r.PathValue("account"))
@@ -50,6 +59,9 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 			return e
 		}
 		xs = filterProducts(r, xs, func(x billing.Checkout) string { return x.ProductID })
+		for i := range xs {
+			xs[i] = checkoutForClient(r, xs[i])
+		}
 		return respond(w, 200, xs)
 	})
 	add("GET /v1/accounts/{account}/checkouts/{checkout}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
@@ -57,7 +69,7 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
-		return respond(w, 200, x)
+		return respond(w, 200, checkoutForClient(r, x))
 	})
 	add("POST /v1/accounts/{account}/checkouts/{checkout}/reconcile", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body struct{}
@@ -71,7 +83,7 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
-		return respond(w, 200, x)
+		return respond(w, 200, checkoutForClient(r, x))
 	})
 	add("POST /v1/accounts/{account}/checkouts/{checkout}/close", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body struct{}
@@ -85,7 +97,7 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
-		return respond(w, 200, x)
+		return respond(w, 200, checkoutForClient(r, x))
 	})
 	add("POST /v1/accounts/{account}/checkouts/{checkout}/refund", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body struct {
@@ -104,7 +116,7 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 		if e != nil {
 			return e
 		}
-		return respond(w, 202, x)
+		return respond(w, 202, checkoutForClient(r, x))
 	})
 	m.HandleFunc("POST /payments/{provider}/notify", func(w http.ResponseWriter, r *http.Request) {
 		provider := r.PathValue("provider")

@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const alipayGateway = "https://openapi.alipay.com/gateway.do"
+const alipayPrecreate = "alipay.trade.precreate"
 
 var chinaTime = time.FixedZone("CST", 8*3600)
 
@@ -61,8 +63,10 @@ func (a *Alipay) params(method string, biz any, page bool) (url.Values, error) {
 		return nil, ErrInvalid
 	}
 	v := url.Values{"app_id": {a.cfg.AppID}, "method": {method}, "format": {"JSON"}, "charset": {"utf-8"}, "sign_type": {"RSA2"}, "timestamp": {time.Now().In(chinaTime).Format(alipayTime)}, "version": {"1.0"}, "biz_content": {string(b)}}
-	if page {
+	if page || method == alipayPrecreate {
 		v.Set("notify_url", a.cfg.NotifyURL)
+	}
+	if page {
 		v.Set("return_url", a.cfg.ReturnURL)
 	}
 	sig, e := signRSA(a.cfg.PrivateKey, []byte(canonical(v, false)))
@@ -78,6 +82,9 @@ func (a *Alipay) Create(ctx context.Context, r Request) (Session, error) {
 	}
 	if e := validRequest(r); e != nil {
 		return Session{}, e
+	}
+	if r.RequireQR {
+		return a.precreate(ctx, r)
 	}
 	if r.ReturnURL != "" {
 		if !trustedHTTPS(r.ReturnURL) {
@@ -97,6 +104,35 @@ func (a *Alipay) Create(ctx context.Context, r Request) (Session, error) {
 	return Session{Kind: "redirect", URL: alipayGateway + "?" + v.Encode(), ExpiresAt: r.ExpiresAt}, nil
 }
 
+func (a *Alipay) precreate(ctx context.Context, r Request) (Session, error) {
+	now := time.Now()
+	minutes := int(r.ExpiresAt.Sub(now) / time.Minute)
+	if minutes < 1 {
+		return Session{}, ErrInvalid
+	}
+	fen, _ := toFen(r.Amount)
+	biz := map[string]string{
+		"out_trade_no": r.OrderID, "seller_id": a.cfg.SellerID,
+		"total_amount": fenYuan(fen), "subject": r.Description,
+		"timeout_express": strconv.Itoa(minutes) + "m",
+	}
+	v, err := a.call(ctx, alipayPrecreate, biz)
+	if err != nil {
+		return Session{}, err
+	}
+	if v.scanAccessDenied() {
+		return Session{}, ErrUnconfigured
+	}
+	if v.Code != "10000" {
+		return Session{}, ErrUnavailable
+	}
+	u, err := url.Parse(v.QRCode)
+	if v.OrderID != r.OrderID || err != nil || !trustedHTTPS(v.QRCode) || u.Host != "qr.alipay.com" || u.Path == "" || u.Path == "/" || len(v.QRCode) > 1024 {
+		return Session{}, ErrVerification
+	}
+	return Session{Kind: "qr", URL: v.QRCode, ExpiresAt: now.Add(time.Duration(minutes) * time.Minute)}, nil
+}
+
 type alipayResponse struct {
 	Code           string `json:"code"`
 	SubCode        string `json:"sub_code"`
@@ -108,10 +144,16 @@ type alipayResponse struct {
 	TotalAmount    string `json:"total_amount"`
 	Currency       string `json:"trans_currency"`
 	PaidAt         string `json:"send_pay_date"`
+	QRCode         string `json:"qr_code"`
 	RefundID       string `json:"out_request_no"`
 	RefundAmount   string `json:"refund_amount"`
 	RefundStatus   string `json:"refund_status"`
 	RefundCurrency string `json:"refund_currency"`
+}
+
+func (r alipayResponse) scanAccessDenied() bool {
+	return (r.Code == "40004" && r.SubCode == "ACQ.ACCESS_FORBIDDEN") ||
+		(r.Code == "40006" && (r.SubCode == "isv.insufficient-isv-permissions" || r.SubCode == "isv.insufficient-user-permissions"))
 }
 
 func (a *Alipay) call(ctx context.Context, method string, biz any) (alipayResponse, error) {
@@ -151,6 +193,10 @@ func (a *Alipay) call(ctx context.Context, method string, biz any) (alipayRespon
 		return alipayResponse{}, e
 	}
 	raw, ok := envelope[strings.ReplaceAll(method, ".", "_")+"_response"]
+	gatewayDenial := !ok && method == alipayPrecreate
+	if gatewayDenial {
+		raw, ok = envelope["error_response"]
+	}
 	if !ok {
 		return alipayResponse{}, ErrVerification
 	}
@@ -164,6 +210,9 @@ func (a *Alipay) call(ctx context.Context, method string, biz any) (alipayRespon
 	var result alipayResponse
 	if e = strictJSON(raw, &result); e != nil {
 		return alipayResponse{}, e
+	}
+	if gatewayDenial && !result.scanAccessDenied() {
+		return alipayResponse{}, ErrVerification
 	}
 	if (result.AppID != "" && result.AppID != a.cfg.AppID) || (result.SellerID != "" && result.SellerID != a.cfg.SellerID) || (result.Currency != "" && result.Currency != "CNY") || (result.RefundCurrency != "" && result.RefundCurrency != "CNY") {
 		return alipayResponse{}, ErrVerification

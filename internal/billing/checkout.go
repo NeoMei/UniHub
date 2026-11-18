@@ -18,7 +18,7 @@ import (
 func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r CheckoutRequest) (Checkout, error) {
 	var x checkoutRecord
 	fresh := false
-	if !keyOK(r.Key) || (r.OfferID == "") == (r.QuoteID == "") {
+	if !keyOK(r.Key) || (r.OfferID == "") == (r.QuoteID == "") || (r.RequireQR && r.Provider != "alipay") {
 		return x.Checkout, ErrInvalid
 	}
 	var p payments.Provider
@@ -58,6 +58,8 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 		if e := s.finance(ctx, c, actor, account); e != nil {
 			return e
 		}
+		// Presentation is selected when the merchant session is created and
+		// an idempotent replay only reads that original checkout.
 		digest := hash([]string{actor, r.Provider, r.OfferID, r.QuoteID})
 		old, e := load[checkoutRecord](ctx, c, `SELECT snapshot FROM billing_checkouts WHERE account_id=$1 AND request_key=$2`, account, r.Key)
 		if e == nil {
@@ -116,6 +118,9 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 			if e != nil {
 				return e
 			}
+		}
+		if r.RequireQR && expires.Sub(now) < time.Minute {
+			return ErrQuoteInvalidated
 		}
 		if e = s.requireAddonSubscriptionOn(ctx, c, offer, account, now); e != nil {
 			return e
@@ -197,7 +202,7 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 	if !fresh {
 		return s.checkoutView(ctx, x)
 	}
-	session, createErr := p.Create(ctx, payments.Request{OrderID: x.ID, Amount: x.Amount, Description: x.OfferName, ExpiresAt: x.ExpiresAt})
+	session, createErr := p.Create(ctx, payments.Request{OrderID: x.ID, Amount: x.Amount, Description: x.OfferName, RequireQR: r.RequireQR, ExpiresAt: x.ExpiresAt})
 	e = s.locked(ctx, account, func(c *pgxpool.Conn) error {
 		current, e := readCheckout(ctx, c, account, x.ID)
 		if e != nil {
@@ -207,15 +212,18 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 		if x.Receipt != nil || x.PaymentStatus == "CLOSED" {
 			return nil
 		}
-		if createErr != nil {
+		if r.RequireQR && errors.Is(createErr, payments.ErrUnconfigured) {
+			x.PaymentStatus = "CLOSED"
+			x.ErrorCode = "payment_not_configured"
+		} else if createErr != nil {
 			x.PaymentStatus = "UNKNOWN"
 			x.ErrorCode = "provider_create_unknown"
-		} else if (session.Kind != "qr" && session.Kind != "redirect") || session.URL == "" || session.ExpiresAt.After(x.ExpiresAt) || !session.ExpiresAt.After(x.CreatedAt) {
+		} else if (session.Kind != "qr" && (session.Kind != "redirect" || r.RequireQR)) || session.URL == "" || session.ExpiresAt.After(x.ExpiresAt) || !session.ExpiresAt.After(x.CreatedAt) {
 			x.PaymentStatus = "UNKNOWN"
 			x.ErrorCode = "provider_session_invalid"
 		} else {
 			x.PaymentStatus = "PENDING"
-			x.Session = &session
+			x.setPaymentSession(&session)
 			x.ErrorCode = ""
 		}
 		return saveCheckout(ctx, c, x)
@@ -276,11 +284,11 @@ func (s *Service) reconcileCheckout(ctx context.Context, account, checkout strin
 		switch result.Status {
 		case "CLOSED":
 			x.PaymentStatus = "CLOSED"
-			x.Session = nil
+			x.setPaymentSession(nil)
 		case "NOT_FOUND":
 			if !s.now().Before(x.ExpiresAt) {
 				x.PaymentStatus = "CLOSED"
-				x.Session = nil
+				x.setPaymentSession(nil)
 			} else {
 				x.PaymentStatus = "UNKNOWN"
 			}
@@ -376,7 +384,7 @@ func (s *Service) closeCheckout(ctx context.Context, account, checkout string) (
 		}
 		x.PaymentStatus = "CLOSED"
 		x.ErrorCode = ""
-		x.Session = nil
+		x.setPaymentSession(nil)
 		return saveCheckout(ctx, c, x)
 	})
 	if e != nil {
@@ -433,10 +441,13 @@ func (s *Service) acceptCheckoutReceipt(ctx context.Context, p payments.Provider
 		x.Receipt = &r
 		x.PaymentStatus = "PAID"
 		x.FulfillmentStatus = "PENDING"
-		x.Session = nil
+		x.setPaymentSession(nil)
 		x.ErrorCode = ""
-		// Both the observation and provider timestamp must fit the frozen contract.
-		if wasClosed || !s.now().Before(x.ExpiresAt) || !r.PaidAt.IsZero() && (!r.PaidAt.Before(x.ExpiresAt) || r.PaidAt.Before(x.CreatedAt.Add(-time.Minute))) {
+		paidAt := r.PaidAt
+		if paidAt.IsZero() {
+			paidAt = s.now()
+		}
+		if wasClosed || !paidAt.Before(x.ExpiresAt) || paidAt.Before(x.CreatedAt.Add(-time.Minute)) {
 			x.PaymentStatus = "REVIEW"
 			x.FulfillmentStatus = "REVIEW"
 			x.ErrorCode = "late_payment"
@@ -570,16 +581,20 @@ func (s *Service) RecoverCheckouts(ctx context.Context) error {
 	return failures
 }
 
-// A receipt may outlive its ledger outage. Before creating a new fulfillment
-// command recheck the frozen deadline and subscription revision; once a command
-// exists its immutable postings must be recovered instead of changed.
+// The receipt has already established the payment deadline. Before posting
+// fulfillment check whether the purchased benefit period still applies. An
+// existing fulfillment command keeps its original postings on recovery.
 func (s *Service) externalFulfillmentReviewLocked(ctx context.Context, c *pgxpool.Conn, o Order, now time.Time) (bool, error) {
 	x, e := readCheckout(ctx, c, o.AccountID, o.CheckoutID)
 	if e != nil {
 		return false, e
 	}
 	reason := ""
-	if !now.Before(x.ExpiresAt) {
+	benefitDeadline := o.End
+	if o.Kind == "upgrade" {
+		benefitDeadline = o.PeriodEnd
+	}
+	if !now.Before(benefitDeadline) {
 		reason = "fulfillment_deadline_elapsed"
 	}
 	if x.Quote != nil {

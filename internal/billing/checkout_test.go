@@ -88,6 +88,72 @@ func checkoutFixture(t *testing.T) (fixture, *checkoutProvider) {
 	f.s.ConfigurePayments([]payments.Provider{p})
 	return f, p
 }
+
+type alipayScanFixture struct{ *checkoutProvider }
+
+func (*alipayScanFixture) ID() string { return "alipay" }
+
+func (p *alipayScanFixture) Create(ctx context.Context, r payments.Request) (payments.Session, error) {
+	session, err := p.checkoutProvider.Create(ctx, r)
+	if r.RequireQR {
+		session.URL = "https://qr.alipay.com/fixture"
+	} else {
+		session.Kind = "redirect"
+		session.URL = "https://openapi.alipay.com/gateway.do"
+	}
+	return session, err
+}
+
+func TestAlipayScanCheckoutBindsPresentationAndFulfillsOnce(t *testing.T) {
+	f, wechat := checkoutFixture(t)
+	alipay := &alipayScanFixture{&checkoutProvider{}}
+	f.s.ConfigurePayments([]payments.Provider{wechat, alipay})
+	ctx := context.Background()
+	request := CheckoutRequest{OfferID: "sandbox-sw-month-1", Provider: "alipay", Key: "scan", RequireQR: true}
+	first, err := f.s.CreateCheckout(ctx, f.actor, f.account, request)
+	if err != nil || first.Session == nil || first.Session.Kind != "qr" || len(alipay.requests) != 1 || !alipay.requests[0].RequireQR {
+		t.Fatalf("create scan checkout: %+v %v", first, err)
+	}
+	again, err := f.s.CreateCheckout(ctx, f.actor, f.account, request)
+	if err != nil || again.ID != first.ID || len(alipay.requests) != 1 {
+		t.Fatalf("replay created another payment: %+v %v", again, err)
+	}
+	request.RequireQR = false
+	legacy, err := f.s.CreateCheckout(ctx, f.actor, f.account, request)
+	if err != nil || legacy.ID != first.ID || len(alipay.requests) != 1 {
+		t.Fatalf("older client could not recover the same checkout: %+v %v", legacy, err)
+	}
+	alipay.result = payments.Result{OrderID: first.ID, TransactionID: "scan-alipay-paid", Amount: first.Amount, Currency: "CNY", Status: "PAID", PaidAt: f.s.now()}
+	var orderID string
+	for i := 0; i < 2; i++ {
+		paid, err := f.s.ReconcileCheckout(ctx, f.actor, f.account, first.ID)
+		if err != nil || paid.FulfillmentStatus != "FULFILLED" || paid.Session != nil {
+			t.Fatalf("settle scan checkout: %+v %v", paid, err)
+		}
+		orderID = paid.OrderID
+	}
+	var grants int
+	if err = f.s.pool.QueryRow(ctx, `SELECT count(*) FROM billing_batches WHERE order_id=$1`, orderID).Scan(&grants); err != nil || grants != 1 {
+		t.Fatalf("benefit batch count: %d %v", grants, err)
+	}
+}
+
+func TestUnsupportedAlipayScanDoesNotBlockWeChatCheckout(t *testing.T) {
+	f, wechat := checkoutFixture(t)
+	alipay := &alipayScanFixture{&checkoutProvider{createErr: payments.ErrUnconfigured}}
+	f.s.ConfigurePayments([]payments.Provider{wechat, alipay})
+	ctx := context.Background()
+	offerID := "sandbox-sw-month-1"
+	closed, err := f.s.CreateCheckout(ctx, f.actor, f.account, CheckoutRequest{OfferID: offerID, Provider: "alipay", Key: "unsupported", RequireQR: true})
+	if err != nil || closed.PaymentStatus != "CLOSED" || closed.ErrorCode != "payment_not_configured" || closed.Session != nil {
+		t.Fatalf("refused scan checkout: %+v %v", closed, err)
+	}
+	pending, err := f.s.CreateCheckout(ctx, f.actor, f.account, CheckoutRequest{OfferID: offerID, Provider: "wechat", Key: "replacement"})
+	if err != nil || pending.PaymentStatus != "PENDING" || pending.Session == nil {
+		t.Fatalf("WeChat checkout: %+v %v", pending, err)
+	}
+}
+
 func TestExternalCheckoutReceiptReplayAndWalletPreservation(t *testing.T) {
 	f, p := checkoutFixture(t)
 	ctx := context.Background()
@@ -159,6 +225,45 @@ func TestExternalCheckoutUnknownPreservesIdentityAndCommercialLock(t *testing.T)
 		t.Fatal("recreated uncertain payment", e)
 	}
 }
+func TestExternalCheckoutFulfillsTimelyPaymentWhenQueryIsLate(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		paidAtOffset time.Duration
+		hasTimestamp bool
+		want         string
+	}{
+		{"timely", -time.Minute, true, "FULFILLED"},
+		{"at_expiry", 0, true, "REVIEW"},
+		{"missing_time_after_expiry", 0, false, "REVIEW"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, p := checkoutFixture(t)
+			ctx := context.Background()
+			x, err := f.s.CreateCheckout(ctx, f.actor, f.account, CheckoutRequest{OfferID: "sandbox-sw-month-1", Provider: "wechat", Key: "timely-payment"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			observedAt := x.ExpiresAt.Add(time.Minute)
+			f.s.now = func() time.Time { return observedAt }
+			var paidAt time.Time
+			if tc.hasTimestamp {
+				paidAt = x.ExpiresAt.Add(tc.paidAtOffset)
+			}
+			p.result = payments.Result{OrderID: x.ID, TransactionID: "same-payment", Amount: x.Amount, Currency: "CNY", Status: "PAID", PaidAt: paidAt}
+			for range 2 {
+				got, err := f.s.ReconcileCheckout(ctx, f.actor, f.account, x.ID)
+				if err != nil || got.FulfillmentStatus != tc.want {
+					t.Fatalf("received checkout %+v, want %s; %v", got, tc.want, err)
+				}
+			}
+			var receipts int
+			if err := f.s.pool.QueryRow(ctx, "SELECT count(*) FROM billing_payment_receipts WHERE checkout_id=$1", x.ID).Scan(&receipts); err != nil || receipts != 1 {
+				t.Fatalf("receipt count %d, err %v", receipts, err)
+			}
+		})
+	}
+}
+
 func TestExternalCheckoutLatePaidReviewAndOriginalRefund(t *testing.T) {
 	f, p := checkoutFixture(t)
 	ctx := context.Background()
@@ -336,8 +441,8 @@ func TestExternalCheckoutUnpaidDoesNotBlockUsageAndUsedRefundReview(t *testing.T
 	}
 }
 
-func TestExternalCheckoutClosedLateReceiptAndDelayedLedgerReview(t *testing.T) {
-	for _, mode := range []string{"closed", "delayed-ledger"} {
+func TestExternalCheckoutClosedReceiptAndLedgerRecovery(t *testing.T) {
+	for _, mode := range []string{"closed", "delayed-ledger", "expired-benefits"} {
 		t.Run(mode, func(t *testing.T) {
 			f, p := checkoutFixture(t)
 			ctx := context.Background()
@@ -354,7 +459,7 @@ func TestExternalCheckoutClosedLateReceiptAndDelayedLedgerReview(t *testing.T) {
 			}
 			p.result = payments.Result{OrderID: x.ID, TransactionID: "late-" + mode, Amount: x.Amount, Currency: "CNY", Status: "PAID", PaidAt: f.s.now()}
 			var bad *checkoutFailLedger
-			if mode == "delayed-ledger" {
+			if mode != "closed" {
 				bad = &checkoutFailLedger{Ledger: f.l, fail: true}
 				f.s.ledger = bad
 			}
@@ -363,7 +468,15 @@ func TestExternalCheckoutClosedLateReceiptAndDelayedLedgerReview(t *testing.T) {
 			}
 			if bad != nil {
 				bad.fail = false
-				f.s.now = func() time.Time { return x.ExpiresAt.Add(time.Second) }
+				observedAt := x.ExpiresAt.Add(time.Second)
+				if mode == "expired-benefits" {
+					before, err := readCheckout(ctx, f.s.pool, f.account, x.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					observedAt = before.Order.End
+				}
+				f.s.now = func() time.Time { return observedAt }
 				if _, e = f.s.Recover(ctx); e != nil {
 					t.Fatal(e)
 				}
@@ -371,14 +484,17 @@ func TestExternalCheckoutClosedLateReceiptAndDelayedLedgerReview(t *testing.T) {
 					t.Fatal(e)
 				}
 			}
+			payment, fulfillment, wantGrants := "REVIEW", "REVIEW", 0
+			if mode == "delayed-ledger" {
+				payment, fulfillment, wantGrants = "PAID", "FULFILLED", 1
+			}
 			x, e = f.s.GetCheckout(ctx, f.actor, f.account, x.ID)
-			if e != nil || x.PaymentStatus != "REVIEW" || x.FulfillmentStatus != "REVIEW" {
-				t.Fatalf("late fulfilled %+v %v", x, e)
+			if e != nil || x.PaymentStatus != payment || x.FulfillmentStatus != fulfillment {
+				t.Fatalf("checkout after recovery %+v %v", x, e)
 			}
 			var count int
-			f.s.pool.QueryRow(ctx, `SELECT count(*) FROM billing_batches WHERE order_id=$1`, x.OrderID).Scan(&count)
-			if count != 0 {
-				t.Fatal("late receipt created benefits")
+			if e := f.s.pool.QueryRow(ctx, `SELECT count(*) FROM billing_batches WHERE order_id=$1`, x.OrderID).Scan(&count); e != nil || count != wantGrants {
+				t.Fatalf("got %d grants, want %d: %v", count, wantGrants, e)
 			}
 		})
 	}

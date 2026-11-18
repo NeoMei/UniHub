@@ -371,3 +371,34 @@ func TestCashRecoveryQueriesBeforeClosingAndCreditsMissingCallback(t *testing.T)
 	assert.Equal(t, "CREATED", unconfirmed.PaymentStatus)
 	assert.Equal(t, 1, f.provider.closeCalls)
 }
+
+func TestExpiredAlipayCashRedirectChecksMerchantBeforeClosing(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	alipay := newFakeProvider("alipay")
+	f.svc.ConfigureProviders([]payments.Provider{alipay})
+	now := time.Now().UTC()
+	f.svc.now = func() time.Time { return now }
+	req := Request{Provider: "alipay", ProductID: "llmrouter", Amount: "20000000", Key: "expired-alipay-page", UnifiedWallet: true}
+	order, err := f.svc.Create(ctx, f.user.ID, f.account.ID, req)
+	require.NoError(t, err)
+	alipay.paid[order.ID] = payments.Result{OrderID: order.ID, Status: "NOT_FOUND"}
+	require.NoError(t, f.svc.Recover(ctx))
+	active, err := f.svc.Get(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "CREATED", active.PaymentStatus)
+	now = order.ExpiresAt.Add(6 * time.Minute)
+	alipay.queryErr = payments.ErrVerification
+	require.Error(t, f.svc.Recover(ctx))
+	active, err = f.svc.Get(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "CREATED", active.PaymentStatus)
+	now = now.Add(6 * time.Minute)
+	alipay.queryErr = nil
+	require.NoError(t, f.svc.Recover(ctx))
+	closed, err := f.svc.Get(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "CLOSED", closed.PaymentStatus)
+	assert.Nil(t, closed.Session)
+	assert.Zero(t, f.ledger.balance[wallet.Address(f.account.ID, "")])
+}

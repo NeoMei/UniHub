@@ -13,10 +13,11 @@ import (
 var ErrPaymentUnavailable = errors.New("billing: payment_not_configured")
 
 type CheckoutRequest struct {
-	OfferID  string `json:"offer_id,omitempty"`
-	QuoteID  string `json:"quote_id,omitempty"`
-	Provider string `json:"provider"`
-	Key      string `json:"-"`
+	OfferID   string `json:"offer_id,omitempty"`
+	QuoteID   string `json:"quote_id,omitempty"`
+	Provider  string `json:"provider"`
+	RequireQR bool   `json:"require_qr,omitempty"`
+	Key       string `json:"-"`
 }
 type Checkout struct {
 	ID                string            `json:"id"`
@@ -50,6 +51,25 @@ type checkoutRecord struct {
 	RefundReceipt    *payments.RefundResult `json:"refund_receipt,omitempty"`
 	RefundApprovedBy string                 `json:"refund_approved_by,omitempty"`
 	CloseRequested   bool                   `json:"close_requested,omitempty"`
+	AlipayQRSession  *payments.Session      `json:"alipay_qr_session,omitempty"`
+}
+
+// Keep the new presentation outside the legacy session field so a server
+// rollback can still read and reconcile the original checkout.
+func (x *checkoutRecord) setPaymentSession(session *payments.Session) {
+	x.AlipayQRSession = nil
+	x.Session = session
+	if x.Provider == "alipay" && session != nil && session.Kind == "qr" {
+		x.AlipayQRSession, x.Session = session, nil
+	}
+}
+
+func (x checkoutRecord) withPaymentSession() Checkout {
+	view := x.Checkout
+	if x.AlipayQRSession != nil {
+		view.Session = x.AlipayQRSession
+	}
+	return view
 }
 
 func (s *Service) ConfigurePayments(providers []payments.Provider) {
@@ -160,7 +180,7 @@ func (s *Service) ListCheckouts(ctx context.Context, actor, account string) ([]C
 	}
 	out := make([]Checkout, 0, len(xs))
 	for _, x := range xs {
-		v := x.Checkout.Checkout
+		v := x.Checkout.withPaymentSession()
 		if x.Order != nil {
 			v = checkoutOrderView(v, *x.Order)
 		}
@@ -170,7 +190,7 @@ func (s *Service) ListCheckouts(ctx context.Context, actor, account string) ([]C
 }
 
 func (s *Service) checkoutView(ctx context.Context, x checkoutRecord) (Checkout, error) {
-	v := x.Checkout
+	v := x.withPaymentSession()
 	if v.OrderID == "" {
 		return v, nil
 	}

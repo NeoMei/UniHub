@@ -73,7 +73,8 @@ func TestProductFinanceExternalCheckoutIsolation(t *testing.T) {
 		"limited": {Token: strings.Repeat("l", 40), ProductID: "superwagie", InstanceID: "default", FinanceClientID: limited.ClientID, AllowedOps: []string{"finance:read", "finance:write"}},
 	}
 	provider := &checkoutHTTPProvider{}
-	h := New(verifier{}, a, wallet.New(p, a, l), Options{PaymentProviders: []payments.Provider{provider}, Billing: b, ProductUsers: users, ProductAuth: pa, ProductAccess: map[string]products.Client{policy.ClientID: policy, limited.ClientID: limited}, ProductRuntime: services})
+	alipay := &alipayQRHTTPProvider{}
+	h := New(verifier{}, a, wallet.New(p, a, l), Options{PaymentProviders: []payments.Provider{provider, alipay}, Billing: b, ProductUsers: users, ProductAuth: pa, ProductAccess: map[string]products.Client{policy.ClientID: policy, limited.ClientID: limited}, ProductRuntime: services})
 	path := "/internal/v1/product-finance/accounts/" + owner.Binding.PersonalAccountID
 	request := func(service, actor, url, body string, keys ...string) *httptest.ResponseRecorder {
 		t.Helper()
@@ -148,6 +149,53 @@ func TestProductFinanceExternalCheckoutIsolation(t *testing.T) {
 	if out.Code != 400 {
 		t.Fatal("unverified callback accepted")
 	}
+	// Old and new desktop clients can read or replay a QR checkout belonging to
+	// the same account. Only the explicit client opt-in receives the QR URL.
+	qrPath := "/internal/v1/product-finance/accounts/" + other.Binding.PersonalAccountID + "/checkouts"
+	send := func(method, path, body string, qr bool) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+services["write"].Token)
+		req.Header.Set("X-UniHub-Actor-Authorization", "Bearer "+other.ActorToken)
+		if method == "POST" {
+			req.Header.Set("Idempotency-Key", "alipay-scan")
+		}
+		if qr {
+			req.Header.Set("X-UniHub-Alipay-QR", "1")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+	r := send("POST", qrPath, `{"offer_id":"sandbox-sw-month-1","provider":"alipay","require_qr":true}`, true)
+	var scan billing.Checkout
+	if r.Code != 202 || json.Unmarshal(r.Body.Bytes(), &scan) != nil || scan.Session == nil || scan.Session.Kind != "qr" {
+		t.Fatalf("new checkout %d %s", r.Code, r.Body)
+	}
+	var legacySession, privateQRSession bool
+	if err := p.QueryRow(ctx, `SELECT snapshot ? 'session', snapshot ? 'alipay_qr_session' FROM billing_checkouts WHERE id=$1`, scan.ID).Scan(&legacySession, &privateQRSession); err != nil || legacySession || !privateQRSession {
+		t.Fatalf("QR must remain separate from the stored legacy session: %v %v %v", legacySession, privateQRSession, err)
+	}
+	legacyReplay := send("POST", qrPath, `{"offer_id":"sandbox-sw-month-1","provider":"alipay"}`, false)
+	if legacyReplay.Code != 202 || strings.Contains(legacyReplay.Body.String(), "qr.alipay.com") || !strings.Contains(legacyReplay.Body.String(), scan.ID) || alipay.creates != 1 {
+		t.Fatalf("old create replay %d %s creates=%d", legacyReplay.Code, legacyReplay.Body, alipay.creates)
+	}
+	for _, path := range []string{qrPath, qrPath + "/" + scan.ID} {
+		for _, qr := range []bool{true, false} {
+			r := send("GET", path, "", qr)
+			if r.Code != 200 || strings.Contains(r.Body.String(), "qr.alipay.com") != qr || !strings.Contains(r.Body.String(), scan.ID) {
+				t.Fatalf("mixed-version read qr=%v %d %s", qr, r.Code, r.Body)
+			}
+		}
+	}
+}
+
+type alipayQRHTTPProvider struct{ checkoutHTTPProvider }
+
+func (*alipayQRHTTPProvider) ID() string { return "alipay" }
+func (p *alipayQRHTTPProvider) Create(_ context.Context, r payments.Request) (payments.Session, error) {
+	p.creates++
+	return payments.Session{Kind: "qr", URL: "https://qr.alipay.com/fixture", ExpiresAt: r.ExpiresAt}, nil
 }
 
 type checkoutHTTPProvider struct {
