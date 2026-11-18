@@ -11,32 +11,66 @@ import (
 
 // MonthAnchor always derives from the original UTC anchor, preserving its day.
 func MonthAnchor(anchor time.Time, offset int) time.Time {
-	a := anchor.UTC()
-	first := time.Date(a.Year(), a.Month()+time.Month(offset), 1, a.Hour(), a.Minute(), a.Second(), a.Nanosecond(), time.UTC)
-	day := a.Day()
+	return calendarAnchor(anchor.UTC(), offset)
+}
+
+func calendarAnchor(anchor time.Time, offset int) time.Time {
+	first := time.Date(anchor.Year(), anchor.Month()+time.Month(offset), 1, anchor.Hour(), anchor.Minute(), anchor.Second(), anchor.Nanosecond(), anchor.Location())
+	day := anchor.Day()
 	last := first.AddDate(0, 1, -1).Day()
 	if day > last {
 		day = last
 	}
-	return time.Date(first.Year(), first.Month(), day, a.Hour(), a.Minute(), a.Second(), a.Nanosecond(), time.UTC)
+	return time.Date(first.Year(), first.Month(), day, first.Hour(), first.Minute(), first.Second(), first.Nanosecond(), first.Location())
 }
 func CurrentPeriod(anchor, paidThrough, now time.Time) (time.Time, time.Time, bool) {
-	anchor = anchor.UTC()
-	now = now.UTC()
-	paidThrough = paidThrough.UTC()
+	return currentPeriodAt(anchor, paidThrough, now, time.UTC)
+}
+
+var productBillingLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
+
+func (o Offer) billingLocation() *time.Location {
+	if o.CreditScope == ProductCreditScopeV1 {
+		return productBillingLocation
+	}
+	return time.UTC
+}
+
+func (o Offer) monthAnchor(anchor time.Time, offset int) time.Time {
+	return calendarAnchor(anchor.In(o.billingLocation()), offset).UTC()
+}
+
+func (o Offer) membershipMonths() int {
+	if o.Period == "year" {
+		return 12
+	}
+	return 1
+}
+
+func (o Offer) currentPeriod(anchor, paidThrough, now time.Time) (time.Time, time.Time, bool) {
+	return currentPeriodAt(anchor, paidThrough, now, o.billingLocation())
+}
+
+func monthsBetween(anchor, now time.Time) int {
+	return (now.Year()-anchor.Year())*12 + int(now.Month()-anchor.Month())
+}
+
+func currentPeriodAt(anchor, paidThrough, now time.Time, loc *time.Location) (time.Time, time.Time, bool) {
+	anchor = anchor.In(loc)
+	now = now.In(loc)
 	if now.Before(anchor) || !now.Before(paidThrough) {
 		return time.Time{}, time.Time{}, false
 	}
-	m := (now.Year()-anchor.Year())*12 + int(now.Month()-anchor.Month())
-	if now.Before(MonthAnchor(anchor, m)) {
+	m := monthsBetween(anchor, now)
+	if now.Before(calendarAnchor(anchor, m)) {
 		m--
 	}
-	start := MonthAnchor(anchor, m)
-	end := MonthAnchor(anchor, m+1)
+	start := calendarAnchor(anchor, m)
+	end := calendarAnchor(anchor, m+1)
 	if end.After(paidThrough) {
 		end = paidThrough
 	}
-	return start, end, start.Before(end)
+	return start.UTC(), end.UTC(), start.Before(end)
 }
 func integer(v string, positive bool) (int64, error) {
 	if v == "" || strings.TrimSpace(v) != v {

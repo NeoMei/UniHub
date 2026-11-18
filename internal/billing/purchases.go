@@ -108,14 +108,10 @@ func (s *Service) Purchase(ctx context.Context, actor, account string, r Purchas
 				return e
 			}
 			o.SubscriptionID = id("sub_")
-			months := 1
-			if offer.Period == "year" {
-				months = 12
-			}
-			o.End = MonthAnchor(now, months)
-			o.PeriodStart, o.PeriodEnd, _ = CurrentPeriod(now, o.End, now)
+			o.End = o.Offer.monthAnchor(now, o.Offer.membershipMonths())
+			o.PeriodStart, o.PeriodEnd, _ = o.Offer.currentPeriod(now, o.End, now)
 		} else {
-			o.End = MonthAnchor(now, offer.ValidityMonths)
+			o.End = offer.monthAnchor(now, offer.ValidityMonths)
 			o.PeriodStart = now
 			o.PeriodEnd = o.End
 		}
@@ -271,24 +267,41 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 	var sub *Subscription
 	start, end := o.PeriodStart, o.PeriodEnd
 	grant := o.GrantAmount
+	var replacedOrder *Order
+	var replacedBatches []Batch
+	posts := []ledger.Posting{}
 	if o.Kind == "membership" || o.Kind == "renewal" {
 		old, e := load[Subscription](ctx, c, `SELECT snapshot FROM billing_subscriptions WHERE id=$1`, o.SubscriptionID)
 		if e != nil && !errors.Is(e, accounts.ErrNotFound) {
 			return e
 		}
 		anchor := o.Start
-		if o.Kind == "renewal" {
+		if o.Kind == "renewal" && (o.CreditScope != ProductCreditScopeV1 || !o.Start.After(old.PaidThrough)) {
 			anchor = old.Anchor
 		}
 		x := Subscription{ID: o.SubscriptionID, AccountID: o.AccountID, ProductID: o.ProductID, Offer: o.Offer, Version: old.Version + 1, Anchor: anchor, PaidThrough: o.End, Status: "active"}
 		sub = &x
 		var ok bool
-		start, end, ok = CurrentPeriod(anchor, o.End, now)
+		start, end, ok = o.Offer.currentPeriod(anchor, o.End, now)
 		if !ok {
 			grant = "0"
 		}
 	}
-	if o.Kind == "upgrade" {
+	if o.ProductCreditUpgrade != nil {
+		old, batches, withdrawalPosts, e := s.prepareProductCreditUpgrade(ctx, c, &o, o.Start)
+		if e != nil {
+			return e
+		}
+		replacedOrder, replacedBatches = &old, batches
+		posts = append(posts, withdrawalPosts...)
+		sub = &Subscription{ID: o.SubscriptionID, AccountID: o.AccountID, ProductID: o.ProductID,
+			Offer: o.Offer, Version: 1, Anchor: o.Start, PaidThrough: o.End, Status: "active"}
+		var active bool
+		start, end, active = o.Offer.currentPeriod(o.Start, o.End, now)
+		if !active {
+			grant = "0"
+		}
+	} else if o.Kind == "upgrade" {
 		old, e := load[Subscription](ctx, c, `SELECT snapshot FROM billing_subscriptions WHERE id=$1`, o.SubscriptionID)
 		if e != nil {
 			return e
@@ -304,19 +317,19 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 		grant = "0"
 	}
 	o.FulfillmentStatus = "FULFILLED"
-	eff := effect{Order: &o, Subscription: sub}
-	posts := []ledger.Posting{}
+	eff := effect{Order: &o, ReplacedOrder: replacedOrder, Subscription: sub, Batches: replacedBatches}
 	if o.PaymentSource == "external" {
-		posts, e = orderPaymentPostings(o, externalReceived(o.CheckoutID))
+		cashPosts, e := orderPaymentPostings(o, externalReceived(o.CheckoutID))
 		if e != nil {
 			return e
 		}
+		posts = append(posts, cashPosts...)
 	}
 	n, _ := integer(grant, false)
 	if n > 0 {
 		kind := "base"
 		source := o.SubscriptionID + ":" + start.Format(time.RFC3339Nano) + ":base"
-		if o.Kind == "upgrade" {
+		if o.Kind == "upgrade" && o.ProductCreditUpgrade == nil {
 			kind = "upgrade"
 			source = o.ID + ":" + start.Format(time.RFC3339Nano) + ":upgrade"
 		}
@@ -325,7 +338,7 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 			source = o.ID + ":addon"
 		}
 		b := Batch{ID: id("batch_"), CreditScope: o.CreditScope, AccountID: o.AccountID, ProductID: o.ProductID, OrderID: o.ID, SubscriptionID: o.SubscriptionID, SourceKey: source, Kind: kind, Original: grant, StartsAt: start, ExpiresAt: end, CreatedAt: now}
-		eff.Batches = []Batch{b}
+		eff.Batches = append(eff.Batches, b)
 		posts = append(posts, ledger.Posting{Source: "world", Destination: BatchAddress(b.ID, "available"), Asset: CreditAsset, Amount: n})
 	}
 	tx, e := c.Begin(ctx)
@@ -350,7 +363,7 @@ func (s *Service) monthlyLocked(ctx context.Context, c *pgxpool.Conn, sub Subscr
 	if n == 0 {
 		return nil
 	}
-	start, end, ok := CurrentPeriod(sub.Anchor, sub.PaidThrough, now)
+	start, end, ok := sub.Offer.currentPeriod(sub.Anchor, sub.PaidThrough, now)
 	if !ok {
 		return nil
 	}
@@ -363,7 +376,7 @@ func (s *Service) monthlyLocked(ctx context.Context, c *pgxpool.Conn, sub Subscr
 		return nil
 	}
 	var orderID string
-	e = c.QueryRow(ctx, `SELECT id FROM billing_orders WHERE account_id=$1 AND snapshot->>'subscription_id'=$2 AND snapshot->>'payment_status'='PAID' AND COALESCE(snapshot->>'refund_status','') IN ('','REJECTED') AND snapshot->>'kind'<>'upgrade' AND (snapshot->>'start')::timestamptz <= $3 AND (snapshot->>'end')::timestamptz > $3 ORDER BY (snapshot->>'created_at')::timestamptz DESC LIMIT 1`, sub.AccountID, sub.ID, start).Scan(&orderID)
+	e = c.QueryRow(ctx, `SELECT id FROM billing_orders WHERE account_id=$1 AND snapshot->>'subscription_id'=$2 AND snapshot->>'payment_status'='PAID' AND COALESCE(snapshot->>'refund_status','') IN ('','REJECTED') AND (snapshot->>'kind'<>'upgrade' OR snapshot ? 'product_credit_upgrade') AND (snapshot->>'start')::timestamptz <= $3 AND (snapshot->>'end')::timestamptz > $3 ORDER BY (snapshot->>'created_at')::timestamptz DESC LIMIT 1`, sub.AccountID, sub.ID, start).Scan(&orderID)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil
 	}
@@ -404,34 +417,57 @@ func (s *Service) renewLocked(ctx context.Context, c *pgxpool.Conn, sub Subscrip
 	if e != nil {
 		return e
 	}
-	months := 1
-	if sub.Offer.Period == "year" {
-		months = 12
-	}
-	m := (sub.PaidThrough.Year()-sub.Anchor.Year())*12 + int(sub.PaidThrough.Month()-sub.Anchor.Month())
-	end := MonthAnchor(sub.Anchor, m+months)
-	if !now.Before(end) {
+	months := sub.Offer.membershipMonths()
+	loc := sub.Offer.billingLocation()
+	m := monthsBetween(sub.Anchor.In(loc), sub.PaidThrough.In(loc))
+	end := sub.Offer.monthAnchor(sub.Anchor, m+months)
+	scoped := sub.Offer.CreditScope == ProductCreditScopeV1
+	if !scoped && !now.Before(end) {
 		return nil
 	}
 	key := "renew:" + sub.ID + ":" + sub.PaidThrough.Format(time.RFC3339Nano)
-	old, e := load[Order](ctx, c, `SELECT snapshot FROM billing_orders WHERE account_id=$1 AND request_key=$2`, sub.AccountID, key)
-	if e == nil {
-		if old.PaymentStatus == "REJECTED" {
+	retrying := false
+	for {
+		old, e := load[Order](ctx, c, `SELECT snapshot FROM billing_orders WHERE account_id=$1 AND request_key=$2`, sub.AccountID, key)
+		if errors.Is(e, accounts.ErrNotFound) {
+			break
+		}
+		if e != nil {
+			return e
+		}
+		if old.PaymentStatus != "REJECTED" {
+			return s.resumeOrderLocked(ctx, c, &old)
+		}
+		if !scoped {
 			return nil
 		}
-		return s.resumeOrderLocked(ctx, c, &old)
+		// A definitively rejected attempt can be retried, preserving its record.
+		retrying = true
+		key = "renew-retry:" + old.ID
 	}
-	if !errors.Is(e, accounts.ErrNotFound) {
-		return e
-	}
-	if sub.Offer.CreditScope == ProductCreditScopeV1 && !runtimeReady {
+	if scoped && !runtimeReady {
 		return ErrPending
+	}
+	if retrying {
+		balance, e := s.ledger.Balance(ctx, wallet.Address(sub.AccountID, ""), CashAsset)
+		if e != nil {
+			return e
+		}
+		if balance < n {
+			return ledger.ErrInsufficientFunds
+		}
 	}
 	if _, e = s.buyable(ctx, c, sub.Offer.ID, sub.AccountID); e != nil {
 		return e
 	}
-	start, pend, _ := CurrentPeriod(sub.Anchor, end, now)
-	o := Order{ID: id("bo_"), AccountID: sub.AccountID, ActorID: a.ActorID, ProductID: sub.ProductID, Kind: "renewal", Offer: sub.Offer, Amount: sub.Offer.Price, PaymentStatus: "PENDING", FulfillmentStatus: "PENDING", SubscriptionID: sub.ID, Start: sub.PaidThrough, End: end, PeriodStart: start, PeriodEnd: pend, GrantAmount: sub.Offer.MonthlyCredit, CreatedAt: now, RenewalAuthorizationVersion: a.Version}
+	start, anchor := sub.PaidThrough, sub.Anchor
+	if scoped && (retrying || !now.Before(sub.Offer.monthAnchor(sub.Anchor, m+1))) {
+		// Start a full term after a rejected renewal or a missed grant window.
+		start, anchor = now, now
+		end = sub.Offer.monthAnchor(anchor, months)
+	}
+	periodStart, periodEnd, _ := sub.Offer.currentPeriod(anchor, end, now)
+	o := Order{ID: id("bo_"), AccountID: sub.AccountID, ActorID: a.ActorID, ProductID: sub.ProductID, Kind: "renewal", Offer: sub.Offer, Amount: sub.Offer.Price, PaymentStatus: "PENDING", FulfillmentStatus: "PENDING", SubscriptionID: sub.ID, Start: start, End: end, PeriodStart: periodStart, PeriodEnd: periodEnd, GrantAmount: sub.Offer.MonthlyCredit, CreatedAt: now, RenewalAuthorizationVersion: a.Version}
 	paid, e := s.payLocked(ctx, c, o, key, hash(key), &a)
 	if e != nil {
 		return e

@@ -6,7 +6,7 @@ import (
 	"unihub/internal/ledger"
 )
 
-const productCreditsPerCNY int64 = 10 // CNY/6 and CREDIT/6 use the same scale.
+const productCreditsPerCNY int64 = 100 // CNY/6 and CREDIT/6 use the same scale.
 
 func validateProductCreditOffer(o Offer) error {
 	if o.CreditScope == "" {
@@ -28,7 +28,7 @@ func validateProductCreditOffer(o Offer) error {
 	credits := compute * productCreditsPerCNY
 	switch {
 	case o.Kind == "addon":
-		if service != 0 || o.ValidityMonths != 12 || monthly != credits {
+		if service != 0 || o.ValidityMonths != 1 || monthly != credits {
 			return ErrInvalid
 		}
 	case o.Period == "year":
@@ -50,7 +50,7 @@ func freezeProductCreditOrder(o *Order) error {
 		}
 		return nil
 	}
-	if o.Kind == "upgrade" || o.Amount != o.Offer.Price || o.GrantAmount != o.Offer.MonthlyCredit || o.ProductID != o.Offer.ProductID {
+	if (o.Kind == "upgrade" && o.ProductCreditUpgrade == nil) || o.Amount != o.Offer.Price || o.GrantAmount != o.Offer.MonthlyCredit || o.ProductID != o.Offer.ProductID {
 		return ErrInvalid
 	}
 	if e := validateProductCreditOffer(o.Offer); e != nil {

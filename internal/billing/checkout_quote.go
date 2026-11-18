@@ -17,6 +17,9 @@ func (s *Service) QuoteExternalUpgrade(ctx context.Context, actor, account, subI
 	if e != nil || n > math.MaxInt64-9999 {
 		return Quote{}, ErrInvalid
 	}
+	if q.ProductCreditUpgrade != nil && n%10000 != 0 {
+		return Quote{}, ErrInvalid
+	}
 	q.ID = id("quote_")
 	q.PaymentSource = "external"
 	q.RoundingRule = "cny_cent_ceil_v1"

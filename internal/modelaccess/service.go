@@ -252,7 +252,11 @@ func (s *Service) Verify(ctx context.Context, token, model string) (Claims, erro
 }
 
 func (s *Service) VerifyForInstance(ctx context.Context, token, model, instance string) (Claims, error) {
-	return s.verify(ctx, token, model, instance, true)
+	c, e := s.verify(ctx, token, model, instance, true)
+	if e == nil && c.CreditScope == billing.ProductCreditScopeV1 {
+		_, e = s.nativeAuthorityOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID, c.FundingMode, c.CreditScope)
+	}
+	return c, e
 }
 
 // VerifyWireForInstance authorizes a fixed gateway route for the requested model.

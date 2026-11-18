@@ -260,7 +260,7 @@ func work(ctx context.Context, w *wallet.Service, b *billing.Service, ct *cashto
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			e := runRecoveryCycle(ctx, 30*time.Second, b.RecoverCheckouts, ct.Recover, func(run context.Context) error {
+			e := runRecoveryCycle(ctx, 30*time.Second, b.RecoverCheckouts, b.RecoverProductUpgradeReturns, ct.Recover, func(run context.Context) error {
 				walletErr := w.Recover(run)
 				_, billingErr := b.Recover(run)
 				_, maintenanceErr := b.Maintain(run, time.Now().UTC())
@@ -274,7 +274,7 @@ func work(ctx context.Context, w *wallet.Service, b *billing.Service, ct *cashto
 }
 
 // Gateway latency must not consume the recovery budget of model usage/wallet
-// commands. Each branch owns its deadline and both finish before the next tick.
+// commands. Each branch owns its deadline and all finish before the next tick.
 func runRecoveryCycle(ctx context.Context, timeout time.Duration, branches ...func(context.Context) error) error {
 	results := make(chan error, len(branches))
 	for _, branch := range branches {

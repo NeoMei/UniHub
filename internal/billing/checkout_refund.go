@@ -47,6 +47,9 @@ func (s *Service) RefundCheckout(ctx context.Context, actor, account, checkout, 
 		if e != nil {
 			return e
 		}
+		if o.UpgradeReturn != nil {
+			return ErrConflict
+		}
 		if o.PaymentStatus != "PAID" {
 			return ErrPending
 		}

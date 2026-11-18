@@ -265,6 +265,13 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 			return e
 		}
 		out.BillingProfileVersion = auth.ProfileVersion
+		if out.CreditScope == ProductCreditScopeV1 {
+			sub, e := activeSubscriptionOn(ctx, tx, out.AccountID, out.OriginProductID, s.now().UTC())
+			if e != nil {
+				return e
+			}
+			out.FundingSubscriptionID = sub.ID
+		}
 		if e = s.checkUsageBudget(ctx, c, out, n, n); e != nil {
 			if errors.Is(e, errUsageBudgetExceeded) {
 				return ErrNativeReserveBudgetRejected

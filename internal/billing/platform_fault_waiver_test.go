@@ -480,9 +480,8 @@ func TestPlatformFaultWaiverNativePricingPreservesFrozenQuoteAndFunding(t *testi
 	}
 }
 
-// A credit-priced call holds its funds in batch reservations, not in a cash
-// address; the waiver must return exactly those reservations.
-func TestPlatformFaultWaiverReleasesCreditReservations(t *testing.T) {
+func waiverCreditSetup(t *testing.T) waiverFixture {
+	t.Helper()
 	ctx := context.Background()
 	p := testutil.Database(t)
 	if e := database.Migrate(ctx, p); e != nil {
@@ -506,6 +505,12 @@ func TestPlatformFaultWaiverReleasesCreditReservations(t *testing.T) {
 		t.Fatal(e)
 	}
 	const batch, held = "batch-waiver", int64(6862)
+	if _, e = p.Exec(ctx, `INSERT INTO billing_orders(id,account_id,actor_id,request_key,request_digest,snapshot) VALUES('waiver-order',$1,$2,'waiver-order','waiver-order','{}')`, account, u.ID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = p.Exec(ctx, `INSERT INTO billing_batches(id,account_id,order_id,source_key,snapshot) VALUES($1,$2,'waiver-order','waiver-batch',jsonb_build_object('id',$1::text,'account_id',$2::text))`, batch, account); e != nil {
+		t.Fatal(e)
+	}
 	call := billing.Call{CallID: "credit-waiver-call", ServiceID: "llmrouter", ActorID: u.ID, AccountID: account, OriginProductID: "superwagie", InstanceID: "default",
 		ChargeAsset: billing.CreditAsset, FundingMode: billing.FundingCredits, FundingProductID: "llmrouter", Held: fmt.Sprint(held), Charged: "0", Status: "RESERVED",
 		RequestDigest: "credit-digest", CredentialID: "credit-credential", TaskID: "credit-task", WireOperation: "chat.completions.create",
@@ -531,8 +536,14 @@ func TestPlatformFaultWaiverReleasesCreditReservations(t *testing.T) {
 	attempts, _ := json.Marshal([]map[string]any{{"ID": 58, "ChannelID": 102, "CallID": call.CallID, "Status": "DISPATCHED"}})
 	a := billing.PlatformFaultWaiverApproval{ApprovalStatement: "Explicitly approved full credit return for platform fault; supplier unresolved", ApprovalSourceSHA256: fmt.Sprintf("%064d", 3), Schema: 1, CaseID: "credit-incident", OperatorID: op.ID, Reason: "Customer waiver approved for platform failure; supplier result unresolved", CallID: call.CallID, ActorID: u.ID, AccountID: account, OriginProductID: "superwagie", InstanceID: "default", Asset: billing.CreditAsset, Held: fmt.Sprint(held), ProviderState: "PROVIDER_UNRESOLVED", OriginalEvidenceSHA256: fmt.Sprintf("%064d", 1), FollowupEvidenceSHA256: fmt.Sprintf("%064d", 2), ExpectedCentralRow: row, GatewayCall: gateway, GatewayAttempts: attempts}
 	l := &waiverLedger{balances: map[string]int64{reserved: held}, txs: map[string]ledger.Transaction{reserve.Reference: {ID: "credit-ledger-id", Reference: reserve.Reference, Postings: reserve.Postings}}}
-	f := waiverFixture{s: billing.New(p, store, l), p: p, authority: platformadmin.New(p, nil), l: l, approval: a, call: call, operator: op.ID}
+	return waiverFixture{s: billing.New(p, store, l), p: p, authority: platformadmin.New(p, nil), l: l, approval: a, call: call, operator: op.ID}
+}
 
+func TestPlatformFaultWaiverReleasesCreditReservations(t *testing.T) {
+	f := waiverCreditSetup(t)
+	ctx := context.Background()
+	const reserved = "credits:batch:batch-waiver:reserved"
+	const available = "credits:batch:batch-waiver:available"
 	got, e := f.apply()
 	if e != nil {
 		t.Fatalf("credit waiver rejected: %v", e)
@@ -540,10 +551,188 @@ func TestPlatformFaultWaiverReleasesCreditReservations(t *testing.T) {
 	if got.Status != "RELEASED" || got.Charged != "0" || got.ChargeAsset != billing.CreditAsset {
 		t.Fatalf("false settlement: %+v", got)
 	}
-	if n, _ := l.Balance(ctx, reserved, billing.CreditAsset); n != 0 {
+	if n, _ := f.l.Balance(ctx, reserved, billing.CreditAsset); n != 0 {
 		t.Fatalf("reservation not returned: %d", n)
 	}
-	if n, _ := l.Balance(ctx, available, billing.CreditAsset); n != held {
+	if n, _ := f.l.Balance(ctx, available, billing.CreditAsset); n != 6862 {
 		t.Fatalf("credits not restored: %d", n)
+	}
+}
+
+func TestPlatformFaultWaiverConservesSharedCreditBatch(t *testing.T) {
+	const reserved = "credits:batch:batch-waiver:reserved"
+	const available = "credits:batch:batch-waiver:available"
+	for _, test := range []struct {
+		name    string
+		balance int64
+		valid   bool
+	}{
+		{name: "exact", balance: 8862, valid: true},
+		{name: "short", balance: 8861},
+		{name: "unexplained", balance: 8863},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			f := waiverCreditSetup(t)
+			other := f.call
+			other.CallID, other.Held, other.Status = "other-credit-call", "2000", "MISSING_USAGE"
+			other.Allocations = []billing.Allocation{{BatchID: "batch-waiver", Amount: "2000"}}
+			otherJSON, _ := json.Marshal(other)
+			if _, err := f.p.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,'other-credit-request',$3)`, other.CallID, other.AccountID, otherJSON); err != nil {
+				t.Fatal(err)
+			}
+			f.l.balances[reserved] = test.balance
+			got, err := f.apply()
+			remaining, _ := f.l.Balance(ctx, reserved, billing.CreditAsset)
+			returned, _ := f.l.Balance(ctx, available, billing.CreditAsset)
+			if !test.valid {
+				if !errors.Is(err, billing.ErrConflict) || remaining != test.balance || returned != 0 || f.l.posts != 0 {
+					t.Fatalf("mismatched aggregate allowed movement: remaining %d returned %d posts %d error %v", remaining, returned, f.l.posts, err)
+				}
+				return
+			}
+			if err != nil || got.Status != "RELEASED" || got.Charged != "0" || remaining != 2000 || returned != 6862 || f.l.posts != 1 {
+				t.Fatalf("incorrect waiver: status %s charged %s remaining %d returned %d posts %d error %v", got.Status, got.Charged, remaining, returned, f.l.posts, err)
+			}
+			var untouched bool
+			if err = f.p.QueryRow(ctx, `SELECT snapshot=$2::jsonb FROM billing_calls WHERE id=$1`, other.CallID, otherJSON).Scan(&untouched); err != nil || !untouched {
+				t.Fatalf("other call changed: %v", err)
+			}
+		})
+	}
+}
+
+func TestPlatformFaultWaiverSerializesDifferentCasesOnSharedBatch(t *testing.T) {
+	ctx := context.Background()
+	first := waiverCreditSetup(t)
+	second := first
+	second.call.CallID, second.call.Held = "second-credit-call", "2000"
+	second.call.Allocations = []billing.Allocation{{BatchID: "batch-waiver", Amount: "2000"}}
+	second.approval.CaseID, second.approval.CallID, second.approval.Held = "second-credit-incident", second.call.CallID, second.call.Held
+	call, _ := json.Marshal(second.call)
+	if _, err := second.p.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,'second-request',$3)`, second.call.CallID, second.call.AccountID, call); err != nil {
+		t.Fatal(err)
+	}
+	const reserved = "credits:batch:batch-waiver:reserved"
+	const available = "credits:batch:batch-waiver:available"
+	reserve := ledger.Command{Reference: "unihub:billing:second-credit-hold", Postings: []ledger.Posting{{Source: available, Destination: reserved, Asset: billing.CreditAsset, Amount: 2000}}}
+	command, _ := json.Marshal(reserve)
+	if _, err := second.p.Exec(ctx, `INSERT INTO billing_commands(id,account_id,actor_id,kind,request_key,request_digest,command,effect,status,ledger_transaction_id) VALUES('second-credit-hold',$1,$2,'reserve',$3,'second-hash',$4,jsonb_build_object('call',$5::jsonb),'APPLIED','second-credit-ledger-id')`, second.call.AccountID, second.call.ActorID, second.call.CallID, command, call); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.p.QueryRow(ctx, `SELECT to_jsonb(c) FROM billing_calls c WHERE id=$1`, second.call.CallID).Scan(&second.approval.ExpectedCentralRow); err != nil {
+		t.Fatal(err)
+	}
+	var gateway map[string]any
+	if err := json.Unmarshal(second.approval.GatewayCall, &gateway); err != nil {
+		t.Fatal(err)
+	}
+	gateway["CallID"], gateway["Amount"] = second.call.CallID, second.call.Held
+	second.approval.GatewayCall, _ = json.Marshal(gateway)
+	second.approval.GatewayAttempts, _ = json.Marshal([]map[string]any{{"ID": 59, "ChannelID": 102, "CallID": second.call.CallID, "Status": "DISPATCHED"}})
+	first.l.balances[reserved] = 8862
+	first.l.txs[reserve.Reference] = ledger.Transaction{ID: "second-credit-ledger-id", Reference: reserve.Reference, Postings: reserve.Postings}
+	first.l.loss = true
+	if _, err := first.apply(); !errors.Is(err, billing.ErrPending) || first.l.posts != 1 {
+		t.Fatalf("first release must retain its unresolved command: %v", err)
+	}
+	if _, err := second.apply(); !errors.Is(err, billing.ErrPending) || first.l.posts != 1 {
+		t.Fatalf("second release ignored first unresolved command: %v", err)
+	}
+	if got, err := first.apply(); err != nil || got.Status != "RELEASED" || first.l.posts != 1 {
+		t.Fatalf("first release failed to recover its original posting: %s %v", got.Status, err)
+	}
+	if got, err := second.apply(); err != nil || got.Status != "RELEASED" || first.l.posts != 2 || first.l.balances[reserved] != 0 || first.l.balances[available] != 8862 {
+		t.Fatalf("second release did not conserve the remaining balance: %s %v", got.Status, err)
+	}
+}
+
+func waiverZeroSetup(t *testing.T, asset string) waiverFixture {
+	t.Helper()
+	conversion := billing.NativeConversion{Version: "legacy-credit-v1", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
+	var f waiverFixture
+	version, source, reserve := billing.NativeCreditPricingVersion, "llmrouter_native_credit", "unihub:billing:credit-hold"
+	if asset == billing.CashAsset {
+		version, source, reserve = "lr-native-v1", "llmrouter_native", "unihub:billing:original-hold"
+		conversion.Version = "lr-quota-usd-cny-v1"
+		f = waiverSetupOrigin(t, "superwagie")
+	} else {
+		f = waiverCreditSetup(t)
+	}
+	ctx := context.Background()
+	price := `{"native_price":"frozen"}`
+	sum := sha256.Sum256([]byte(price))
+	f.call.Held, f.call.CredentialVersion, f.call.Allocations = "0", 2, nil
+	f.call.Rate = billing.Rate{Model: f.call.Rate.Model, Asset: asset, Semantics: "llmrouter_native"}
+	f.call.NativePricing = &billing.NativeQuote{PricingVersion: version, PricingDigest: hex.EncodeToString(sum[:]), BillingModel: f.call.Rate.Model, WireOperation: f.call.WireOperation, RouteID: "12", ChannelID: "102", Group: "default", NativeQuotaMax: "0", Conversion: conversion, Asset: asset, MaxAmount: "0"}
+	call, _ := json.Marshal(f.call)
+	if _, err := f.p.Exec(ctx, `UPDATE billing_calls SET snapshot=$2 WHERE id=$1`, f.call.CallID, call); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.p.Exec(ctx, `UPDATE billing_commands SET effect=jsonb_set(effect,'{call}',$2::jsonb), command=command||'{"postings":[]}'::jsonb, ledger_transaction_id=NULL WHERE request_key=$1`, f.call.CallID, call); err != nil {
+		t.Fatal(err)
+	}
+	delete(f.l.txs, reserve)
+	clear(f.l.balances)
+	f.approval.Held = "0"
+	if err := f.p.QueryRow(ctx, `SELECT to_jsonb(c) FROM billing_calls c WHERE id=$1`, f.call.CallID).Scan(&f.approval.ExpectedCentralRow); err != nil {
+		t.Fatal(err)
+	}
+	var gateway map[string]any
+	if err := json.Unmarshal(f.approval.GatewayCall, &gateway); err != nil {
+		t.Fatal(err)
+	}
+	quote, _ := json.Marshal(f.call.NativePricing)
+	gateway["Amount"], gateway["RateID"], gateway["RateSnapshot"] = "0", "", ""
+	gateway["PricingSource"], gateway["NativeQuoteJSON"], gateway["NativePriceSnapshot"], gateway["CredentialVersion"] = source, string(quote), price, 2
+	f.approval.GatewayCall, _ = json.Marshal(gateway)
+	return f
+}
+
+func TestPlatformFaultWaiverClosesZeroHoldWithoutLedgerTransaction(t *testing.T) {
+	for _, asset := range []string{billing.CreditAsset, billing.CashAsset} {
+		t.Run(asset, func(t *testing.T) {
+			f := waiverZeroSetup(t, asset)
+			got, err := f.apply()
+			if err != nil || got.Status != "RELEASED" || got.Charged != "0" || got.ProviderCost != "" || got.Usage != nil {
+				t.Fatalf("zero waiver failed: %+v %v", got, err)
+			}
+			if _, err = f.apply(); err != nil || f.l.posts != 0 || len(f.l.txs) != 0 {
+				t.Fatalf("zero waiver attempted ledger movement: %v", err)
+			}
+			var status, transaction, providerState string
+			var auditCount int
+			var noPostings bool
+			ctx := context.Background()
+			if err = f.p.QueryRow(ctx, `SELECT c.status,COALESCE(c.ledger_transaction_id,''),COALESCE(c.command->'postings'='[]'::jsonb,false),w.provider_state,(SELECT count(*) FROM platform_admin_audit WHERE action='finance.platform_fault_waiver') FROM billing_platform_fault_waivers w JOIN billing_commands c ON c.id=w.release_command_id`).Scan(&status, &transaction, &noPostings, &providerState, &auditCount); err != nil || status != "APPLIED" || transaction != "" || !noPostings || providerState != "PROVIDER_UNRESOLVED" || auditCount != 1 {
+				t.Fatalf("zero waiver lost audit evidence: %q %q empty postings %v %q %d %v", status, transaction, noPostings, providerState, auditCount, err)
+			}
+		})
+	}
+}
+
+func TestPlatformFaultWaiverRejectsUnprovenZeroHold(t *testing.T) {
+	for _, test := range []struct{ name, update string }{
+		{"missing_applied_reserve", `status='REJECTED'`},
+		{"reserve_ledger_id", `ledger_transaction_id='unexpected'`},
+		{"reserve_posting", `command=command||'{"postings":[{"source":"a","destination":"b","asset":"CREDIT/6","amount":1}]}'::jsonb`},
+		{"reserve_effect_mismatch", `effect=jsonb_set(effect,'{call,task_id}','"unexpected"')`},
+		{"ledger_reference_exists", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			f := waiverZeroSetup(t, billing.CreditAsset)
+			if test.update != "" {
+				if _, err := f.p.Exec(ctx, `UPDATE billing_commands SET `+test.update+` WHERE request_key=$1`, f.call.CallID); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				const ref = "unihub:billing:credit-hold"
+				f.l.txs[ref] = ledger.Transaction{ID: "unexpected", Reference: ref}
+			}
+			if _, err := f.apply(); !errors.Is(err, billing.ErrConflict) || f.l.posts != 0 {
+				t.Fatalf("unproven zero was accepted or moved funds: %v", err)
+			}
+		})
 	}
 }

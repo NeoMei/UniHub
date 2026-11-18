@@ -42,11 +42,15 @@ func (s *Service) quantities(ctx context.Context, b *Batch) error {
 func (s *Service) allocateForCall(ctx context.Context, c *pgxpool.Conn, call Call, n int64, now time.Time) ([]Allocation, error) {
 	var bs []Batch
 	var e error
+	replacementID := ""
 	switch call.CreditScope {
 	case "":
 		bs, e = list[Batch](ctx, c, `SELECT snapshot FROM billing_batches WHERE account_id=$1 AND COALESCE(snapshot->>'credit_scope','')='' AND NOT (snapshot->>'frozen')::boolean AND (snapshot->>'starts_at')::timestamptz <= $2 AND (snapshot->>'expires_at')::timestamptz > $2 ORDER BY (snapshot->>'expires_at')::timestamptz,(snapshot->>'created_at')::timestamptz,CASE WHEN snapshot->>'kind'='addon' THEN 1 ELSE 0 END,id`, call.AccountID, now)
 	case ProductCreditScopeV1:
 		bs, e = productCreditBatchesOn(ctx, c, call.AccountID, call.OriginProductID)
+		if e == nil && call.Status == "RESERVED" && call.FundingSubscriptionID != "" {
+			replacementID, e = replacementFundingSubscription(ctx, c, call, now)
+		}
 	default:
 		return nil, ErrInvalid
 	}
@@ -55,7 +59,8 @@ func (s *Service) allocateForCall(ctx context.Context, c *pgxpool.Conn, call Cal
 	}
 	out := []Allocation{}
 	for _, b := range bs {
-		if b.Frozen || now.Before(b.StartsAt) || !now.Before(b.ExpiresAt) {
+		if b.Frozen || now.Before(b.StartsAt) || !now.Before(b.ExpiresAt) ||
+			(replacementID != "" && b.SubscriptionID != replacementID) {
 			continue
 		}
 		balance, e := s.ledger.Balance(ctx, BatchAddress(b.ID, "available"), CreditAsset)
@@ -67,6 +72,11 @@ func (s *Service) allocateForCall(ctx context.Context, c *pgxpool.Conn, call Cal
 			take = n
 		}
 		if take > 0 {
+			if call.CreditScope == ProductCreditScopeV1 {
+				if e = validateProductCreditBatchForHold(ctx, c, b); e != nil {
+					return nil, e
+				}
+			}
 			out = append(out, Allocation{b.ID, str(take)})
 			n -= take
 		}
@@ -480,6 +490,15 @@ func (s *Service) finalPosts(ctx context.Context, c *pgxpool.Conn, call Call, ch
 			bucket := "available"
 			if !now.Before(b.ExpiresAt) {
 				bucket = "expired"
+			}
+			if call.CreditScope == ProductCreditScopeV1 && b.Frozen {
+				order, e := load[Order](ctx, c, `SELECT snapshot FROM billing_orders WHERE id=$1 AND account_id=$2`, b.OrderID, b.AccountID)
+				if e != nil {
+					return nil, e
+				}
+				if order.UpgradeReturn != nil && b.ExpiresAt.After(order.UpgradeReturn.Cutover) {
+					bucket = "withdrawn"
+				}
 			}
 			posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "reserved"), Destination: BatchAddress(a.BatchID, bucket), Asset: CreditAsset, Amount: held - used})
 		}

@@ -23,6 +23,7 @@ type effect struct {
 	RuntimeAdjustment    *RuntimeAdjustment `json:"runtime_adjustment,omitempty"`
 	RuntimeRequestDigest string             `json:"runtime_request_digest,omitempty"`
 	Order                *Order             `json:"order,omitempty"`
+	ReplacedOrder        *Order             `json:"replaced_order,omitempty"`
 	Subscription         *Subscription      `json:"subscription,omitempty"`
 	Batches              []Batch            `json:"batches,omitempty"`
 	Call                 *Call              `json:"call,omitempty"`
@@ -102,6 +103,11 @@ func (s *Service) apply(ctx context.Context, c *pgxpool.Conn, x command, ledgerI
 			return e
 		}
 	}
+	if x.Effect.ReplacedOrder != nil {
+		if e = saveOrder(ctx, tx, *x.Effect.ReplacedOrder); e != nil {
+			return e
+		}
+	}
 	if x.Effect.Subscription != nil {
 		if e = saveSubscription(ctx, tx, *x.Effect.Subscription); e != nil {
 			return e
@@ -111,7 +117,7 @@ func (s *Service) apply(ctx context.Context, c *pgxpool.Conn, x command, ledgerI
 		if e = saveBatch(ctx, tx, b); e != nil {
 			return e
 		}
-		if b.CreditScope == ProductCreditScopeV1 && (x.Kind == "monthly" || x.Kind == "fulfillment") {
+		if b.CreditScope == ProductCreditScopeV1 && !b.Frozen && (x.Kind == "monthly" || x.Kind == "fulfillment") {
 			if e = queueProductCreditAutoAddon(ctx, tx, b.AccountID, b.ProductID, b.ID, "funded", 0); e != nil {
 				return e
 			}
@@ -474,6 +480,11 @@ func (s *Service) validateNewAllocation(ctx context.Context, q accounts.Querier,
 			}
 			if !batchFundsCall(b, *x.Effect.Call) || b.Frozen || now.Before(b.StartsAt) || !now.Before(b.ExpiresAt) {
 				return ErrInvalid
+			}
+			if x.Effect.Call.CreditScope == ProductCreditScopeV1 {
+				if e = validateProductCreditBatchForHold(ctx, q, b); e != nil {
+					return e
+				}
 			}
 			break
 		}

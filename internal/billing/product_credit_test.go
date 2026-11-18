@@ -23,8 +23,11 @@ func seedProductCreditBatch(t *testing.T, f fixture, b Batch, scope string) stri
 	if e != nil {
 		t.Fatal(e)
 	}
-	compute := (n + 9) / 10
-	order := Order{ID: orderID, AccountID: f.account, ActorID: f.actor, ProductID: b.ProductID, CreditScope: scope, Amount: str(compute), ServiceAmount: "0", ComputeAmount: str(compute), PaymentStatus: "PAID", FulfillmentStatus: "FULFILLED"}
+	compute := n / productCreditsPerCNY
+	if n%productCreditsPerCNY != 0 {
+		compute++
+	}
+	order := Order{ID: orderID, AccountID: f.account, ActorID: f.actor, ProductID: b.ProductID, Offer: Offer{ProductID: b.ProductID, CreditScope: scope}, CreditScope: scope, Amount: str(compute), ServiceAmount: "0", ComputeAmount: str(compute), PaymentStatus: "PAID", FulfillmentStatus: "FULFILLED"}
 	if _, e := f.s.pool.Exec(ctx, `INSERT INTO billing_orders(id,account_id,actor_id,request_key,request_digest,snapshot) VALUES($1,$2,$3,$1,$1,$4)`, orderID, f.account, f.actor, encode(order)); e != nil {
 		t.Fatal(e)
 	}
@@ -146,11 +149,11 @@ func publishProductCreditOffers(t *testing.T, f fixture, period string) (Offer, 
 	f.s.ConfigureCheckoutReadiness(func(ctx context.Context, _, _, product string) (NativeCreditReadiness, error) {
 		return f.s.NativeCreditsReadiness(ctx, product)
 	})
-	membership := Offer{ID: "scoped-membership", ProductID: "superwagie", Name: "Scoped membership", AccountKind: "personal", Kind: "membership", Period: period, Price: "3000000", MonthlyCredit: "10000000", CreditScope: ProductCreditScopeV1, ServiceAmount: "2000000", ComputeAmount: "1000000", RefundRule: "unused_only_v1"}
+	membership := Offer{ID: "scoped-membership", ProductID: "superwagie", Name: "Scoped membership", AccountKind: "personal", Kind: "membership", Period: period, Price: "3000000", MonthlyCredit: "100000000", CreditScope: ProductCreditScopeV1, ServiceAmount: "2000000", ComputeAmount: "1000000", RefundRule: "unused_only_v1"}
 	if period == "year" {
 		membership.Price, membership.ServiceAmount, membership.ComputeAmount = "36000000", "24000000", "12000000"
 	}
-	addon := Offer{ID: "scoped-addon", ProductID: "superwagie", Name: "Scoped add-on", AccountKind: "personal", Kind: "addon", Price: "2000000", MonthlyCredit: "20000000", ValidityMonths: 12, CreditScope: ProductCreditScopeV1, ServiceAmount: "0", ComputeAmount: "2000000", RefundRule: "unused_only_v1"}
+	addon := Offer{ID: "scoped-addon", ProductID: "superwagie", Name: "Scoped add-on", AccountKind: "personal", Kind: "addon", Price: "2000000", MonthlyCredit: "200000000", ValidityMonths: 1, CreditScope: ProductCreditScopeV1, ServiceAmount: "0", ComputeAmount: "2000000", RefundRule: "unused_only_v1"}
 	for _, o := range []Offer{membership, addon} {
 		if _, e := f.s.SaveOffer(ctx, f.actor, o); e != nil {
 			t.Fatal(e)
@@ -182,8 +185,10 @@ func TestProductAnnualMembershipFundsTwelveGrantsAndAddonSurvivesLapse(t *testin
 			t.Fatal(e)
 		}
 	}
+	addonStart := MonthAnchor(start, 12).AddDate(0, 0, -10)
+	f.s.now = func() time.Time { return addonStart }
 	addonOrder := f.buy(t, addon.ID, "late-annual-addon")
-	if !addonOrder.End.Equal(MonthAnchor(MonthAnchor(start, 11), 12)) {
+	if !addonOrder.End.Equal(MonthAnchor(addonStart, 1)) {
 		t.Fatalf("wrong add-on expiry: %v", addonOrder.End)
 	}
 	now := MonthAnchor(start, 12)
@@ -195,7 +200,7 @@ func TestProductAnnualMembershipFundsTwelveGrantsAndAddonSurvivesLapse(t *testin
 	if e != nil || wallet.ActiveMembership || wallet.Available != "0" || len(wallet.Batches) != 13 {
 		t.Fatalf("expected 12 grants plus one locked add-on: %+v %v", wallet, e)
 	}
-	if last := wallet.Batches[12]; last.Kind != "addon" || last.Available != "20000000" || !last.ExpiresAt.Equal(addonOrder.End) {
+	if last := wallet.Batches[12]; last.Kind != "addon" || last.Available != "200000000" || !last.ExpiresAt.Equal(addonOrder.End) {
 		t.Fatalf("add-on lost original validity: %+v", last)
 	}
 	if _, e := f.s.Purchase(ctx, f.actor, f.account, PurchaseRequest{OfferID: addon.ID, Key: "while-expired"}); !errors.Is(e, ErrSubscriptionRequired) {
@@ -203,7 +208,7 @@ func TestProductAnnualMembershipFundsTwelveGrantsAndAddonSurvivesLapse(t *testin
 	}
 	f.buy(t, annual.ID, "resume-after-lapse")
 	wallet, e = f.s.ProductCreditWallet(ctx, f.actor, f.account, "superwagie")
-	if e != nil || !wallet.ActiveMembership || wallet.Available != "30000000" || !wallet.Batches[13].ExpiresAt.Equal(addonOrder.End) {
+	if e != nil || !wallet.ActiveMembership || wallet.Available != "300000000" || !wallet.Batches[13].ExpiresAt.Equal(addonOrder.End) {
 		t.Fatalf("rejoining failed to resume remaining credits: %+v %v", wallet, e)
 	}
 }
@@ -236,7 +241,7 @@ func TestProductComputeReconcilesFractionalCreditOnceOnRecoveredSettlement(t *te
 	conversion := exactProductCreditTestConversion()
 	ctx := context.Background()
 	membership, _ := publishProductCreditOffers(t, f, "month")
-	if _, e := f.s.pool.Exec(ctx, `UPDATE model_credentials SET credit_scope='product_v1' WHERE id=$1`, cid); e != nil {
+	if _, e := f.s.pool.Exec(ctx, `UPDATE model_credentials SET credit_scope='product_v1',max_per_call='500',max_total='1000' WHERE id=$1`, cid); e != nil {
 		t.Fatal(e)
 	}
 	if _, e := f.s.pool.Exec(ctx, `DELETE FROM billing_subscriptions WHERE account_id=$1`, f.account); e != nil {
@@ -244,7 +249,7 @@ func TestProductComputeReconcilesFractionalCreditOnceOnRecoveredSettlement(t *te
 	}
 	fundCash(t, f, "", 3000000)
 	order := f.buy(t, membership.ID, "scoped-recognition")
-	for _, sample := range []struct{ id, quota, charge string }{{"first-fraction", "5", "5"}, {"second-fraction", "6", "6"}} {
+	for _, sample := range []struct{ id, quota, charge string }{{"first-fraction", "50", "50"}, {"second-fraction", "60", "60"}} {
 		r := creditNativeRequest(f, cid, sample.id, sample.quota, conversion)
 		r.CreditScope, r.SourceVerified = ProductCreditScopeV1, true
 		if _, e := f.s.ReserveNative(ctx, "llmrouter", r); e != nil {
@@ -394,6 +399,104 @@ func TestScopedRenewalUsesUnifiedCashOnlyAfterRuntimeReady(t *testing.T) {
 	}
 }
 
+func TestScopedAutoRenewalReopensFullTermAfterWalletRecharge(t *testing.T) {
+	for _, tc := range []struct {
+		period, cutoff, recharge, paidThrough string
+		walletRemainder, rechargeAmount       int64
+	}{
+		{"month", "2024-02-29T12:00:00Z", "2024-03-01T12:00:00Z", "2024-04-01T12:00:00Z", 997000000, 5000000},
+		{"year", "2025-01-31T12:00:00Z", "2025-08-15T12:00:00Z", "2026-08-15T12:00:00Z", 964000000, 38000000},
+	} {
+		t.Run(tc.period, func(t *testing.T) {
+			f := setup(t)
+			ctx := t.Context()
+			membership, _ := publishProductCreditOffers(t, f, tc.period)
+			original := f.buy(t, membership.ID, "renew-after-recharge-original")
+			address := wallet.Address(f.account, "")
+			_, err := f.l.Post(ctx, ledger.Command{Reference: "empty-wallet", Postings: []ledger.Posting{{Source: address, Destination: "world", Asset: CashAsset, Amount: tc.walletRemainder}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = f.s.SetAuthorization(ctx, f.actor, f.account, Authorization{ProductID: "superwagie", Purpose: "renewal", Enabled: true, MaxPerOperation: membership.Price, MaxTotal: membership.Price, ExpiresAt: dt("2026-09-01T00:00:00Z")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now := dt(tc.cutoff)
+			f.s.now = func() time.Time { return now }
+			for range 2 {
+				if _, err = f.s.Maintain(ctx, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			view, err := f.s.ProductCreditWallet(ctx, f.actor, f.account, "superwagie")
+			if err != nil || view.ActiveMembership || view.Available != "0" {
+				t.Fatalf("membership should be inactive before recharge: %+v %v", view, err)
+			}
+			orders, err := f.s.Orders(ctx, f.actor, f.account)
+			if err != nil || len(orders) != 2 || orders[0].PaymentStatus != "REJECTED" || orders[0].Kind != "renewal" {
+				t.Fatalf("empty wallet should leave one declined renewal: %+v %v", orders, err)
+			}
+			rejectedID := orders[0].ID
+			fundCash(t, f, "", tc.rechargeAmount)
+			now = dt(tc.recharge)
+			f.s.ledger = &responseLoss{Ledger: f.l, remaining: 1}
+			result, err := f.s.Maintain(ctx, now)
+			if err != nil || result.Pending == 0 {
+				t.Fatalf("renewal debit should stay pending until its receipt is recovered: %+v %v", result, err)
+			}
+			cashBalance(t, f, address, 2000000)
+			for range 2 {
+				if _, err = f.s.Maintain(ctx, now); err != nil {
+					t.Fatal(err)
+				}
+			}
+			subs, err := f.s.Subscriptions(ctx, f.actor, f.account)
+			if err != nil || len(subs) != 1 || subs[0].ID != original.SubscriptionID || !subs[0].Anchor.Equal(now) || !subs[0].PaidThrough.Equal(dt(tc.paidThrough)) {
+				t.Fatalf("recharge should reopen a full membership term: %+v %v", subs, err)
+			}
+			view, err = f.s.ProductCreditWallet(ctx, f.actor, f.account, "superwagie")
+			if err != nil || !view.ActiveMembership || view.Available != membership.MonthlyCredit {
+				t.Fatalf("expected precisely one new grant after recharge: %+v %v", view, err)
+			}
+			previous, err := f.s.GetOrder(ctx, f.actor, f.account, rejectedID)
+			if err != nil || previous.PaymentStatus != "REJECTED" {
+				t.Fatalf("retry should preserve the original rejected payment: %+v %v", previous, err)
+			}
+			cashBalance(t, f, address, 2000000)
+		})
+	}
+}
+
+func TestScopedAutoRenewalReopensAfterMissedGrantOnlyWithCurrentAuthorization(t *testing.T) {
+	f := setup(t)
+	ctx := t.Context()
+	membership, _ := publishProductCreditOffers(t, f, "year")
+	original := f.buy(t, membership.ID, "before-worker-interruption")
+	mandate := Authorization{ProductID: "superwagie", Purpose: "renewal", Enabled: true, MaxPerOperation: membership.Price, MaxTotal: membership.Price, ExpiresAt: dt("2025-02-15T12:00:00Z")}
+	mandate, err := f.s.SetAuthorization(ctx, f.actor, f.account, mandate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := dt("2025-05-01T12:00:00Z")
+	f.s.now = func() time.Time { return now }
+	if _, err = f.s.Maintain(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	cashBalance(t, f, wallet.Address(f.account, ""), 964000000)
+	mandate.ExpiresAt = dt("2026-06-01T12:00:00Z")
+	if _, err = f.s.SetAuthorization(ctx, f.actor, f.account, mandate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.s.Maintain(ctx, now); err != nil {
+		t.Fatal(err)
+	}
+	sub, err := f.s.GetSubscription(ctx, f.actor, f.account, original.SubscriptionID)
+	if err != nil || !sub.Anchor.Equal(now) || !sub.PaidThrough.Equal(dt("2026-05-01T12:00:00Z")) {
+		t.Fatalf("renewed authorization should reopen a full term: %+v %v", sub, err)
+	}
+	cashBalance(t, f, wallet.Address(f.account, ""), 928000000)
+}
+
 func TestProductCreditProfileRejectsLegacyDoubleRounding(t *testing.T) {
 	p := nativeCreditProfile(t, 2, "legacy-test-quota", "3")
 	p.CreditScope = ProductCreditScopeV1
@@ -403,5 +506,40 @@ func TestProductCreditProfileRejectsLegacyDoubleRounding(t *testing.T) {
 	p.NativeCreditConversion.Numerator, p.NativeCreditConversion.Denominator = "1", "1"
 	if e := p.Validate(); e != nil {
 		t.Fatalf("exact product microcredit conversion rejected: %v", e)
+	}
+}
+
+func TestProductCreditNativeInt64ReserveTopUpAndSettlement(t *testing.T) {
+	f, cid, _ := nativeCreditFixture(t)
+	ctx := context.Background()
+	publishProductCreditOffers(t, f, "month")
+	if _, e := f.s.pool.Exec(ctx, `UPDATE model_credentials SET credit_scope='product_v1',max_total='',max_per_call='' WHERE id=$1`, cid); e != nil {
+		t.Fatal(e)
+	}
+	now := time.Now().UTC()
+	b := seedProductCreditBatch(t, f, Batch{ProductID: "superwagie", Kind: "base", Original: "5000000000", StartsAt: now.Add(-time.Hour), ExpiresAt: now.Add(time.Hour), CreatedAt: now}, ProductCreditScopeV1)
+	r := creditNativeRequest(f, cid, "int64-scope", "2147483648", exactProductCreditTestConversion())
+	r.CreditScope, r.SourceVerified = ProductCreditScopeV1, true
+	held, e := f.s.ReserveNative(ctx, "llmrouter", r)
+	if e != nil || held.Held != "2147483648" || len(held.Allocations) != 1 || held.Allocations[0].BatchID != b {
+		t.Fatalf("large scoped reserve failed: %+v %v", held, e)
+	}
+	if _, e = f.s.TopUp(ctx, "llmrouter", held.CallID, "9223372036854775807", "int64-overflow"); !errors.Is(e, ErrInvalid) {
+		t.Fatalf("overflowing top-up accepted: %v", e)
+	}
+	held, e = f.s.TopUp(ctx, "llmrouter", held.CallID, "2147483649", "int64-topup")
+	if e != nil || held.Held != "4294967297" {
+		t.Fatalf("large scoped top-up failed: %+v %v", held, e)
+	}
+	settle := NativeSettlementRequest{CallID: r.CallID, PricingDigest: r.Quote.PricingDigest, NativeQuota: "4294967296", Amount: "4294967296"}
+	for range 2 {
+		final, e := f.s.SettleNative(ctx, "llmrouter", settle)
+		if e != nil || final.Charged != settle.Amount || final.NativeQuota != settle.NativeQuota {
+			t.Fatalf("large scoped settlement failed: %+v %v", final, e)
+		}
+	}
+	wallet, e := f.s.ProductCreditWallet(ctx, f.actor, f.account, "superwagie")
+	if e != nil || wallet.Available != "705032704" || wallet.Reserved != "0" {
+		t.Fatalf("incorrect large-int ledger settlement: %+v %v", wallet, e)
 	}
 }

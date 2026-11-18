@@ -215,7 +215,7 @@ func (s *Service) processAutoAddon(ctx context.Context, c *pgxpool.Conn, t autoA
 	if e = c.QueryRow(ctx, `SELECT armed FROM billing_product_credit_auto_addon_policies WHERE account_id=$1 AND product_id=$2`, t.AccountID, t.ProductID).Scan(&armed); e != nil {
 		return e
 	}
-	low := autoAddonBalanceLow(p, t, balance)
+	low := autoAddonBalanceLow(p, balance)
 	if t.Kind == "funded" || !armed || !low {
 		return finishAutoAddon(ctx, c, t, "IGNORED", armed || !low)
 	}
@@ -244,9 +244,10 @@ func (s *Service) processAutoAddon(ctx context.Context, c *pgxpool.Conn, t autoA
 		return e
 	}
 	if unifiedCash < price {
-		return finishAutoAddon(ctx, c, t, "FAILED", true)
+		// Recheck the original trigger after the shared wallet is funded.
+		return ErrPending
 	}
-	end := MonthAnchor(now, offer.ValidityMonths)
+	end := offer.monthAnchor(now, offer.ValidityMonths)
 	order = Order{ID: id("bo_"), AccountID: t.AccountID, ActorID: p.ActorID, ProductID: t.ProductID, Kind: "addon", Offer: offer, Amount: offer.Price, PaymentStatus: "PENDING", FulfillmentStatus: "PENDING", Start: now, End: end, PeriodStart: now, PeriodEnd: end, GrantAmount: offer.MonthlyCredit, CreatedAt: now, AutoAddonPolicyVersion: p.Version}
 	order, e = s.payLocked(ctx, c, order, key, hash(key), nil)
 	if errors.Is(e, ledger.ErrInsufficientFunds) {
@@ -276,15 +277,15 @@ func (s *Service) finishPurchasedAutoAddon(ctx context.Context, c *pgxpool.Conn,
 	if e != nil {
 		return e
 	}
-	return finishAutoAddon(ctx, c, t, "PURCHASED", !autoAddonBalanceLow(p, t, balance))
+	return finishAutoAddon(ctx, c, t, "PURCHASED", !autoAddonBalanceLow(p, balance))
 }
 
-func autoAddonBalanceLow(p AutoAddonPolicy, t autoAddonTrigger, balance int64) bool {
+func autoAddonBalanceLow(p AutoAddonPolicy, balance int64) bool {
 	if p.Trigger == "threshold" {
 		threshold, _ := integer(p.Threshold, true)
 		return balance < threshold
 	}
-	return balance == 0 || (t.Kind == "insufficient" && balance < t.MinimumCredit)
+	return balance == 0
 }
 
 func (s *Service) productAutoAddonBalance(ctx context.Context, c *pgxpool.Conn, t autoAddonTrigger, now time.Time) (int64, error) {

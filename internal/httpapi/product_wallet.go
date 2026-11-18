@@ -113,6 +113,14 @@ func (s *api) readProductWallet(w http.ResponseWriter, r *http.Request, u accoun
 	for _, order := range orders {
 		byProduct[order.ProductID] = true
 	}
+	for _, setting := range settings {
+		if setting.Purpose == "renewal" {
+			byProduct[setting.ProductID] = true
+		}
+	}
+	for _, setting := range addonSettings {
+		byProduct[setting.ProductID] = true
+	}
 	out := []productWalletProduct{}
 	for _, product := range products {
 		if !byProduct[product.ID] || !sharedWalletProduct(r, product.ID) {
@@ -124,22 +132,30 @@ func (s *api) readProductWallet(w http.ResponseWriter, r *http.Request, u accoun
 		}
 		for _, order := range orders {
 			if order.ProductID == item.ProductID {
-				item.Orders = append(item.Orders, map[string]any{
+				row := map[string]any{
 					"id": order.ID, "offer_name": order.Offer.Name, "amount": order.Amount,
 					"payment_status": order.PaymentStatus, "fulfillment_status": order.FulfillmentStatus,
 					"refund_status": order.RefundStatus, "created_at": order.CreatedAt,
-				})
+				}
+				if order.UpgradeReturn != nil && order.UpgradeReturn.Amount != "" {
+					row["upgrade_refund_amount"] = order.UpgradeReturn.Amount
+				}
+				item.Orders = append(item.Orders, row)
 			}
 		}
+		var renewal billing.Authorization
 		for _, setting := range settings {
 			if setting.ProductID == item.ProductID && setting.Purpose == "renewal" {
-				item.SubscriptionRenewal = productWalletRenewal{Enabled: setting.Enabled, Version: setting.Version}
+				renewal = setting
+				item.SubscriptionRenewal.Version = setting.Version
+				break
 			}
 		}
 		for _, subscription := range subscriptions {
 			if subscription.ProductID == item.ProductID && subscription.Offer.CreditScope == billing.ProductCreditScopeV1 {
 				item.SubscriptionRenewal.OfferName = subscription.Offer.Name
 				item.SubscriptionRenewal.Price = subscription.Offer.Price
+				item.SubscriptionRenewal.Enabled = renewalCoversOffer(renewal, subscription.Offer.Price, time.Now())
 				break
 			}
 		}
@@ -164,6 +180,15 @@ func (s *api) readProductWallet(w http.ResponseWriter, r *http.Request, u accoun
 		"cash":     map[string]string{"asset": wallet.Asset, "available": balances[0].Amount},
 		"products": out, "can_manage": policy.HasScope("settings:write"),
 	})
+}
+
+func renewalCoversOffer(renewal billing.Authorization, price string, now time.Time) bool {
+	amount, ae := strconv.ParseInt(price, 10, 64)
+	limit, le := strconv.ParseInt(renewal.MaxPerOperation, 10, 64)
+	total, te := strconv.ParseInt(renewal.MaxTotal, 10, 64)
+	used, ue := strconv.ParseInt(renewal.Used, 10, 64)
+	return renewal.Enabled && now.Before(renewal.ExpiresAt) && ae == nil && le == nil && te == nil && ue == nil &&
+		amount > 0 && limit >= amount && used >= 0 && total >= used && total-used >= amount
 }
 
 func (s *api) readProductCredits(w http.ResponseWriter, r *http.Request, u accounts.User) error {

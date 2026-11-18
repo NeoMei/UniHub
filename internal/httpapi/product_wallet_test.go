@@ -48,6 +48,7 @@ type scopedWalletCatalog struct{}
 func (scopedWalletCatalog) Discover(ctx context.Context, request modelaccess.ProviderCatalogRequest) (modelaccess.ProviderCatalogResponse, error) {
 	out, err := (creditAcceptanceCatalog{}).Discover(ctx, request)
 	out.CreditScopes = []string{billing.ProductCreditScopeV1}
+	out.Models = append(out.Models, modelaccess.Model{ID: "PaddleOCR-VL-1.6", Operations: []string{"ocr.jobs.create", "ocr.jobs.retrieve"}})
 	return out, err
 }
 
@@ -61,13 +62,17 @@ func (scopedWalletProductVerifier) Verify(ctx context.Context, raw string) (auth
 
 func TestNegotiatedProductWalletCheckoutAndTrustedSettlement(t *testing.T) {
 	gateway := os.Getenv("UNIHUB_PRODUCT_CREDIT_GATEWAY_PATH")
+	app := os.Getenv("UNIHUB_PRODUCT_CREDIT_APP_PATH")
+	if app != "" && (gateway == "" || !filepath.IsAbs(app)) {
+		t.Fatal("the SuperWagie fixture requires an absolute app checkout and a gateway checkout")
+	}
 	var binary string
 	if gateway != "" {
 		if !filepath.IsAbs(gateway) {
 			t.Fatal("the gateway checkout must be an absolute path")
 		}
 		binary = filepath.Join(t.TempDir(), "gateway.test")
-		build := exec.Command("go", "test", "-c", "-o", binary, "./router")
+		build := exec.CommandContext(t.Context(), "go", "test", "-c", "-o", binary, "./router")
 		build.Dir = gateway
 		if output, err := build.CombinedOutput(); err != nil {
 			t.Fatalf("gateway fixture build: %v\n%s", err, output)
@@ -104,7 +109,7 @@ func TestNegotiatedProductWalletCheckoutAndTrustedSettlement(t *testing.T) {
 		}
 		offer := billing.Offer{ID: product + "-monthly", ProductID: product, Name: product + " monthly",
 			AccountKind: "personal", Kind: "membership", Period: "month", Price: "2000000",
-			MonthlyCredit: "10000000", CreditScope: billing.ProductCreditScopeV1,
+			MonthlyCredit: "100000000", CreditScope: billing.ProductCreditScopeV1,
 			ServiceAmount: "1000000", ComputeAmount: "1000000",
 		}
 		if _, err = f.billing.SaveOffer(ctx, f.actor.ID, offer); err != nil {
@@ -121,10 +126,6 @@ func TestNegotiatedProductWalletCheckoutAndTrustedSettlement(t *testing.T) {
 	f.billing.ConfigureScopedCheckoutReadiness(func(ctx context.Context, _, _, product, scope string) (billing.NativeCreditReadiness, error) {
 		return f.billing.NativeCreditsReadinessForScopeOn(ctx, f.pool, product, scope)
 	})
-	if _, err := f.billing.Purchase(ctx, f.actor.ID, f.account, billing.PurchaseRequest{OfferID: "agentwiki-monthly", Key: "agentwiki-buy"}); err != nil {
-		t.Fatal(err)
-	}
-
 	a := accounts.New(f.pool)
 	modelAccess := modelaccess.New(f.pool, a, f.billing)
 	modelAccess.ConfigureProviderCatalog(scopedWalletCatalog{})
@@ -142,7 +143,7 @@ func TestNegotiatedProductWalletCheckoutAndTrustedSettlement(t *testing.T) {
 		ProductAccess: map[string]products.Client{"sw": {
 			ClientID: "sw", ProductID: "superwagie", InstanceID: "default",
 			BillingProducts: []string{"superwagie", "agentwiki", "llmrouter"},
-			Scopes:          []string{"accounts:read", "catalog:read", "credits:read", "wallets:read", "orders:write", "model-credentials:write", "settings:write"},
+			Scopes:          []string{"access:read", "accounts:read", "catalog:read", "credits:read", "wallets:read", "orders:write", "model-credentials:write", "settings:write"},
 		}},
 	})
 	do := func(method, path, token, key string, negotiated bool, payload, out any, want int) {
@@ -173,6 +174,18 @@ func TestNegotiatedProductWalletCheckoutAndTrustedSettlement(t *testing.T) {
 		}
 	}
 	base := "/v1/accounts/" + f.account
+	var policyResult struct {
+		Products []productWalletProduct `json:"products"`
+	}
+	do("PUT", base+"/product-wallet/agentwiki/renewal", "product-alice", "", true, map[string]any{
+		"kind": "subscription", "enabled": false, "expected_version": 0,
+	}, &policyResult, 200)
+	if len(policyResult.Products) != 2 || policyResult.Products[0].ProductID != "agentwiki" || policyResult.Products[0].SubscriptionRenewal.Version != 1 {
+		t.Fatalf("the shared wallet omitted the accepted policy for a product without orders: %+v", policyResult.Products)
+	}
+	if _, err := f.billing.Purchase(ctx, f.actor.ID, f.account, billing.PurchaseRequest{OfferID: "agentwiki-monthly", Key: "agentwiki-buy"}); err != nil {
+		t.Fatal(err)
+	}
 	var flags struct {
 		Enabled bool                          `json:"product_credit_wallet"`
 		Native  billing.NativeCreditReadiness `json:"native_credits"`
@@ -229,33 +242,43 @@ func TestNegotiatedProductWalletCheckoutAndTrustedSettlement(t *testing.T) {
 	do("POST", "/internal/v1/calls/scoped-http-call/native-settle", billingModesServiceToken, "", false, settle, nil, 200)
 	do("POST", "/internal/v1/calls/scoped-http-call/native-settle", billingModesServiceToken, "", false, settle, nil, 200)
 	sw, err := f.billing.ProductCreditWallet(ctx, f.actor.ID, f.account, "superwagie")
-	if err != nil || sw.Available != "9999900" {
+	if err != nil || sw.Available != "99999900" {
 		t.Fatal("same-call replay consumed SuperWagie credits more than once")
 	}
 	aw, err := f.billing.ProductCreditWallet(ctx, f.actor.ID, f.account, "agentwiki")
-	if err != nil || aw.Available != "10000000" {
+	if err != nil || aw.Available != "100000000" {
 		t.Fatal("SuperWagie call affected AgentWiki credits")
 	}
 	if binary != "" {
 		server := httptest.NewServer(h)
 		t.Cleanup(server.Close)
-		run := exec.Command(binary, "-test.run=^TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider$", "-test.count=1")
+		run := exec.CommandContext(t.Context(), binary, "-test.run=^(TestProductCreditRelayFreezesPublicPriceAndDoesNotReplayUnknownProvider|TestProductCertifiedImageReclaimsOriginalResultWithoutSecondSend|TestProductPinnedKnowledgeRoutesUseRealUniHub|TestProductPaddleOCRScopedDocumentRecovery)$", "-test.count=1", "-test.v")
 		run.Dir = gateway
 		run.Env = append(os.Environ(),
 			"PRODUCT_CREDIT_INTEGRATION_ORIGIN="+server.URL,
 			"PRODUCT_CREDIT_INTEGRATION_SERVICE_TOKEN="+billingModesServiceToken,
 			"PRODUCT_CREDIT_INTEGRATION_KEY="+key.Token,
 			"PRODUCT_CREDIT_INTEGRATION_PROOF="+issuedProof.Token,
+			"PRODUCT_CREDIT_INTEGRATION_APP_PATH="+app,
+			"PRODUCT_CREDIT_INTEGRATION_ACCOUNT="+f.account,
+			"PRODUCT_CREDIT_INTEGRATION_ACTOR_TOKEN=product-alice",
+			"PRODUCT_CREDIT_INTEGRATION_PRODUCT_TOKEN="+runtime.Token,
 		)
 		if output, err := run.CombinedOutput(); err != nil {
 			t.Fatalf("isolated gateway fixture: %v\n%s", err, output)
+		} else {
+			t.Logf("%s", output)
 		}
 		sw, err = f.billing.ProductCreditWallet(ctx, f.actor.ID, f.account, "superwagie")
-		if err != nil || sw.Available != "9998850" {
-			t.Fatal("the actual router did not settle exactly 1050 product microcredits")
+		want := "99686250"
+		if app != "" {
+			want = "99575750"
+		}
+		if err != nil || sw.Available != want {
+			t.Fatalf("available SuperWagie microcredits: got %s, want %s: %v", sw.Available, want, err)
 		}
 		aw, err = f.billing.ProductCreditWallet(ctx, f.actor.ID, f.account, "agentwiki")
-		if err != nil || aw.Available != "10000000" {
+		if err != nil || aw.Available != "100000000" {
 			t.Fatal("actual SuperWagie router call affected AgentWiki credits")
 		}
 	}

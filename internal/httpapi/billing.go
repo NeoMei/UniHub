@@ -151,6 +151,9 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 			if e = requireBillingProduct(r, q.Offer.ProductID); e != nil {
 				return e
 			}
+			if q.ProductCreditUpgrade != nil && (q.Offer.ProductID != originProduct(r) || !productWalletRequested(r)) {
+				return accounts.ErrForbidden
+			}
 		}
 		v, e := b.AcceptUpgrade(r.Context(), u.ID, r.PathValue("account"), r.PathValue("quote"), r.Header.Get("Idempotency-Key"))
 		if e != nil {

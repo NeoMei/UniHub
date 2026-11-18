@@ -122,6 +122,16 @@ func settlementAllocations(ctx context.Context, q accounts.Querier, call Call) (
 	out := slices.Clone(call.Allocations)
 	slices.SortStableFunc(out, func(a, b Allocation) int {
 		left, right := batches[a.BatchID], batches[b.BatchID]
+		if call.FundingSubscriptionID != "" {
+			leftReplacement := left.SubscriptionID != "" && left.SubscriptionID != call.FundingSubscriptionID
+			rightReplacement := right.SubscriptionID != "" && right.SubscriptionID != call.FundingSubscriptionID
+			if leftReplacement != rightReplacement {
+				if leftReplacement {
+					return 1
+				}
+				return -1
+			}
+		}
 		if (left.Kind == "addon") != (right.Kind == "addon") {
 			if left.Kind == "addon" {
 				return 1

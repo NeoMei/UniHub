@@ -98,9 +98,13 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 			if e != nil {
 				return e
 			}
-			start, _, ok := CurrentPeriod(sub.Anchor, sub.PaidThrough, now)
-			if !ok || sub.Status != "active" || !now.Before(q.ExpiresAt) || sub.Version != q.SubscriptionVersion || !start.Equal(q.PeriodStart) {
+			if !upgradeQuoteCurrent(q, sub, now) {
 				return ErrQuoteInvalidated
+			}
+			if q.ProductCreditUpgrade != nil {
+				if _, e = previousProductUpgradeOrder(ctx, c, sub, q.ProductCreditUpgrade.PreviousOrderID); e != nil {
+					return e
+				}
 			}
 			offer, e = s.buyable(ctx, c, q.Offer.ID, account)
 			if e != nil {
@@ -141,6 +145,7 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 			o.PeriodStart = quote.PeriodStart
 			o.PeriodEnd = quote.PeriodEnd
 			o.GrantAmount = quote.GrantAmount
+			setUpgradeOrderTerm(&o, *quote, sub)
 		} else if offer.Kind == "membership" {
 			active, e := load[Subscription](ctx, c, `SELECT snapshot FROM billing_subscriptions WHERE account_id=$1 AND product_id=$2`, account, offer.ProductID)
 			if e == nil && active.Status == "active" && now.Before(active.PaidThrough) {
@@ -150,14 +155,10 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 				return e
 			}
 			o.SubscriptionID = id("sub_")
-			months := 1
-			if offer.Period == "year" {
-				months = 12
-			}
-			o.End = MonthAnchor(now, months)
-			o.PeriodStart, o.PeriodEnd, _ = CurrentPeriod(now, o.End, now)
+			o.End = o.Offer.monthAnchor(now, o.Offer.membershipMonths())
+			o.PeriodStart, o.PeriodEnd, _ = o.Offer.currentPeriod(now, o.End, now)
 		} else {
-			o.End = MonthAnchor(now, offer.ValidityMonths)
+			o.End = offer.monthAnchor(now, offer.ValidityMonths)
 			o.PeriodStart = now
 			o.PeriodEnd = o.End
 		}
@@ -167,6 +168,10 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 		checkoutID := id("")
 		o.CheckoutID = checkoutID
 		x = checkoutRecord{Checkout: Checkout{ID: checkoutID, AccountID: account, ProductID: offer.ProductID, Provider: r.Provider, OfferName: offer.Name, Amount: amount, Currency: "CNY", PaymentStatus: "UNKNOWN", FulfillmentStatus: "NOT_STARTED", ExpiresAt: expires, CreatedAt: now}, ActorID: actor, MerchantID: p.MerchantID(), MerchantVersion: paymentConfigurationID(p), RequestDigest: digest, Order: o, Quote: quote}
+		if o.ProductCreditUpgrade != nil {
+			x.ProductCreditUpgrade = o.ProductCreditUpgrade
+			x.SubscriptionID = o.SubscriptionID
+		}
 		tx, e := c.Begin(ctx)
 		if e != nil {
 			return e
@@ -470,6 +475,21 @@ func (s *Service) acceptCheckoutReceipt(ctx context.Context, p payments.Provider
 		o.PaymentStatus = "PAID"
 		o.FulfillmentStatus = x.FulfillmentStatus
 		o.ProviderTransactionID = r.TransactionID
+		if o.CreditScope == ProductCreditScopeV1 {
+			// Merchant timestamps may have lower precision than the checkout clock.
+			// Keep the original receipt and start the benefit no earlier than checkout.
+			if paidAt.Before(x.CreatedAt) {
+				paidAt = x.CreatedAt
+			}
+			o.Start = paidAt.UTC()
+			if o.Kind == "addon" {
+				o.End = o.Offer.monthAnchor(o.Start, o.Offer.ValidityMonths)
+				o.PeriodStart, o.PeriodEnd = o.Start, o.End
+			} else if o.Kind == "membership" {
+				o.End = o.Offer.monthAnchor(o.Start, o.Offer.membershipMonths())
+				o.PeriodStart, o.PeriodEnd, _ = o.Offer.currentPeriod(o.Start, o.End, o.Start)
+			}
+		}
 		x.OrderID = o.ID
 		x.Order = o
 		tx, e := c.Begin(ctx)
@@ -594,7 +614,9 @@ func (s *Service) externalFulfillmentReviewLocked(ctx context.Context, c *pgxpoo
 	}
 	reason := ""
 	benefitDeadline := o.End
-	if o.Kind == "upgrade" {
+	if o.ProductCreditUpgrade != nil {
+		benefitDeadline = o.Offer.monthAnchor(o.Start, o.Offer.membershipMonths())
+	} else if o.Kind == "upgrade" {
 		benefitDeadline = o.PeriodEnd
 	}
 	if !now.Before(benefitDeadline) {
@@ -607,6 +629,14 @@ func (s *Service) externalFulfillmentReviewLocked(ctx context.Context, c *pgxpoo
 		}
 		if errors.Is(e, accounts.ErrNotFound) || sub.Status != "active" || sub.Version != x.Quote.SubscriptionVersion {
 			reason = "quote_invalidated"
+		}
+		if reason == "" && x.Quote.ProductCreditUpgrade != nil {
+			_, e = previousProductUpgradeOrder(ctx, c, sub, x.Quote.ProductCreditUpgrade.PreviousOrderID)
+			if errors.Is(e, ErrQuoteInvalidated) {
+				reason = "quote_invalidated"
+			} else if e != nil {
+				return false, e
+			}
 		}
 	}
 	if o.Kind == "membership" {

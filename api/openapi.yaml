@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.64"
+  "version": "0.4.65"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -3042,7 +3042,7 @@
           "schema":
             "$ref": "#/components/schemas/Error"
   "schemas":
-    "Checkout": {"type": "object", "properties": {"id": {"type": "string"}, "account_id": {"type": "string"}, "product_id": {"type": "string"}, "provider": {"type": "string"}, "offer_name": {"type": "string"}, "currency": {"type": "string"}, "order_id": {"type": "string"}, "error_code": {"type": "string"}, "amount": {"$ref": "#/components/schemas/IntegerString"}, "payment_status": {"enum": ["CREATED", "PENDING", "UNKNOWN", "PAID", "CLOSED", "REVIEW"]}, "fulfillment_status": {"enum": ["NOT_STARTED", "PENDING", "FULFILLED", "REVIEW"]}, "refund_status": {"enum": ["PENDING", "SUCCEEDED", "REVIEW"]}, "created_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"}, "session": {"type": "object", "properties": {"kind": {"enum": ["qr", "redirect"]}, "url": {"type": "string"}, "expires_at": {"type": "string", "format": "date-time"}}, "required": ["kind", "url", "expires_at"]}}, "required": ["id", "account_id", "product_id", "provider", "offer_name", "amount", "currency", "payment_status", "fulfillment_status", "expires_at", "created_at"]}
+    "Checkout": {"type": "object", "properties": {"upgrade_return_status": {"enum": ["UPGRADE_PENDING", "UPGRADE_RELEASING", "UPGRADE_RETURNED", "UPGRADE_REVIEW"]}, "upgrade_refund_amount": {"$ref": "#/components/schemas/IntegerString"}, "product_credit_upgrade": {"$ref": "#/components/schemas/ProductCreditUpgrade"}, "subscription_id": {"type": "string"}, "id": {"type": "string"}, "account_id": {"type": "string"}, "product_id": {"type": "string"}, "provider": {"type": "string"}, "offer_name": {"type": "string"}, "currency": {"type": "string"}, "order_id": {"type": "string"}, "error_code": {"type": "string"}, "amount": {"$ref": "#/components/schemas/IntegerString"}, "payment_status": {"enum": ["CREATED", "PENDING", "UNKNOWN", "PAID", "CLOSED", "REVIEW"]}, "fulfillment_status": {"enum": ["NOT_STARTED", "PENDING", "FULFILLED", "REVIEW"]}, "refund_status": {"enum": ["PENDING", "SUCCEEDED", "REVIEW"]}, "created_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"}, "session": {"type": "object", "properties": {"kind": {"enum": ["qr", "redirect"]}, "url": {"type": "string"}, "expires_at": {"type": "string", "format": "date-time"}}, "required": ["kind", "url", "expires_at"]}}, "required": ["id", "account_id", "product_id", "provider", "offer_name", "amount", "currency", "payment_status", "fulfillment_status", "expires_at", "created_at"]}
     "ScopedModel":
       "type": "object"
       "additionalProperties": false
@@ -3623,6 +3623,9 @@
     "CatalogOffer":
       "type": "object"
       "properties":
+        "credit_scope": {"const":"product_v1"}
+        "service_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
         "id":
           "type": "string"
         "product_id":
@@ -3686,6 +3689,9 @@
     "Offer":
       "type": "object"
       "properties":
+        "credit_scope": {"const":"product_v1"}
+        "service_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
         "id":
           "type": "string"
         "product_id":
@@ -3986,6 +3992,12 @@
     "Order":
       "type": "object"
       "properties":
+        "credit_scope": {"const":"product_v1"}
+        "service_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "auto_addon_policy_version": {"type":"integer","minimum":1}
+        "product_credit_upgrade": {"$ref":"#/components/schemas/ProductCreditUpgrade"}
+        "upgrade_return": {"$ref":"#/components/schemas/ProductCreditUpgradeReturn"}
         "payment_source": {"enum":["external","wallet"]}
         "checkout_id": {"type":"string"}
         "provider_transaction_id": {"type":"string"}
@@ -4064,6 +4076,7 @@
     "Quote":
       "type": "object"
       "properties":
+        "product_credit_upgrade": {"$ref":"#/components/schemas/ProductCreditUpgrade"}
         "payment_source": {"enum":["external","wallet"]}
         "rounding_rule": {"const":"cny_cent_ceil_v1"}
         "original_amount": {"$ref":"#/components/schemas/IntegerString"}
@@ -4102,6 +4115,28 @@
         - "period_start"
         - "expires_at"
         - "created_at"
+      "additionalProperties": false
+    "ProductCreditUpgrade":
+      "type": "object"
+      "properties":
+        "previous_order_id": {"type":"string"}
+        "previous_subscription_id": {"type":"string"}
+        "previous_version": {"type":"integer","minimum":1}
+        "estimated_refund_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "refund_payment_source": {"enum":["external","wallet"]}
+      "required": ["previous_order_id","previous_subscription_id","previous_version","estimated_refund_amount","refund_payment_source"]
+      "additionalProperties": false
+    "ProductCreditUpgradeReturn":
+      "type": "object"
+      "properties":
+        "replacement_order_id": {"type":"string"}
+        "cutover": {"type":"string","format":"date-time"}
+        "credit_ceiling": {"$ref":"#/components/schemas/IntegerString"}
+        "service_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "amount": {"$ref":"#/components/schemas/IntegerString"}
+        "refund_id": {"type":"string"}
+      "required": ["replacement_order_id","cutover","credit_ceiling"]
       "additionalProperties": false
     "PublicCreditBatch":
       "type": "object"

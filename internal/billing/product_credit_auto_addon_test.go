@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"unihub/internal/ledger"
 	"unihub/internal/wallet"
 )
 
@@ -71,7 +72,42 @@ func TestAutoAddonDoesNotChargeFromARiskHold(t *testing.T) {
 	}
 }
 
-func TestAutoAddonExhaustionRequiresConfirmedMinimum(t *testing.T) {
+func TestAutoAddonResumesTheSameTriggerAfterCashRecharge(t *testing.T) {
+	f, cid, conversion := productAutoAddonFixture(t, "threshold", "10")
+	ctx := t.Context()
+	address := wallet.Address(f.account, "")
+	if _, e := f.l.Post(ctx, ledger.Command{Reference: "spend-wallet-before-auto-addon", Postings: []ledger.Posting{{Source: address, Destination: "world", Asset: CashAsset, Amount: 4001000}}}); e != nil {
+		t.Fatal(e)
+	}
+	r := creditNativeRequest(f, cid, "auto-addon-without-cash", "8", conversion)
+	r.CreditScope, r.SourceVerified = ProductCreditScopeV1, true
+	if _, e := f.s.ReserveNative(ctx, "llmrouter", r); e != nil {
+		t.Fatal(e)
+	}
+	settle := NativeSettlementRequest{CallID: r.CallID, PricingDigest: r.Quote.PricingDigest, NativeQuota: "8", Amount: "8"}
+	if _, e := f.s.SettleNative(ctx, "llmrouter", settle); e != nil {
+		t.Fatal(e)
+	}
+	for range 2 {
+		if _, e := f.s.maintainProductCreditAutoAddons(ctx, time.Now().UTC()); e != nil {
+			t.Fatal(e)
+		}
+	}
+	cashBalance(t, f, address, 0)
+	fundCash(t, f, "", 2500000)
+	for range 2 {
+		if _, e := f.s.maintainProductCreditAutoAddons(ctx, time.Now().UTC()); e != nil {
+			t.Fatal(e)
+		}
+	}
+	cashBalance(t, f, address, 500000)
+	w, e := f.s.ProductCreditWallet(ctx, f.actor, f.account, "superwagie")
+	if e != nil || w.Available != "200000008" || len(w.Batches) != 2 {
+		t.Fatalf("cash recharge should fulfill precisely one pack for the original trigger: %+v %v", w, e)
+	}
+}
+
+func TestAutoAddonExhaustionRequiresZeroBalance(t *testing.T) {
 	f, cid, conversion := productAutoAddonFixture(t, "exhausted", "")
 	ctx := context.Background()
 	r := creditNativeRequest(f, cid, "quote-risk-margin", "23", conversion)
@@ -88,6 +124,19 @@ func TestAutoAddonExhaustionRequiresConfirmedMinimum(t *testing.T) {
 		if _, e := f.s.ReserveNative(ctx, "llmrouter", r); !errors.Is(e, ErrInsufficientCredits) {
 			t.Fatalf("minimum should exceed available credits: %v", e)
 		}
+	}
+	if _, e := f.s.maintainProductCreditAutoAddons(ctx, time.Now().UTC()); e != nil {
+		t.Fatal(e)
+	}
+	cashBalance(t, f, wallet.Address(f.account, ""), 4001000)
+	consume := creditNativeRequest(f, cid, "spend-remaining-credits", "16", conversion)
+	consume.CreditScope, consume.SourceVerified = ProductCreditScopeV1, true
+	if _, e := f.s.ReserveNative(ctx, "llmrouter", consume); e != nil {
+		t.Fatal(e)
+	}
+	settle := NativeSettlementRequest{CallID: consume.CallID, PricingDigest: consume.Quote.PricingDigest, NativeQuota: "16", Amount: "16"}
+	if _, e := f.s.SettleNative(ctx, "llmrouter", settle); e != nil {
+		t.Fatal(e)
 	}
 	if _, e := f.s.maintainProductCreditAutoAddons(ctx, time.Now().UTC()); e != nil {
 		t.Fatal(e)
@@ -113,7 +162,7 @@ func TestAutoAddonTriggersOnceAfterRealExpiryDuringActiveMembership(t *testing.T
 	}
 	cashBalance(t, f, wallet.Address(f.account, ""), 2001000)
 	w, e := f.s.ProductCreditWallet(ctx, f.actor, f.account, "superwagie")
-	if e != nil || w.Available != "20000000" || len(w.Batches) != 2 || w.Batches[0].Expired != "16" {
+	if e != nil || w.Available != "200000000" || len(w.Batches) != 2 || w.Batches[0].Expired != "16" {
 		t.Fatalf("real expiry didn't trigger exactly one add-on: %+v %v", w, e)
 	}
 }

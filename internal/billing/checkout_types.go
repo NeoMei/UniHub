@@ -20,21 +20,25 @@ type CheckoutRequest struct {
 	Key       string `json:"-"`
 }
 type Checkout struct {
-	ID                string            `json:"id"`
-	AccountID         string            `json:"account_id"`
-	ProductID         string            `json:"product_id"`
-	Provider          string            `json:"provider"`
-	OfferName         string            `json:"offer_name"`
-	Amount            string            `json:"amount"`
-	Currency          string            `json:"currency"`
-	PaymentStatus     string            `json:"payment_status"`
-	FulfillmentStatus string            `json:"fulfillment_status"`
-	RefundStatus      string            `json:"refund_status,omitempty"`
-	ExpiresAt         time.Time         `json:"expires_at"`
-	CreatedAt         time.Time         `json:"created_at"`
-	Session           *payments.Session `json:"session,omitempty"`
-	OrderID           string            `json:"order_id,omitempty"`
-	ErrorCode         string            `json:"error_code,omitempty"`
+	ProductCreditUpgrade *ProductCreditUpgrade `json:"product_credit_upgrade,omitempty"`
+	UpgradeReturnStatus  string                `json:"upgrade_return_status,omitempty"`
+	UpgradeRefundAmount  string                `json:"upgrade_refund_amount,omitempty"`
+	SubscriptionID       string                `json:"subscription_id,omitempty"`
+	ID                   string                `json:"id"`
+	AccountID            string                `json:"account_id"`
+	ProductID            string                `json:"product_id"`
+	Provider             string                `json:"provider"`
+	OfferName            string                `json:"offer_name"`
+	Amount               string                `json:"amount"`
+	Currency             string                `json:"currency"`
+	PaymentStatus        string                `json:"payment_status"`
+	FulfillmentStatus    string                `json:"fulfillment_status"`
+	RefundStatus         string                `json:"refund_status,omitempty"`
+	ExpiresAt            time.Time             `json:"expires_at"`
+	CreatedAt            time.Time             `json:"created_at"`
+	Session              *payments.Session     `json:"session,omitempty"`
+	OrderID              string                `json:"order_id,omitempty"`
+	ErrorCode            string                `json:"error_code,omitempty"`
 }
 type checkoutRecord struct {
 	Checkout
@@ -128,7 +132,7 @@ func (s *Service) checkoutProvider(ctx context.Context, name, merchant string) (
 	}
 	return nil, ErrPaymentUnavailable
 }
-func (s *Service) commercialClear(ctx context.Context, c *pgxpool.Conn, account string) error {
+func (s *Service) commercialClear(ctx context.Context, c accounts.Querier, account string) error {
 	var pending bool
 	e := c.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM billing_checkouts WHERE account_id=$1 AND COALESCE(snapshot->>'refund_status','')<>'SUCCEEDED' AND (snapshot->>'payment_status' IN ('CREATED','PENDING','UNKNOWN','REVIEW') OR (snapshot->>'payment_status'='PAID' AND snapshot->>'fulfillment_status'<>'FULFILLED') OR snapshot->>'refund_status' IN ('PENDING','REVIEW')))`, account).Scan(&pending)
 	if e != nil {
@@ -202,6 +206,14 @@ func (s *Service) checkoutView(ctx context.Context, x checkoutRecord) (Checkout,
 }
 
 func checkoutOrderView(v Checkout, o Order) Checkout {
+	if o.UpgradeReturn != nil {
+		v.UpgradeReturnStatus = o.RefundStatus
+		v.UpgradeRefundAmount = o.UpgradeReturn.Amount
+	}
+	if o.ProductCreditUpgrade != nil {
+		v.ProductCreditUpgrade = o.ProductCreditUpgrade
+		v.SubscriptionID = o.SubscriptionID
+	}
 	v.FulfillmentStatus = o.FulfillmentStatus
 	if v.FulfillmentStatus == "CANCELED" {
 		v.FulfillmentStatus = "NOT_STARTED"

@@ -27,6 +27,9 @@ func (s *Service) RequestRefund(ctx context.Context, actor, account, orderID, ke
 			return e
 		}
 		out = o
+		if o.UpgradeReturn != nil {
+			return ErrConflict
+		}
 		if o.PaymentSource == "external" {
 			return ErrUnsupported
 		}

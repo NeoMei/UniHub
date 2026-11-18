@@ -16,14 +16,16 @@ func (s *Service) productComputeRecognition(ctx context.Context, q dbq, call Cal
 	if e != nil {
 		return nil, e
 	}
-	orderByDestination := make(map[string]string, len(batches))
+	batchByDestination := make(map[string]Batch, len(batches))
 	for _, b := range batches {
-		orderByDestination[BatchAddress(b.ID, "consumed")] = b.OrderID
+		batchByDestination[BatchAddress(b.ID, "consumed")] = b
 	}
 	usedByOrder := make(map[string]int64)
+	usedBatches := make(map[string][]Batch)
 	for _, p := range creditPosts {
-		if orderID := orderByDestination[p.Destination]; orderID != "" {
-			usedByOrder[orderID] += p.Amount
+		if b, ok := batchByDestination[p.Destination]; ok {
+			usedByOrder[b.OrderID] += p.Amount
+			usedBatches[b.OrderID] = append(usedBatches[b.OrderID], b)
 		}
 	}
 	if len(usedByOrder) == 0 {
@@ -34,6 +36,17 @@ func (s *Service) productComputeRecognition(ctx context.Context, q dbq, call Cal
 		o, e := load[Order](ctx, q, `SELECT snapshot FROM billing_orders WHERE account_id=$1 AND id=$2`, call.AccountID, orderID)
 		if e != nil {
 			return nil, e
+		}
+		if o.CreditScope == "" {
+			// Adopted customer credits have already been paid under a legacy
+			// order. The durable adoption authorizes their original lot to be
+			// spent without a second cash posting.
+			for _, b := range usedBatches[orderID] {
+				if e = requireLegacyCreditAdoption(ctx, q, o, b); e != nil {
+					return nil, e
+				}
+			}
+			continue
 		}
 		compute, e := integer(o.ComputeAmount, true)
 		if e != nil || compute > math.MaxInt64/productCreditsPerCNY || o.ProductID != call.OriginProductID || o.CreditScope != call.CreditScope || o.PaymentStatus != "PAID" || o.FulfillmentStatus != "FULFILLED" {
