@@ -20,6 +20,8 @@ type Request struct {
 	OrderID, Amount, Description string
 	// ReturnURL is supplied by trusted product policy, never by a payment receipt.
 	ReturnURL string
+	// RequireQR selects a merchant scan session for Alipay.
+	RequireQR bool
 	ExpiresAt time.Time
 }
 type Session struct {

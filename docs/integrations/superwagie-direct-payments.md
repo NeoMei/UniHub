@@ -67,7 +67,16 @@ Use `alipay.trade.page.pay`, with server-side RSA2 signing and a fixed official 
 
 Keep all amounts exact. UniHub CNY/6 amounts must be divisible by 10,000 to become an integer number of fen. The four proposed product prices satisfy this condition. Never use floating-point conversion.
 
-Existing prorated upgrade quotes can contain sub-cent amounts. An adapter must not independently round the signed charge while fulfilling the original quote. External upgrades use `POST /accounts/{account}/quotes` with `payment_source:"external"`. The separate returned quote records `rounding_rule:"cny_cent_ceil_v1"`, exact `original_amount`, rounded-up integer-fen `amount`, preserved `period_end`, and a maximum 15-minute `expires_at`. Accept it only through checkout. Default/wallet quotes retain their exact historical prorated amount and existing acceptance endpoint. Subscription-version drift, receipt after checkout closure/deadline, and delayed fulfillment past the deadline enter paid REVIEW; cash remains in the received-but-unfulfilled account without a grant.
+Existing prorated upgrade quotes can contain sub-cent amounts. An adapter must not independently round the signed charge while fulfilling the original quote. External upgrades use `POST /accounts/{account}/quotes` with `payment_source:"external"`. The separate returned quote records `rounding_rule:"cny_cent_ceil_v1"`, exact `original_amount`, rounded-up integer-fen `amount`, preserved `period_end`, and a maximum 15-minute `expires_at`. Accept it only through checkout. Default/wallet quotes retain their exact historical prorated amount and existing acceptance endpoint. Compare the verified payment timestamp with the checkout deadline. Timing falls back to observation time if the merchant omits that timestamp. When closure conflicts with the receipt, the subscription version has changed, or the purchased benefit period has ended, the payment enters review and stays in the received-but-unfulfilled account.
+
+New clients check the `alipay_checkout_qr` capability and request Alipay scan
+sessions through `require_qr`. Send `X-UniHub-Alipay-QR: 1` on checkout reads and
+writes to receive the scan session. Without this header the API includes the
+same order identity and status, with the legacy session representation. The
+scan session lives outside the legacy session in stored checkout snapshots.
+Existing client and server versions can still reconcile the original checkout
+after a rollback. Presentation is selected at creation and retries preserve
+the original order and URL.
 
 External refunds require their own original-channel receipt and recovery state. Current `RequestRefund` returns funds according to `ProductFunding` and `UnifiedFunding`; it cannot safely refund external purchases. Setting both to zero and reusing it could revoke points and mark a purchase refunded without returning money. Preserve manual review for external refunds, and do not mark `REFUNDED` until the provider refund has been independently confirmed. Commercial launch requires an operable, auditable original-channel refund procedure even if the first version is reviewed manually.
 

@@ -174,9 +174,13 @@ func (s *Service) refreshCheckout(ctx context.Context, rec record, closeExpired 
 	case "PAID":
 		return s.accept(ctx, p, rec, result)
 	case "NOT_FOUND":
-		// A cashier URL can exist before the merchant creates a trade.
-		// Absence alone is not confirmation of closure.
-		return nil
+		// An issued Alipay page URL has the signed absolute checkout deadline.
+		// Once that URL has expired, a verified absence for the original order
+		// is sufficient to close it. Other sessions still need merchant closure.
+		if rec.Provider != "alipay" || rec.Session == nil || rec.Session.Kind != "redirect" ||
+			!rec.Session.ExpiresAt.Equal(rec.ExpiresAt) || !closeExpired || s.now().Before(rec.ExpiresAt) {
+			return nil
+		}
 	case "CREATED", "PENDING":
 		if !closeExpired || s.now().Before(rec.ExpiresAt) {
 			return nil

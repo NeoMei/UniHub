@@ -1,6 +1,6 @@
 # Official direct merchant adapters
 
-`Provider` implements WeChat Native APIv3 and Alipay desktop `alipay.trade.page.pay` with Go's standard library. It does not store checkout state, post accounting entries, grant benefits or acknowledge callbacks. The billing service must durably persist and deduplicate a verified receipt before acknowledging it.
+`Provider` implements WeChat Native APIv3 and Alipay `alipay.trade.page.pay` and `alipay.trade.precreate` with Go's standard library. It does not store checkout state, post accounting entries, grant benefits or acknowledge callbacks. The billing service must durably persist and deduplicate a verified receipt before acknowledging it.
 
 ## Startup configuration
 
@@ -11,7 +11,7 @@ Construct `NewWeChat(WeChatConfig)` or `NewAlipay(AlipayConfig)` only from prote
 - `ParsePrivateKeyPEM` supports one PKCS#1 or PKCS#8 RSA key. `ParsePublicKeyPEM` supports one PKIX/PKCS#1 RSA public key or a currently valid X.509 certificate. Keys must be at least 2048 bits. Startup owns secret-file permissions and identity/certificate provisioning. These helpers never fetch or trust an unknown remote certificate.
 - `HTTPClient` optionally supplies a trusted server-owned transport/proxy. Its client value is copied, default timeout is 20 seconds, and redirects are always disabled. Tests use this seam to route fixed official URLs to local TLS fixtures. Key pointers supplied to constructors must remain immutable for their lifetime. Rotation requires constructing a new adapter; no automatic certificate refresh is performed.
 
-Both callback/return URLs must be HTTPS with no credentials/fragment and no nonstandard port. Returned Alipay sessions always use the fixed official HTTPS gateway. WeChat sessions must have the official `weixin://wxpay/bizpayurl` shape. No provider HTML is executed.
+Both callback/return URLs must be HTTPS with no credentials/fragment and no nonstandard port. Desktop checkout URLs use the fixed official gateway. Alipay scan checkout requires the application to have the merchant scan product enabled. The adapter validates the signed precreate response, matches the original merchant order number, and accepts only an HTTPS code from `qr.alipay.com`. A signed access denial is terminal for that checkout. Transport or verification failures preserve the original order for recovery. WeChat sessions must have the official `weixin://wxpay/bizpayurl` shape. No provider HTML is executed.
 
 The executable loads these adapters with `PAYMENT_MODE=direct` and an absolute `PAYMENT_PROVIDERS_FILE`. The [example](../../examples/payments/direct-merchants.example.json) contains placeholders and file references only. Omit a channel to disable it; at least one must be configured. Private key/APIv3 key files must be regular absolute paths, at most 64 KiB, with no group/other permissions. Unknown JSON fields, invalid keys and incomplete channel configuration fail startup. API and worker processes need the same configuration.
 

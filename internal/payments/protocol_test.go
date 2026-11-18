@@ -311,6 +311,58 @@ func TestAlipayPagePayAndSignedHTTPRecovery(t *testing.T) {
 		t.Fatalf("refund query %#v %v", refund, e)
 	}
 }
+func TestAlipayScanCheckoutUsesSignedMerchantQRCode(t *testing.T) {
+	merchant, platform := testKey(t), testKey(t)
+	for _, tc := range []struct {
+		name, response string
+		wantErr        error
+	}{
+		{"success", `{"code":"10000","out_trade_no":"Order1","qr_code":"https://qr.alipay.com/fixture"}`, nil},
+		{"wrong order", `{"code":"10000","out_trade_no":"Order2","qr_code":"https://qr.alipay.com/fixture"}`, ErrVerification},
+		{"wrong host", `{"code":"10000","out_trade_no":"Order1","qr_code":"https://qr.alipay.com.example/fixture"}`, ErrVerification},
+		{"incomplete response", `{"code":"10000","out_trade_no":"Order1"}`, ErrVerification},
+		{"access refused", `{"code":"40004","sub_code":"ACQ.ACCESS_FORBIDDEN"}`, ErrUnconfigured},
+		{"gateway permission refused", `{"code":"40006","sub_code":"isv.insufficient-isv-permissions"}`, ErrUnconfigured},
+		{"ambiguous error", `{"code":"20000","sub_code":"ACQ.SYSTEM_ERROR"}`, ErrUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fixtureClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := r.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				fixtureVerify(t, &merchant.PublicKey, fixtureCanonical(r.Form, false), r.Form.Get("sign"))
+				var biz map[string]string
+				if err := json.Unmarshal([]byte(r.Form.Get("biz_content")), &biz); err != nil {
+					t.Fatal(err)
+				}
+				if r.Method != "POST" || r.Form.Get("method") != "alipay.trade.precreate" || r.Form.Get("notify_url") != "https://merchant.example/ali-notify" || r.Form.Get("return_url") != "" ||
+					biz["out_trade_no"] != "Order1" || biz["seller_id"] != "seller" || biz["total_amount"] != "9.80" || biz["subject"] != "200 积分" || biz["timeout_express"] == "" {
+					t.Fatalf("wrong scan contract: %s, %#v", r.Form.Get("method"), biz)
+				}
+				if tc.name == "gateway permission refused" {
+					_, _ = fmt.Fprintf(w, `{"error_response":%s,"sign":%q}`, tc.response, fixtureSign(t, platform, tc.response))
+				} else {
+					aliReply(t, w, platform, "alipay.trade.precreate", tc.response)
+				}
+			})
+			cfg := aliConfig(merchant, platform, c)
+			cfg.NotifyURL = "https://merchant.example/ali-notify"
+			p, err := NewAlipay(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expiry := time.Now().Add(15 * time.Minute)
+			session, err := p.Create(context.Background(), Request{OrderID: "Order1", Amount: "9800000", Description: "200 积分", ExpiresAt: expiry, RequireQR: true})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("create: %v, want %v", err, tc.wantErr)
+			}
+			if err == nil && (session.Kind != "qr" || session.URL != "https://qr.alipay.com/fixture" || !session.ExpiresAt.After(time.Now()) || session.ExpiresAt.After(expiry)) {
+				t.Fatalf("invalid scan session: %#v", session)
+			}
+		})
+	}
+}
+
 func TestAlipayNotificationBindingAndAmbiguity(t *testing.T) {
 	merchant, platform := testKey(t), testKey(t)
 	p, e := NewAlipay(aliConfig(merchant, platform, nil))
