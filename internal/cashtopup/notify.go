@@ -77,8 +77,12 @@ func (s *Service) accept(ctx context.Context, p payments.Provider, rec record, r
 				return nil
 			}
 		} else {
-			late := rec.PaymentStatus == "CLOSED" || !s.now().Before(rec.ExpiresAt) ||
-				(!r.PaidAt.IsZero() && (!r.PaidAt.Before(rec.ExpiresAt) || r.PaidAt.Before(rec.CreatedAt.Add(-time.Minute))))
+			paidAt := r.PaidAt
+			if paidAt.IsZero() {
+				paidAt = s.now()
+			}
+			late := rec.PaymentStatus == "CLOSED" || !paidAt.Before(rec.ExpiresAt) ||
+				paidAt.Before(rec.CreatedAt.Add(-time.Minute))
 			rec.Receipt = &r
 			rec.PaymentStatus = "PAID"
 			rec.Session = nil
@@ -116,80 +120,96 @@ func (s *Service) accept(ctx context.Context, p payments.Provider, rec record, r
 	})
 }
 
-// Reconcile queries the provider for a checkout that the payer claims to have
-// paid but for which no notification arrived. On a paid result it follows the
-// same accept path.
+func (r record) matchesProvider(p payments.Provider) bool {
+	return p != nil && p.ID() == r.Provider && p.MerchantID() == r.MerchantID &&
+		paymentConfigurationID(p) == r.MerchantVersion
+}
+
+func (s *Service) checkoutProvider(ctx context.Context, rec record) (payments.Provider, error) {
+	providers, err := s.notificationProviders(ctx, rec.Provider)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		if rec.matchesProvider(p) {
+			return p, nil
+		}
+	}
+	return nil, ErrPaymentUnavailable
+}
+
+// Reconcile queries the merchant when the payer has not received confirmation.
 func (s *Service) Reconcile(ctx context.Context, actor, account, id string) (Checkout, error) {
-	rec, e := loadByID(ctx, s.pool, account, id)
-	if e != nil {
-		return Checkout{}, e
+	if err := s.finance(ctx, s.pool, actor, account); err != nil {
+		return Checkout{}, err
 	}
-	if e = s.finance(ctx, s.pool, actor, account); e != nil {
-		return Checkout{}, e
+	rec, err := loadByID(ctx, s.pool, account, id)
+	if err != nil {
+		return Checkout{}, err
 	}
-	if rec.Receipt != nil {
-		return rec.Checkout, nil
+	if rec.Receipt != nil || rec.PaymentStatus != "CREATED" {
+		return checkoutView(ctx, s.pool, rec)
 	}
-	providers, e := s.notificationProviders(ctx, rec.Provider)
-	if e != nil {
-		return Checkout{}, e
+	if err := s.refreshCheckout(ctx, rec, false); err != nil {
+		return Checkout{}, err
 	}
-	var p payments.Provider
-	for _, cand := range providers {
-		if cand.ID() == rec.Provider && cand.MerchantID() == rec.MerchantID && paymentConfigurationID(cand) == rec.MerchantVersion {
-			p = cand
-			break
+	return s.Get(ctx, actor, account, id)
+}
+
+// refreshCheckout only changes order state after a merchant result. A
+// verified receipt always passes through the shared atomic posting path.
+func (s *Service) refreshCheckout(ctx context.Context, rec record, closeExpired bool) error {
+	p, err := s.checkoutProvider(ctx, rec)
+	if err != nil {
+		return err
+	}
+	result, err := p.Query(ctx, rec.ID)
+	if err != nil {
+		return err
+	}
+	if result.OrderID != rec.ID {
+		return payments.ErrVerification
+	}
+	switch result.Status {
+	case "PAID":
+		return s.accept(ctx, p, rec, result)
+	case "NOT_FOUND":
+		// A cashier URL can exist before the merchant creates a trade.
+		// Absence alone is not confirmation of closure.
+		return nil
+	case "CREATED", "PENDING":
+		if !closeExpired || s.now().Before(rec.ExpiresAt) {
+			return nil
 		}
-	}
-	if p == nil {
-		return Checkout{}, ErrPaymentUnavailable
-	}
-	result, e := p.Query(ctx, rec.ID)
-	if e != nil {
-		return Checkout{}, e
-	}
-	if result.Status == "PAID" {
-		if e = s.accept(ctx, p, rec, result); e != nil {
-			return Checkout{}, e
+		if err := p.Close(ctx, rec.ID); err != nil {
+			return err
 		}
-	} else if result.Status == "CLOSED" || result.Status == "FAILED" {
-		return s.recordClosed(ctx, account, id)
+	case "CLOSED", "FAILED":
+	default:
+		return payments.ErrVerification
 	}
-	cur, e := loadByID(ctx, s.pool, account, id)
-	if e != nil {
-		return Checkout{}, e
-	}
-	return cur.Checkout, nil
+	_, err = s.recordClosed(ctx, rec.AccountID, rec.ID)
+	return err
 }
 
 // Close requests provider closure of an unpaid checkout.
 func (s *Service) Close(ctx context.Context, actor, account, id string) (Checkout, error) {
-	rec, e := loadByID(ctx, s.pool, account, id)
-	if e != nil {
-		return Checkout{}, e
+	if err := s.finance(ctx, s.pool, actor, account); err != nil {
+		return Checkout{}, err
 	}
-	if e = s.finance(ctx, s.pool, actor, account); e != nil {
-		return Checkout{}, e
+	rec, err := loadByID(ctx, s.pool, account, id)
+	if err != nil {
+		return Checkout{}, err
 	}
 	if rec.PaymentStatus == "PAID" || rec.Receipt != nil {
 		return Checkout{}, fmt.Errorf("cannot close a paid checkout")
 	}
-	providers, e := s.notificationProviders(ctx, rec.Provider)
-	if e != nil {
-		return Checkout{}, e
+	p, err := s.checkoutProvider(ctx, rec)
+	if err != nil {
+		return Checkout{}, err
 	}
-	var p payments.Provider
-	for _, cand := range providers {
-		if cand.ID() == rec.Provider && cand.MerchantID() == rec.MerchantID {
-			p = cand
-			break
-		}
-	}
-	if p == nil {
-		return Checkout{}, ErrPaymentUnavailable
-	}
-	if e = p.Close(ctx, rec.ID); e != nil {
-		return Checkout{}, e
+	if err = p.Close(ctx, rec.ID); err != nil {
+		return Checkout{}, err
 	}
 	return s.recordClosed(ctx, account, id)
 }

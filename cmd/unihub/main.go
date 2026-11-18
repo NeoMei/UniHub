@@ -146,7 +146,7 @@ func run() error {
 		modelAccess.ConfigureProviderCatalog(catalog)
 	}
 	if mode == "worker" {
-		work(ctx, w, b)
+		work(ctx, w, b, ct)
 		return nil
 	}
 	v, e := auth.NewOIDC(startup, c.Issuer, c.Audience)
@@ -221,7 +221,7 @@ func run() error {
 	handler = publicapi.Handler(handler)
 	server := &http.Server{Addr: c.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	done := make(chan struct{})
-	go func() { defer close(done); work(ctx, w, b) }()
+	go func() { defer close(done); work(ctx, w, b, ct) }()
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -252,7 +252,7 @@ func recoveryRoute(next, recovery, request http.Handler) http.Handler {
 	})
 }
 
-func work(ctx context.Context, w *wallet.Service, b *billing.Service) {
+func work(ctx context.Context, w *wallet.Service, b *billing.Service, ct *cashtopup.Service) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
@@ -260,7 +260,7 @@ func work(ctx context.Context, w *wallet.Service, b *billing.Service) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			e := runRecoveryCycle(ctx, 30*time.Second, b.RecoverCheckouts, func(run context.Context) error {
+			e := runRecoveryCycle(ctx, 30*time.Second, b.RecoverCheckouts, ct.Recover, func(run context.Context) error {
 				walletErr := w.Recover(run)
 				_, billingErr := b.Recover(run)
 				_, maintenanceErr := b.Maintain(run, time.Now().UTC())

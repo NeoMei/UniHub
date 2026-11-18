@@ -202,41 +202,64 @@ func (s *Service) Create(ctx context.Context, actor, account string, r Request) 
 	if e = s.finance(ctx, s.pool, actor, account); e != nil {
 		return out, e
 	}
-	var replay bool
-	if e = s.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM cash_checkouts WHERE account_id=$1 AND request_key=$2)", account, r.Key).Scan(&replay); e != nil {
+	// Select the registered merchant before taking an account lock. A retry
+	// of an existing intent only uses that intent's original configuration.
+	previous, e := load(ctx, s.pool, account, r.Key)
+	var p payments.Provider
+	switch {
+	case errors.Is(e, accounts.ErrNotFound):
+		p, e = s.provider(ctx, r.Provider)
+	case e == nil && previous.needsSession(s.now()):
+		p, e = s.checkoutProvider(ctx, previous)
+	}
+	if e != nil {
 		return out, e
 	}
-	var p payments.Provider
-	if !replay {
-		p, e = s.provider(ctx, r.Provider)
-		if e != nil {
-			return out, e
-		}
-	}
 	e = s.locked(ctx, account, func(c *pgxpool.Conn) error {
+		if err := s.finance(ctx, c, actor, account); err != nil {
+			return err
+		}
 		parts := []string{actor, r.Provider, r.ProductID, r.Amount}
 		if r.ReturnURL != "" {
 			parts = append(parts, r.ReturnURL)
 		}
 		d := digest(parts)
-		var old record
-		old, e = load(ctx, c, account, r.Key)
-		if e == nil {
-			if old.RequestDigest != d {
+		rec, err := load(ctx, c, account, r.Key)
+		switch {
+		case err == nil:
+			if rec.RequestDigest != d {
 				return ErrConflict
 			}
-			out = old.Checkout
-			return nil
+		case errors.Is(err, accounts.ErrNotFound):
+			if p == nil {
+				return ErrPaymentUnavailable
+			}
+			now := s.now().UTC()
+			rec = record{Checkout: Checkout{
+				ID: newID(), AccountID: account, ProductID: r.ProductID, Provider: r.Provider,
+				Amount: r.Amount, Currency: "CNY", PaymentStatus: "CREATED",
+				CreatedAt: now, ExpiresAt: now.Add(15 * time.Minute), WalletTarget: "product",
+			}, ActorID: actor, MerchantID: p.MerchantID(), MerchantVersion: paymentConfigurationID(p), RequestDigest: d}
+			if r.UnifiedWallet || r.ProductID == "" {
+				rec.WalletTarget = "unified"
+			}
+			// Commit the merchant order ID before submitting it. A lost
+			// provider response, callback or process restart must not allocate
+			// another order when the payer repeats the same request key.
+			if _, err = c.Exec(ctx, "INSERT INTO cash_checkouts(id,account_id,actor_id,product_id,amount,currency,provider,merchant_id,merchant_version,request_key,request_digest,snapshot) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12)",
+				rec.ID, rec.AccountID, rec.ActorID, rec.ProductID, n, rec.Currency, rec.Provider, rec.MerchantID, rec.MerchantVersion, r.Key, rec.RequestDigest, encode(rec)); err != nil {
+				return dbErr(err)
+			}
+		default:
+			return err
 		}
-		if !errors.Is(e, accounts.ErrNotFound) {
-			return e
+		if !rec.needsSession(s.now()) {
+			out, err = checkoutView(ctx, c, rec)
+			return err
 		}
-		if p == nil {
+		if !rec.matchesProvider(p) {
 			return ErrPaymentUnavailable
 		}
-		now := s.now().UTC()
-		expires := now.Add(15 * time.Minute)
-		id := newID()
 		returnURL := ""
 		if r.ReturnURL != "" {
 			u, err := url.Parse(r.ReturnURL)
@@ -244,35 +267,27 @@ func (s *Service) Create(ctx context.Context, actor, account string, r Request) 
 				return ErrInvalid
 			}
 			q := u.Query()
-			q.Set("cash_checkout", id)
+			q.Set("cash_checkout", rec.ID)
 			u.RawQuery = q.Encode()
 			returnURL = u.String()
 		}
-		sess, e := p.Create(ctx, payments.Request{OrderID: id, Amount: r.Amount, Description: "Cash wallet topup", ExpiresAt: expires, ReturnURL: returnURL})
-		if e != nil {
-			return e
+		session, err := p.Create(ctx, payments.Request{OrderID: rec.ID, Amount: rec.Amount,
+			Description: "Cash wallet topup", ExpiresAt: rec.ExpiresAt, ReturnURL: returnURL})
+		if err != nil {
+			return err
 		}
-		rec := record{Checkout: Checkout{ID: id, AccountID: account, ProductID: r.ProductID, Provider: r.Provider, Amount: r.Amount, Currency: "CNY", PaymentStatus: "CREATED", ExpiresAt: expires, CreatedAt: now, Session: &sess}, ActorID: actor, MerchantID: p.MerchantID(), MerchantVersion: paymentConfigurationID(p), RequestDigest: d}
-		if r.UnifiedWallet || r.ProductID == "" {
-			rec.WalletTarget = "unified"
-		} else {
-			rec.WalletTarget = "product"
-		}
-		tx, e := c.Begin(ctx)
-		if e != nil {
-			return e
-		}
-		defer database.Rollback(tx)
-		if _, e = tx.Exec(ctx, "INSERT INTO cash_checkouts(id,account_id,actor_id,product_id,amount,currency,provider,merchant_id,merchant_version,request_key,request_digest,snapshot) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12)", rec.ID, rec.AccountID, rec.ActorID, rec.ProductID, n, "CNY", rec.Provider, rec.MerchantID, rec.MerchantVersion, r.Key, rec.RequestDigest, encode(rec)); e != nil {
-			return dbErr(e)
-		}
-		if e = tx.Commit(ctx); e != nil {
-			return e
+		rec.Session = &session
+		if _, err = c.Exec(ctx, "UPDATE cash_checkouts SET snapshot=$2 WHERE id=$1", rec.ID, encode(rec)); err != nil {
+			return dbErr(err)
 		}
 		out = rec.Checkout
 		return nil
 	})
 	return out, e
+}
+
+func (r record) needsSession(now time.Time) bool {
+	return r.PaymentStatus == "CREATED" && r.Receipt == nil && r.Session == nil && now.Before(r.ExpiresAt)
 }
 
 func (s *Service) Get(ctx context.Context, actor, account, id string) (Checkout, error) {
@@ -286,8 +301,12 @@ func (s *Service) Get(ctx context.Context, actor, account, id string) (Checkout,
 	if e != nil {
 		return Checkout{}, e
 	}
+	return checkoutView(ctx, s.pool, rec)
+}
+
+func checkoutView(ctx context.Context, q accounts.Querier, rec record) (Checkout, error) {
 	if rec.OperationID != "" {
-		if err := s.pool.QueryRow(ctx, "SELECT status FROM wallet_operations WHERE account_id=$1 AND id=$2", account, rec.OperationID).Scan(&rec.CreditStatus); err != nil {
+		if err := q.QueryRow(ctx, "SELECT status FROM wallet_operations WHERE account_id=$1 AND id=$2", rec.AccountID, rec.OperationID).Scan(&rec.CreditStatus); err != nil {
 			return Checkout{}, dbErr(err)
 		}
 	}

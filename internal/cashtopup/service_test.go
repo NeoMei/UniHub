@@ -20,12 +20,14 @@ import (
 )
 
 type fakeProvider struct {
-	id        string
-	merchant  string
-	createErr error
-	requests  map[string]payments.Request
-	sessions  map[string]payments.Session
-	paid      map[string]payments.Result
+	id         string
+	merchant   string
+	createErr  error
+	closeCalls int
+	queryErr   error
+	requests   map[string]payments.Request
+	sessions   map[string]payments.Session
+	paid       map[string]payments.Result
 }
 
 func newFakeProvider(id string) *fakeProvider {
@@ -34,21 +36,27 @@ func newFakeProvider(id string) *fakeProvider {
 func (p *fakeProvider) ID() string         { return p.id }
 func (p *fakeProvider) MerchantID() string { return p.merchant }
 func (p *fakeProvider) Create(_ context.Context, r payments.Request) (payments.Session, error) {
+	p.requests[r.OrderID] = r
 	if p.createErr != nil {
 		return payments.Session{}, p.createErr
 	}
 	s := payments.Session{Kind: "redirect", URL: "https://pay.example/" + r.OrderID, ExpiresAt: r.ExpiresAt}
 	p.sessions[r.OrderID] = s
-	p.requests[r.OrderID] = r
 	return s, nil
 }
 func (p *fakeProvider) Query(_ context.Context, id string) (payments.Result, error) {
+	if p.queryErr != nil {
+		return payments.Result{}, p.queryErr
+	}
 	if r, ok := p.paid[id]; ok {
 		return r, nil
 	}
 	return payments.Result{OrderID: id, Status: "CREATED"}, nil
 }
-func (p *fakeProvider) Close(context.Context, string) error { return nil }
+func (p *fakeProvider) Close(context.Context, string) error {
+	p.closeCalls++
+	return nil
+}
 func (p *fakeProvider) VerifyNotification(_ http.Header, body []byte) (payments.Result, error) {
 	var r payments.Result
 	if e := jsonUnmarshal(body, &r); e != nil {
@@ -261,4 +269,105 @@ func TestNativeCheckoutCreditsUnifiedWalletExactlyOnce(t *testing.T) {
 	orders, err = f.svc.List(ctx, f.user.ID, f.account.ID, "superwagie")
 	require.NoError(t, err)
 	assert.Empty(t, orders)
+}
+
+func TestDelayedCashReceiptUsesVerifiedPaymentTime(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		offset time.Duration
+		want   string
+	}{
+		{"paid before expiration", 2 * time.Minute, "PAID"},
+		{"paid after expiration", 16 * time.Minute, "REVIEW"},
+		{"payment time missing", 0, "REVIEW"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := setup(t)
+			ctx := context.Background()
+			now := time.Now().UTC()
+			f.svc.now = func() time.Time { return now }
+			x, err := f.svc.Create(ctx, f.user.ID, f.account.ID, Request{
+				Provider: "wechat", ProductID: "llmrouter", Amount: "20000000", Key: "verify-paid-time", UnifiedWallet: true,
+			})
+			require.NoError(t, err)
+			result := payments.Result{OrderID: x.ID, TransactionID: "verified-receipt", Status: "PAID", Amount: x.Amount, Currency: "CNY"}
+			if tt.offset > 0 {
+				result.PaidAt = x.CreatedAt.Add(tt.offset)
+			}
+			now = x.ExpiresAt.Add(5 * time.Minute)
+			body, err := json.Marshal(result)
+			require.NoError(t, err)
+			for range 2 {
+				require.NoError(t, f.svc.Notify(ctx, "wechat", http.Header{}, body))
+				require.NoError(t, f.wallet.Recover(ctx))
+			}
+			view, err := f.svc.Reconcile(ctx, f.user.ID, f.account.ID, x.ID)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, view.PaymentStatus)
+			balance := f.ledger.balance[wallet.Address(f.account.ID, "")]
+			if tt.want == "PAID" {
+				assert.Equal(t, "APPLIED", view.CreditStatus)
+				assert.Equal(t, int64(20000000), balance)
+			} else {
+				assert.Empty(t, view.OperationID)
+				assert.Zero(t, balance)
+			}
+		})
+	}
+}
+
+func TestCashCreateRetriesSameMerchantOrderAfterLostResponse(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	f.provider.createErr = payments.ErrUnavailable
+	req := Request{Provider: "wechat", ProductID: "llmrouter", Amount: "20000000", Key: "unknown-result", UnifiedWallet: true}
+	_, err := f.svc.Create(ctx, f.user.ID, f.account.ID, req)
+	require.ErrorIs(t, err, payments.ErrUnavailable)
+	require.Len(t, f.provider.requests, 1)
+	f.provider.createErr = nil
+	x, err := f.svc.Create(ctx, f.user.ID, f.account.ID, req)
+	require.NoError(t, err)
+	require.NotNil(t, x.Session)
+	require.Len(t, f.provider.requests, 1, "a gateway timeout must not allocate another merchant order ID")
+	require.Contains(t, f.provider.requests, x.ID)
+	assert.Equal(t, x.ExpiresAt, f.provider.requests[x.ID].ExpiresAt)
+}
+
+func TestCashRecoveryQueriesBeforeClosingAndCreditsMissingCallback(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	f.svc.now = func() time.Time { return now }
+	req := Request{Provider: "wechat", ProductID: "llmrouter", Amount: "20000000", UnifiedWallet: true}
+	checkouts := make(map[string]Checkout)
+	for _, status := range []string{"PAID", "PENDING", "NOT_FOUND"} {
+		req.Key = "recover-" + status
+		checkout, err := f.svc.Create(ctx, f.user.ID, f.account.ID, req)
+		require.NoError(t, err)
+		checkouts[status] = checkout
+		f.provider.paid[checkout.ID] = payments.Result{
+			OrderID: checkout.ID, TransactionID: checkout.ID, Status: status, Amount: checkout.Amount, Currency: "CNY",
+			PaidAt: checkout.CreatedAt.Add(time.Minute),
+		}
+	}
+	now = now.Add(20 * time.Minute)
+	f.provider.queryErr = payments.ErrUnavailable
+	require.Error(t, f.svc.Recover(ctx))
+	assert.Zero(t, f.provider.closeCalls)
+	f.provider.queryErr = nil
+	now = now.Add(10 * time.Minute)
+	require.NoError(t, f.svc.Recover(ctx))
+	require.NoError(t, f.wallet.Recover(ctx))
+	paid, err := f.svc.Get(ctx, f.user.ID, f.account.ID, checkouts["PAID"].ID)
+	require.NoError(t, err)
+	assert.Equal(t, "PAID", paid.PaymentStatus)
+	assert.Equal(t, "APPLIED", paid.CreditStatus)
+	assert.Equal(t, int64(20000000), f.ledger.balance[wallet.Address(f.account.ID, "")])
+	closed, err := f.svc.Get(ctx, f.user.ID, f.account.ID, checkouts["PENDING"].ID)
+	require.NoError(t, err)
+	assert.Equal(t, "CLOSED", closed.PaymentStatus)
+	unconfirmed, err := f.svc.Get(ctx, f.user.ID, f.account.ID, checkouts["NOT_FOUND"].ID)
+	require.NoError(t, err)
+	assert.Equal(t, "CREATED", unconfirmed.PaymentStatus)
+	assert.Equal(t, 1, f.provider.closeCalls)
 }

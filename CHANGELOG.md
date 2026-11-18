@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.63 - 2026-11-18
+
+- Cash recharges keep the same merchant order ID when creation is retried.
+- Cash order recovery checks the original merchant and credits verified on-time payments even when notifications arrive after expiry.
+
 ## 0.4.61 - 2026-11-18
 
 - LLMRouter 原生现金充值记入统一钱包，保留订单产品归属与付款账户。已验证回调、入账指令和订单状态一起保存。产品现金订单接口返回关联入账状态，关单与回调并发时保留已付结果。无数据库迁移。
