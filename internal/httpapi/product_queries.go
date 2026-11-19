@@ -153,6 +153,9 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 			frozen := new(big.Int)
 			now := time.Now().UTC()
 			for _, b := range bs {
+				if b.CreditScope != "" {
+					continue
+				}
 				av, ok := new(big.Int).SetString(b.Available, 10)
 				if !ok {
 					return billing.ErrInvalid

@@ -3,7 +3,9 @@ package billing
 import (
 	"context"
 	"errors"
+
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"unihub/internal/accounts"
 )
 
@@ -34,9 +36,20 @@ func (s *Service) QuoteUpgrade(ctx context.Context, actor, account, subID, offer
 			return ErrUnsupported
 		}
 		now := s.now().UTC()
-		start, end, ok := CurrentPeriod(sub.Anchor, sub.PaidThrough, now)
+		start, end, ok := sub.Offer.currentPeriod(sub.Anchor, sub.PaidThrough, now)
 		if !ok {
 			return ErrInvalid
+		}
+		if offer.CreditScope != sub.Offer.CreditScope {
+			return ErrUnsupported
+		}
+		if offer.CreditScope == ProductCreditScopeV1 {
+			out, e = s.quoteProductCreditUpgrade(ctx, c, sub, offer, now, start, end)
+			if e != nil {
+				return e
+			}
+			_, e = c.Exec(ctx, `INSERT INTO billing_quotes(id,account_id,snapshot) VALUES($1,$2,$3)`, out.ID, account, encode(out))
+			return e
 		}
 		if e = s.monthlyLocked(ctx, c, sub, now); e != nil {
 			return e
@@ -122,8 +135,7 @@ func (s *Service) AcceptUpgrade(ctx context.Context, actor, account, quoteID, ke
 			return e
 		}
 		now := s.now().UTC()
-		start, _, ok := CurrentPeriod(sub.Anchor, sub.PaidThrough, now)
-		if !ok || !now.Before(q.ExpiresAt) || !start.Equal(q.PeriodStart) || sub.Version != q.SubscriptionVersion {
+		if !upgradeQuoteCurrent(q, sub, now) {
 			return ErrQuoteInvalidated
 		}
 		offer, e := s.buyable(ctx, c, q.Offer.ID, account)
@@ -134,6 +146,12 @@ func (s *Service) AcceptUpgrade(ctx context.Context, actor, account, quoteID, ke
 			return ErrConflict
 		}
 		o := Order{ID: id("bo_"), AccountID: account, ActorID: actor, ProductID: offer.ProductID, Kind: "upgrade", Offer: offer, Amount: q.Amount, PaymentStatus: "PENDING", FulfillmentStatus: "PENDING", SubscriptionID: sub.ID, Start: now, End: sub.PaidThrough, PeriodStart: q.PeriodStart, PeriodEnd: q.ExpiresAt, GrantAmount: q.GrantAmount, CreatedAt: now}
+		setUpgradeOrderTerm(&o, q, sub)
+		if o.ProductCreditUpgrade != nil {
+			if _, e = previousProductUpgradeOrder(ctx, c, sub, o.ProductCreditUpgrade.PreviousOrderID); e != nil {
+				return e
+			}
+		}
 		out, e = s.payLocked(ctx, c, o, key, h, nil)
 		if e != nil {
 			return e

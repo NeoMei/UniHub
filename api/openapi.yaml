@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.64"
+  "version": "0.4.65"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -11,6 +11,53 @@
   -
     "BearerAuth": []
 "paths":
+  "/v1/accounts/{account}/product-credits":
+    "get":
+      "operationId": "productCreditWallet"
+      "description": "Product-specific credit projection. Requires a registered downstream client, credits:read and account membership. Available is spendable only while membership is active. Batches retain original amounts and expiration dates."
+      "parameters":
+        - {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "X-UniHub-Product-Credit-Wallet", "in": "header", "required": true, "schema": {"const": "product_v1"}}
+      "responses":
+        "200": {"description": "product_id, credit_scope, available, reserved, active_membership, optional membership_paid_through, and owned credit batches"}
+        "403": {"$ref": "#/components/responses/Error"}
+  "/v1/accounts/{account}/product-wallet":
+    "get":
+      "operationId": "sharedProductWallet"
+      "description": "Unified cash and downstream product purchase and renewal projection. Requires wallets:read and the account owner or billing administrator role. Limited to authorized downstream products."
+      "parameters":
+        - {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "X-UniHub-Product-Credit-Wallet", "in": "header", "required": true, "schema": {"const": "product_v1"}}
+      "responses":
+        "200": {"description": "Versioned shared cash, product orders, eligible add-on offers and renewal policies"}
+        "403": {"$ref": "#/components/responses/Error"}
+  "/v1/accounts/{account}/product-wallet/{product}/renewal":
+    "put":
+      "operationId": "setProductWalletRenewal"
+      "description": "Versioned renewal mandate. Requires settings:write, permission to manage the target product, and the account finance role. Threshold is in CREDIT/6."
+      "parameters":
+        - {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "product", "in": "path", "required": true, "schema": {"type": "string"}}
+        - {"name": "X-UniHub-Product-Credit-Wallet", "in": "header", "required": true, "schema": {"const": "product_v1"}}
+      "requestBody":
+        "required": true
+        "content":
+          "application/json":
+            "schema":
+              "type": "object"
+              "additionalProperties": false
+              "required": ["kind", "enabled", "expected_version"]
+              "properties":
+                "kind": {"enum": ["subscription", "addon"]}
+                "enabled": {"type": "boolean"}
+                "expected_version": {"type": "integer", "minimum": 0}
+                "offer_id": {"type": "string"}
+                "trigger": {"enum": ["exhausted", "threshold"]}
+                "threshold": {"type": "string", "pattern": "^[0-9]+$"}
+      "responses":
+        "200": {"description": "Updated shared wallet projection"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
   "/v1/accounts/{account}/checkouts": {"get": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "X-UniHub-Alipay-QR", "in": "header", "schema": {"type": "string", "enum": ["1"]}, "description": "Opt in to receiving the Alipay scan session. Legacy clients receive the same checkout status and identity."}, {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/Checkout"}}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}, "post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "X-UniHub-Alipay-QR", "in": "header", "schema": {"type": "string", "enum": ["1"]}, "description": "Opt in to receiving the Alipay scan session. Legacy clients receive the same checkout status and identity."}, {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "Idempotency-Key", "in": "header", "required": true, "schema": {"type": "string", "minLength": 1, "maxLength": 128}}], "responses": {"202": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false, "properties": {"offer_id": {"type": "string"}, "quote_id": {"type": "string"}, "provider": {"enum": ["wechat", "alipay"]}, "require_qr": {"type": "boolean", "description": "For a new Alipay order, request a scan session. A replay preserves the original merchant order and session."}}, "required": ["provider"], "oneOf": [{"required": ["offer_id"], "not": {"required": ["quote_id"]}}, {"required": ["quote_id"], "not": {"required": ["offer_id"]}}]}}}}}}
   "/v1/accounts/{account}/checkouts/{checkout}": {"get": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "X-UniHub-Alipay-QR", "in": "header", "schema": {"type": "string", "enum": ["1"]}, "description": "Opt in to receiving the Alipay scan session. Legacy clients receive the same checkout status and identity."}, {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}}}
   "/v1/accounts/{account}/checkouts/{checkout}/reconcile": {"post": {"description": "Account finance role and product scope required. Read/reconcile/close retain the original provider order. UNKNOWN never permits a fresh charge. New commercial purchases are excluded while unresolved; model usage remains available.", "parameters": [{"name": "X-UniHub-Alipay-QR", "in": "header", "schema": {"type": "string", "enum": ["1"]}, "description": "Opt in to receiving the Alipay scan session. Legacy clients receive the same checkout status and identity."}, {"name": "account", "in": "path", "required": true, "schema": {"type": "string"}}, {"name": "checkout", "in": "path", "required": true, "schema": {"type": "string"}}], "responses": {"200": {"description": "Authoritative checkout state", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Checkout"}}}}, "400": {"$ref": "#/components/responses/Error"}, "403": {"$ref": "#/components/responses/Error"}, "409": {"$ref": "#/components/responses/Error"}, "503": {"$ref": "#/components/responses/Error"}}, "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": false}}}}}}
@@ -2995,7 +3042,7 @@
           "schema":
             "$ref": "#/components/schemas/Error"
   "schemas":
-    "Checkout": {"type": "object", "properties": {"id": {"type": "string"}, "account_id": {"type": "string"}, "product_id": {"type": "string"}, "provider": {"type": "string"}, "offer_name": {"type": "string"}, "currency": {"type": "string"}, "order_id": {"type": "string"}, "error_code": {"type": "string"}, "amount": {"$ref": "#/components/schemas/IntegerString"}, "payment_status": {"enum": ["CREATED", "PENDING", "UNKNOWN", "PAID", "CLOSED", "REVIEW"]}, "fulfillment_status": {"enum": ["NOT_STARTED", "PENDING", "FULFILLED", "REVIEW"]}, "refund_status": {"enum": ["PENDING", "SUCCEEDED", "REVIEW"]}, "created_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"}, "session": {"type": "object", "properties": {"kind": {"enum": ["qr", "redirect"]}, "url": {"type": "string"}, "expires_at": {"type": "string", "format": "date-time"}}, "required": ["kind", "url", "expires_at"]}}, "required": ["id", "account_id", "product_id", "provider", "offer_name", "amount", "currency", "payment_status", "fulfillment_status", "expires_at", "created_at"]}
+    "Checkout": {"type": "object", "properties": {"upgrade_return_status": {"enum": ["UPGRADE_PENDING", "UPGRADE_RELEASING", "UPGRADE_RETURNED", "UPGRADE_REVIEW"]}, "upgrade_refund_amount": {"$ref": "#/components/schemas/IntegerString"}, "product_credit_upgrade": {"$ref": "#/components/schemas/ProductCreditUpgrade"}, "subscription_id": {"type": "string"}, "id": {"type": "string"}, "account_id": {"type": "string"}, "product_id": {"type": "string"}, "provider": {"type": "string"}, "offer_name": {"type": "string"}, "currency": {"type": "string"}, "order_id": {"type": "string"}, "error_code": {"type": "string"}, "amount": {"$ref": "#/components/schemas/IntegerString"}, "payment_status": {"enum": ["CREATED", "PENDING", "UNKNOWN", "PAID", "CLOSED", "REVIEW"]}, "fulfillment_status": {"enum": ["NOT_STARTED", "PENDING", "FULFILLED", "REVIEW"]}, "refund_status": {"enum": ["PENDING", "SUCCEEDED", "REVIEW"]}, "created_at": {"type": "string", "format": "date-time"}, "expires_at": {"type": "string", "format": "date-time"}, "session": {"type": "object", "properties": {"kind": {"enum": ["qr", "redirect"]}, "url": {"type": "string"}, "expires_at": {"type": "string", "format": "date-time"}}, "required": ["kind", "url", "expires_at"]}}, "required": ["id", "account_id", "product_id", "provider", "offer_name", "amount", "currency", "payment_status", "fulfillment_status", "expires_at", "created_at"]}
     "ScopedModel":
       "type": "object"
       "additionalProperties": false
@@ -3576,6 +3623,9 @@
     "CatalogOffer":
       "type": "object"
       "properties":
+        "credit_scope": {"const":"product_v1"}
+        "service_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
         "id":
           "type": "string"
         "product_id":
@@ -3639,6 +3689,9 @@
     "Offer":
       "type": "object"
       "properties":
+        "credit_scope": {"const":"product_v1"}
+        "service_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
         "id":
           "type": "string"
         "product_id":
@@ -3939,6 +3992,12 @@
     "Order":
       "type": "object"
       "properties":
+        "credit_scope": {"const":"product_v1"}
+        "service_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "auto_addon_policy_version": {"type":"integer","minimum":1}
+        "product_credit_upgrade": {"$ref":"#/components/schemas/ProductCreditUpgrade"}
+        "upgrade_return": {"$ref":"#/components/schemas/ProductCreditUpgradeReturn"}
         "payment_source": {"enum":["external","wallet"]}
         "checkout_id": {"type":"string"}
         "provider_transaction_id": {"type":"string"}
@@ -4017,6 +4076,7 @@
     "Quote":
       "type": "object"
       "properties":
+        "product_credit_upgrade": {"$ref":"#/components/schemas/ProductCreditUpgrade"}
         "payment_source": {"enum":["external","wallet"]}
         "rounding_rule": {"const":"cny_cent_ceil_v1"}
         "original_amount": {"$ref":"#/components/schemas/IntegerString"}
@@ -4055,6 +4115,28 @@
         - "period_start"
         - "expires_at"
         - "created_at"
+      "additionalProperties": false
+    "ProductCreditUpgrade":
+      "type": "object"
+      "properties":
+        "previous_order_id": {"type":"string"}
+        "previous_subscription_id": {"type":"string"}
+        "previous_version": {"type":"integer","minimum":1}
+        "estimated_refund_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "refund_payment_source": {"enum":["external","wallet"]}
+      "required": ["previous_order_id","previous_subscription_id","previous_version","estimated_refund_amount","refund_payment_source"]
+      "additionalProperties": false
+    "ProductCreditUpgradeReturn":
+      "type": "object"
+      "properties":
+        "replacement_order_id": {"type":"string"}
+        "cutover": {"type":"string","format":"date-time"}
+        "credit_ceiling": {"$ref":"#/components/schemas/IntegerString"}
+        "service_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
+        "amount": {"$ref":"#/components/schemas/IntegerString"}
+        "refund_id": {"type":"string"}
+      "required": ["replacement_order_id","cutover","credit_ceiling"]
       "additionalProperties": false
     "PublicCreditBatch":
       "type": "object"

@@ -39,13 +39,30 @@ func (s *Service) quantities(ctx context.Context, b *Batch) error {
 	}
 	return nil
 }
-func (s *Service) allocate(ctx context.Context, c *pgxpool.Conn, account string, n int64, now time.Time) ([]Allocation, error) {
-	bs, e := list[Batch](ctx, c, `SELECT snapshot FROM billing_batches WHERE account_id=$1 AND NOT (snapshot->>'frozen')::boolean AND (snapshot->>'starts_at')::timestamptz <= $2 AND (snapshot->>'expires_at')::timestamptz > $2 ORDER BY (snapshot->>'expires_at')::timestamptz,(snapshot->>'created_at')::timestamptz,CASE WHEN snapshot->>'kind'='addon' THEN 1 ELSE 0 END,id`, account, now)
+func (s *Service) allocateForCall(ctx context.Context, c *pgxpool.Conn, call Call, n int64, now time.Time) ([]Allocation, error) {
+	var bs []Batch
+	var e error
+	replacementID := ""
+	switch call.CreditScope {
+	case "":
+		bs, e = list[Batch](ctx, c, `SELECT snapshot FROM billing_batches WHERE account_id=$1 AND COALESCE(snapshot->>'credit_scope','')='' AND NOT (snapshot->>'frozen')::boolean AND (snapshot->>'starts_at')::timestamptz <= $2 AND (snapshot->>'expires_at')::timestamptz > $2 ORDER BY (snapshot->>'expires_at')::timestamptz,(snapshot->>'created_at')::timestamptz,CASE WHEN snapshot->>'kind'='addon' THEN 1 ELSE 0 END,id`, call.AccountID, now)
+	case ProductCreditScopeV1:
+		bs, e = productCreditBatchesOn(ctx, c, call.AccountID, call.OriginProductID)
+		if e == nil && call.Status == "RESERVED" && call.FundingSubscriptionID != "" {
+			replacementID, e = replacementFundingSubscription(ctx, c, call, now)
+		}
+	default:
+		return nil, ErrInvalid
+	}
 	if e != nil {
 		return nil, e
 	}
 	out := []Allocation{}
 	for _, b := range bs {
+		if b.Frozen || now.Before(b.StartsAt) || !now.Before(b.ExpiresAt) ||
+			(replacementID != "" && b.SubscriptionID != replacementID) {
+			continue
+		}
 		balance, e := s.ledger.Balance(ctx, BatchAddress(b.ID, "available"), CreditAsset)
 		if e != nil {
 			return nil, e
@@ -55,6 +72,11 @@ func (s *Service) allocate(ctx context.Context, c *pgxpool.Conn, account string,
 			take = n
 		}
 		if take > 0 {
+			if call.CreditScope == ProductCreditScopeV1 {
+				if e = validateProductCreditBatchForHold(ctx, c, b); e != nil {
+					return nil, e
+				}
+			}
 			out = append(out, Allocation{b.ID, str(take)})
 			n -= take
 		}
@@ -179,7 +201,7 @@ func (s *Service) ReserveWithWire(ctx context.Context, service string, r Reserve
 		if auth.Asset == CashAsset {
 			posts, e = s.cashReservePosts(ctx, r.AccountID, CashHoldAddress(r.AccountID, r.CallID), n)
 		} else {
-			alloc, e = s.allocate(ctx, c, r.AccountID, n, now)
+			alloc, e = s.allocateForCall(ctx, c, Call{AccountID: r.AccountID}, n, now)
 			for _, a := range alloc {
 				n, _ := integer(a.Amount, true)
 				posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "available"), Destination: BatchAddress(a.BatchID, "reserved"), Asset: CreditAsset, Amount: n})
@@ -314,7 +336,7 @@ func (s *Service) TopUp(ctx context.Context, service, callID, amount, key string
 		if callAsset(call) == CashAsset {
 			posts, e = s.cashReservePosts(ctx, call.AccountID, cashHoldForCall(call), n)
 		} else {
-			alloc, e = s.allocate(ctx, c, call.AccountID, n, now)
+			alloc, e = s.allocateForCall(ctx, c, call, n, now)
 			for _, a := range alloc {
 				x, _ := integer(a.Amount, true)
 				posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "available"), Destination: BatchAddress(a.BatchID, "reserved"), Asset: CreditAsset, Amount: x})
@@ -436,8 +458,17 @@ func (s *Service) finalPosts(ctx context.Context, c *pgxpool.Conn, call Call, ch
 	if callAsset(call) == CashAsset {
 		return cashFinalPosts(call, charge)
 	}
+	allocations := call.Allocations
+	var batches map[string]Batch
+	if call.CreditScope == ProductCreditScopeV1 {
+		var e error
+		allocations, batches, e = settlementAllocations(ctx, c, call)
+		if e != nil {
+			return nil, e
+		}
+	}
 	posts := []ledger.Posting{}
-	for _, a := range call.Allocations {
+	for _, a := range allocations {
 		held, _ := integer(a.Amount, true)
 		used := held
 		if used > charge {
@@ -448,13 +479,26 @@ func (s *Service) finalPosts(ctx context.Context, c *pgxpool.Conn, call Call, ch
 			charge -= used
 		}
 		if held > used {
-			b, e := load[Batch](ctx, c, `SELECT snapshot FROM billing_batches WHERE id=$1`, a.BatchID)
-			if e != nil {
-				return nil, e
+			b, ok := batches[a.BatchID]
+			if !ok {
+				var e error
+				b, e = load[Batch](ctx, c, `SELECT snapshot FROM billing_batches WHERE id=$1`, a.BatchID)
+				if e != nil {
+					return nil, e
+				}
 			}
 			bucket := "available"
 			if !now.Before(b.ExpiresAt) {
 				bucket = "expired"
+			}
+			if call.CreditScope == ProductCreditScopeV1 && b.Frozen {
+				order, e := load[Order](ctx, c, `SELECT snapshot FROM billing_orders WHERE id=$1 AND account_id=$2`, b.OrderID, b.AccountID)
+				if e != nil {
+					return nil, e
+				}
+				if order.UpgradeReturn != nil && b.ExpiresAt.After(order.UpgradeReturn.Cutover) {
+					bucket = "withdrawn"
+				}
 			}
 			posts = append(posts, ledger.Posting{Source: BatchAddress(a.BatchID, "reserved"), Destination: BatchAddress(a.BatchID, bucket), Asset: CreditAsset, Amount: held - used})
 		}

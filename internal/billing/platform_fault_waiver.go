@@ -7,11 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
+	"math"
 	"reflect"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
 	"unihub/internal/ledger"
@@ -63,7 +65,7 @@ func ParsePlatformFaultWaiverApproval(raw []byte, expectedSHA string) (PlatformF
 	if err := d.Decode(&a); err != nil {
 		return a, ErrInvalid
 	}
-	n, err := integer(a.Held, true)
+	n, err := integer(a.Held, false)
 	if err != nil || str(n) != a.Held || a.Schema != 1 || strings.TrimSpace(a.ApprovalStatement) == "" || len(a.ApprovalStatement) > 16000 || !keyOK(a.CaseID) || !keyOK(a.CallID) || !keyOK(a.OperatorID) || !keyOK(a.ActorID) || !keyOK(a.AccountID) || strings.TrimSpace(a.Reason) == "" || len(a.Reason) > 2000 || (a.OriginProductID != "llmrouter" && a.OriginProductID != "superwagie") || a.InstanceID == "" || (a.Asset != CashAsset && a.Asset != CreditAsset) || a.ProviderState != "PROVIDER_UNRESOLVED" {
 		return a, ErrInvalid
 	}
@@ -79,6 +81,11 @@ func ParsePlatformFaultWaiverApproval(raw []byte, expectedSHA string) (PlatformF
 	}
 	var g map[string]json.RawMessage
 	if json.Unmarshal(a.GatewayCall, &g) != nil {
+		return a, ErrInvalid
+	}
+	// Older gateway snapshots predate CreditScope. An explicit value must
+	// still identify the legacy funding lane.
+	if scope := g["CreditScope"]; scope != nil && string(scope) != `""` {
 		return a, ErrInvalid
 	}
 	wantMode := FundingPrepaidCash
@@ -212,7 +219,7 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 	}
 	var snapshot, original []byte
 	var equal bool
-	err = tx.QueryRow(ctx, `SELECT snapshot,to_jsonb(c),to_jsonb(c)=$2::jsonb FROM billing_calls c WHERE id=$1 FOR UPDATE`, a.CallID, a.ExpectedCentralRow).Scan(&snapshot, &original, &equal)
+	err = tx.QueryRow(ctx, `SELECT snapshot,to_jsonb(c),to_jsonb(c)=$2::jsonb FROM billing_calls c WHERE id=$1 AND account_id=$3 FOR UPDATE`, a.CallID, a.ExpectedCentralRow, a.AccountID).Scan(&snapshot, &original, &equal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, accounts.ErrNotFound
 	}
@@ -231,7 +238,7 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 	if a.Asset == CreditAsset {
 		wantMode = FundingCredits
 	}
-	if out.CallID != a.CallID || out.ActorID != a.ActorID || out.AccountID != a.AccountID || out.ServiceID != "llmrouter" || out.OriginProductID != a.OriginProductID || out.InstanceID != a.InstanceID || out.ChargeAsset != a.Asset || out.Rate.Asset != a.Asset || out.FundingMode != wantMode || out.FundingProductID != "llmrouter" || out.Held != a.Held || out.Charged != "0" || out.Status != "RESERVED" || out.Usage != nil || out.ProviderCost != "" || out.FinalDigest != "" {
+	if out.CallID != a.CallID || out.ActorID != a.ActorID || out.AccountID != a.AccountID || out.ServiceID != "llmrouter" || out.OriginProductID != a.OriginProductID || out.InstanceID != a.InstanceID || out.CreditScope != "" || out.ChargeAsset != a.Asset || out.Rate.Asset != a.Asset || out.FundingMode != wantMode || out.FundingProductID != "llmrouter" || out.Held != a.Held || out.Charged != "0" || out.Status != "RESERVED" || out.Usage != nil || out.ProviderCost != "" || out.FinalDigest != "" {
 		return out, ErrConflict
 	}
 	var gateway struct {
@@ -271,69 +278,55 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 			return out, ErrConflict
 		}
 	}
-	// clear accepts the same account connection through the caller transaction.
-	var pending bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM billing_commands WHERE account_id=$1 AND status IN ('CREATED','SUBMITTING','UNKNOWN')) OR EXISTS(SELECT 1 FROM wallet_operations WHERE account_id=$1 AND status IN ('CREATED','SUBMITTING','UNKNOWN')) OR EXISTS(SELECT 1 FROM billing_orders WHERE account_id=$1 AND ((snapshot->>'payment_status'='PAID' AND snapshot->>'fulfillment_status'='PENDING' AND COALESCE(snapshot->>'refund_status','') IN ('','REJECTED')) OR snapshot->>'refund_status'='FROZEN'))`, a.AccountID).Scan(&pending); err != nil {
+	// The account lock and pending guard keep both the central allocations and
+	// the ledger balances stable between validation and command persistence.
+	if err = s.clear(ctx, tx, a.AccountID); err != nil {
 		return out, err
 	}
-	if pending {
-		return out, ErrPending
+	n, _ := integer(a.Held, false)
+	var reserveID, reserveLedgerID string
+	if err = tx.QueryRow(ctx, `SELECT id,COALESCE(ledger_transaction_id,'') FROM billing_commands WHERE account_id=$1 AND actor_id=$2 AND kind='reserve' AND request_key=$3 AND status='APPLIED'`, a.AccountID, a.ActorID, a.CallID).Scan(&reserveID, &reserveLedgerID); errors.Is(err, pgx.ErrNoRows) {
+		return out, ErrConflict
+	} else if err != nil {
+		return out, err
 	}
-	n, _ := integer(a.Held, true)
-	// The hold lives in the cash ledger or in batch addresses, never both.
-	holdBalance := func(asset string) (int64, error) {
-		if asset == CreditAsset {
-			total := int64(0)
-			for _, alloc := range out.Allocations {
-				amount, e := integer(alloc.Amount, false)
-				if e != nil {
-					return 0, e
-				}
-				balance, e := s.ledger.Balance(ctx, BatchAddress(alloc.BatchID, "reserved"), CreditAsset)
-				if e != nil {
-					return 0, e
-				}
-				if balance != amount {
-					return 0, ErrConflict
-				}
-				total += amount
-			}
-			return total, nil
-		}
-		return s.ledger.Balance(ctx, cashHoldForCall(out), CashAsset)
-	}
-	balance, e := holdBalance(a.Asset)
+	reserve, e := readCommand(ctx, tx, reserveID)
 	if e != nil {
 		return out, e
 	}
-	if balance != n {
+	if reserve.Ledger.Reference != "unihub:billing:"+reserve.ID || reserve.Effect.Call == nil || !reflect.DeepEqual(*reserve.Effect.Call, out) || !waiverHoldPostsMatch(out, a, reserve.Ledger.Postings, n) {
 		return out, ErrConflict
-	}
-	var commands []byte
-	if err = tx.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(bc) ORDER BY created_at,id),'[]'::jsonb) FROM billing_commands bc WHERE account_id=$1 AND effect#>>'{call,call_id}'=$2`, a.AccountID, a.CallID).Scan(&commands); err != nil {
-		return out, err
-	}
-	var reserve command
-	var reserveID, reserveLedgerID string
-	if err = tx.QueryRow(ctx, `SELECT id,COALESCE(ledger_transaction_id,'') FROM billing_commands WHERE account_id=$1 AND kind='reserve' AND request_key=$2 AND status='APPLIED'`, a.AccountID, a.CallID).Scan(&reserveID, &reserveLedgerID); err != nil {
-		return out, ErrConflict
-	}
-	reserve, err = readCommand(ctx, tx, reserveID)
-	if err != nil {
-		return out, err
 	}
 	originalTx, e := s.ledger.Find(ctx, reserve.Ledger.Reference)
 	if e != nil {
 		return out, e
 	}
-	if originalTx == nil || originalTx.Reference != reserve.Ledger.Reference || originalTx.ID == "" || originalTx.ID != reserveLedgerID || !reflect.DeepEqual(originalTx.Postings, reserve.Ledger.Postings) {
+	if n == 0 {
+		if reserveLedgerID != "" || originalTx != nil {
+			return out, ErrConflict
+		}
+	} else if originalTx == nil || originalTx.Reference != reserve.Ledger.Reference || originalTx.ID == "" || originalTx.ID != reserveLedgerID || !reflect.DeepEqual(originalTx.Postings, reserve.Ledger.Postings) {
 		return out, ErrConflict
 	}
-	if !waiverHoldPostsMatch(out, a, reserve.Ledger.Postings, n) {
-		return out, ErrConflict
+	if a.Asset == CashAsset {
+		balance, e := s.ledger.Balance(ctx, cashHoldForCall(out), CashAsset)
+		if e != nil {
+			return out, e
+		}
+		if balance != n {
+			return out, ErrConflict
+		}
+	} else if n > 0 {
+		if err = s.validateWaiverCreditBalance(ctx, tx, out); err != nil {
+			return out, err
+		}
 	}
 	if !apply {
 		return out, nil
+	}
+	var commands []byte
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(to_jsonb(bc) ORDER BY created_at,id),'[]'::jsonb) FROM billing_commands bc WHERE account_id=$1 AND effect#>>'{call,call_id}'=$2`, a.AccountID, a.CallID).Scan(&commands); err != nil {
+		return out, err
 	}
 	// A current ledger hold and the exact approved database row are independent checks.
 	posts, e := waiverReleasePosts(out, a)
@@ -366,33 +359,104 @@ func (s *Service) adminPlatformFaultWaiver(ctx context.Context, authority AdminA
 	return saved, err
 }
 
+// A credit batch can reserve funds for several open calls. Prove that its
+// ledger balance equals every live allocation before releasing just this call.
+func (s *Service) validateWaiverCreditBalance(ctx context.Context, tx pgx.Tx, call Call) error {
+	batchIDs := make([]string, 0, len(call.Allocations))
+	totals := make(map[string]int64, len(call.Allocations))
+	for _, alloc := range call.Allocations {
+		batchIDs = append(batchIDs, alloc.BatchID)
+		amount, _ := integer(alloc.Amount, true) // The original reserve proof validated the allocation.
+		totals[alloc.BatchID] = amount
+	}
+	var owned int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM billing_batches WHERE account_id=$1 AND id=ANY($2) AND snapshot->>'id'=id AND snapshot->>'account_id'=account_id`, call.AccountID, batchIDs).Scan(&owned); err != nil {
+		return err
+	}
+	if owned != len(batchIDs) {
+		return ErrConflict
+	}
+	rows, err := tx.Query(ctx, `SELECT id,snapshot FROM billing_calls c WHERE account_id=$1 AND id<>$3
+		AND snapshot->>'status' IN ('RESERVED','MISSING_USAGE')
+		AND EXISTS (SELECT 1 FROM unnest($2::text[]) AS b(id) WHERE c.snapshot->'allocations' @> jsonb_build_array(jsonb_build_object('batch_id',b.id)))`, call.AccountID, batchIDs, call.CallID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var snapshot []byte
+		if err = rows.Scan(&id, &snapshot); err != nil {
+			return err
+		}
+		var sibling Call
+		if json.Unmarshal(snapshot, &sibling) != nil || sibling.CallID != id || sibling.AccountID != call.AccountID || callAsset(sibling) != CreditAsset || callFundingMode(sibling) != FundingCredits {
+			return ErrConflict
+		}
+		left, err := integer(sibling.Held, true)
+		if err != nil {
+			return ErrConflict
+		}
+		for _, alloc := range sibling.Allocations {
+			amount, err := integer(alloc.Amount, true)
+			if err != nil || amount > left || alloc.BatchID == "" {
+				return ErrConflict
+			}
+			left -= amount
+			if sum, ok := totals[alloc.BatchID]; ok {
+				if amount > math.MaxInt64-sum {
+					return ErrConflict
+				}
+				totals[alloc.BatchID] = sum + amount
+			}
+		}
+		if left != 0 {
+			return ErrConflict
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	for _, batchID := range batchIDs {
+		balance, err := s.ledger.Balance(ctx, BatchAddress(batchID, "reserved"), CreditAsset)
+		if err != nil {
+			return err
+		}
+		if balance != totals[batchID] {
+			return ErrConflict
+		}
+	}
+	return nil
+}
+
 // waiverHoldPostsMatch proves the recorded reserve moved exactly the approved
 // amount out of the payer, in the asset the approval names. Cash holds sit in a
 // per-call address; credits sit in each batch's reserved bucket.
 func waiverHoldPostsMatch(call Call, a PlatformFaultWaiverApproval, posts []ledger.Posting, held int64) bool {
+	if held == 0 {
+		return call.NativePricing != nil && call.NativePricing.NativeQuotaMax == "0" && call.NativePricing.MaxAmount == "0" && (call.NativeQuota == "" || call.NativeQuota == "0") && (call.PlatformDifference == "" || call.PlatformDifference == "0") && len(call.Allocations) == 0 && len(posts) == 0 && (a.Asset != CreditAsset || call.CashHoldAddress == "")
+	}
 	if a.Asset == CreditAsset {
 		if len(call.Allocations) == 0 || len(posts) != len(call.Allocations) {
 			return false
 		}
-		total := int64(0)
-		for _, p := range posts {
-			matched := false
-			for _, alloc := range call.Allocations {
-				amount, e := integer(alloc.Amount, false)
-				if e != nil {
-					return false
-				}
-				if p.Source == BatchAddress(alloc.BatchID, "available") && p.Destination == BatchAddress(alloc.BatchID, "reserved") && p.Amount == amount {
-					matched = true
-					total += amount
-					break
-				}
-			}
-			if !matched || p.Asset != CreditAsset {
+		bySource := make(map[string]ledger.Posting, len(call.Allocations))
+		for _, alloc := range call.Allocations {
+			amount, err := integer(alloc.Amount, true)
+			source := BatchAddress(alloc.BatchID, "available")
+			if err != nil || amount > held || alloc.BatchID == "" || bySource[source].Source != "" {
 				return false
 			}
+			held -= amount
+			bySource[source] = ledger.Posting{Source: source, Destination: BatchAddress(alloc.BatchID, "reserved"), Asset: CreditAsset, Amount: amount}
 		}
-		return total == held
+		for _, p := range posts {
+			if expected, ok := bySource[p.Source]; !ok || p != expected {
+				return false
+			}
+			delete(bySource, p.Source)
+		}
+		return held == 0
 	}
 	return len(posts) == 1 && posts[0].Source == wallet.Address(a.AccountID, "llmrouter") && posts[0].Destination == cashHoldForCall(call) && posts[0].Asset == CashAsset && posts[0].Amount == held
 }
@@ -400,6 +464,9 @@ func waiverHoldPostsMatch(call Call, a PlatformFaultWaiverApproval, posts []ledg
 // waiverReleasePosts returns the postings that give the whole hold back. The
 // customer owes nothing for a call whose provider outcome cannot be resolved.
 func waiverReleasePosts(call Call, a PlatformFaultWaiverApproval) ([]ledger.Posting, error) {
+	if a.Held == "0" {
+		return []ledger.Posting{}, nil
+	}
 	if a.Asset == CreditAsset {
 		posts := []ledger.Posting{}
 		for _, alloc := range call.Allocations {

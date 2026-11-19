@@ -135,8 +135,8 @@ func run() error {
 	}
 	modelAccess := modelaccess.New(pool, a, b)
 	modelAccess.ConfigureProductUsers(productUsers)
-	b.ConfigureCheckoutReadiness(func(ctx context.Context, actor, account, product string) (billing.NativeCreditReadiness, error) {
-		return modelAccess.NativeCreditsRuntimeReadiness(ctx, product)
+	b.ConfigureScopedCheckoutReadiness(func(ctx context.Context, actor, account, product, scope string) (billing.NativeCreditReadiness, error) {
+		return modelAccess.NativeCreditsRuntimeReadinessForScope(ctx, product, scope)
 	})
 	if c.ProviderCatalogURL != "" {
 		catalog, err := modelaccess.NewProviderCatalog(c.ProviderCatalogURL, c.ProviderCatalogToken)
@@ -199,7 +199,7 @@ func run() error {
 		productAuth = productauth.New(pool, a, productUsers, c.PublicURL)
 		productAuth.ConfigureBrowserClients(c.ProductAccess)
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentConfiguration: paymentConfiguration, PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, Billing: b, CashTopup: ct, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentConfiguration: paymentConfiguration, PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, ProductModelSigningKey: c.ProductModelSigningKey, Billing: b, CashTopup: ct, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir})
 		if err != nil {
@@ -260,7 +260,7 @@ func work(ctx context.Context, w *wallet.Service, b *billing.Service, ct *cashto
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			e := runRecoveryCycle(ctx, 30*time.Second, b.RecoverCheckouts, ct.Recover, func(run context.Context) error {
+			e := runRecoveryCycle(ctx, 30*time.Second, b.RecoverCheckouts, b.RecoverProductUpgradeReturns, ct.Recover, func(run context.Context) error {
 				walletErr := w.Recover(run)
 				_, billingErr := b.Recover(run)
 				_, maintenanceErr := b.Maintain(run, time.Now().UTC())
@@ -274,7 +274,7 @@ func work(ctx context.Context, w *wallet.Service, b *billing.Service, ct *cashto
 }
 
 // Gateway latency must not consume the recovery budget of model usage/wallet
-// commands. Each branch owns its deadline and both finish before the next tick.
+// commands. Each branch owns its deadline and all finish before the next tick.
 func runRecoveryCycle(ctx context.Context, timeout time.Duration, branches ...func(context.Context) error) error {
 	results := make(chan error, len(branches))
 	for _, branch := range branches {

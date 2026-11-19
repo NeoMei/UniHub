@@ -22,7 +22,8 @@ var (
 )
 
 const (
-	CreditAsset = "CREDIT/6"
+	CreditAsset          = "CREDIT/6"
+	ProductCreditScopeV1 = "product_v1"
 )
 
 // Empty assets in historical rates and calls denote model credits.
@@ -43,6 +44,9 @@ type UsageAuthorization struct {
 }
 
 type Offer struct {
+	CreditScope    string            `json:"credit_scope,omitempty"`
+	ServiceAmount  string            `json:"service_amount,omitempty"`
+	ComputeAmount  string            `json:"compute_amount,omitempty"`
 	ID             string            `json:"id"`
 	ProductID      string            `json:"product_id"`
 	Name           string            `json:"name"`
@@ -70,53 +74,78 @@ type Subscription struct {
 	Status      string    `json:"status"`
 }
 type Order struct {
-	PaymentSource               string    `json:"payment_source,omitempty"`
-	CheckoutID                  string    `json:"checkout_id,omitempty"`
-	ProviderTransactionID       string    `json:"provider_transaction_id,omitempty"`
-	ID                          string    `json:"id"`
-	AccountID                   string    `json:"account_id"`
-	ActorID                     string    `json:"actor_id"`
-	ProductID                   string    `json:"product_id"`
-	Kind                        string    `json:"kind"`
-	Offer                       Offer     `json:"offer"`
-	Amount                      string    `json:"amount"`
-	ProductFunding              string    `json:"product_funding"`
-	UnifiedFunding              string    `json:"unified_funding"`
-	PaymentStatus               string    `json:"payment_status"`
-	FulfillmentStatus           string    `json:"fulfillment_status"`
-	SubscriptionID              string    `json:"subscription_id,omitempty"`
-	Start                       time.Time `json:"start"`
-	End                         time.Time `json:"end"`
-	PeriodStart                 time.Time `json:"period_start"`
-	PeriodEnd                   time.Time `json:"period_end"`
-	GrantAmount                 string    `json:"grant_amount"`
-	CreatedAt                   time.Time `json:"created_at"`
-	RefundStatus                string    `json:"refund_status,omitempty"`
-	RefundActorID               string    `json:"refund_actor_id,omitempty"`
-	RefundKey                   string    `json:"refund_key,omitempty"`
-	RefundReason                string    `json:"refund_reason,omitempty"`
-	FundingAuthorizationVersion int64     `json:"funding_authorization_version,omitempty"`
-	RenewalAuthorizationVersion int64     `json:"renewal_authorization_version,omitempty"`
+	ProductCreditUpgrade        *ProductCreditUpgrade       `json:"product_credit_upgrade,omitempty"`
+	UpgradeReturn               *ProductCreditUpgradeReturn `json:"upgrade_return,omitempty"`
+	CreditScope                 string                      `json:"credit_scope,omitempty"`
+	ServiceAmount               string                      `json:"service_amount,omitempty"`
+	ComputeAmount               string                      `json:"compute_amount,omitempty"`
+	AutoAddonPolicyVersion      int64                       `json:"auto_addon_policy_version,omitempty"`
+	PaymentSource               string                      `json:"payment_source,omitempty"`
+	CheckoutID                  string                      `json:"checkout_id,omitempty"`
+	ProviderTransactionID       string                      `json:"provider_transaction_id,omitempty"`
+	ID                          string                      `json:"id"`
+	AccountID                   string                      `json:"account_id"`
+	ActorID                     string                      `json:"actor_id"`
+	ProductID                   string                      `json:"product_id"`
+	Kind                        string                      `json:"kind"`
+	Offer                       Offer                       `json:"offer"`
+	Amount                      string                      `json:"amount"`
+	ProductFunding              string                      `json:"product_funding"`
+	UnifiedFunding              string                      `json:"unified_funding"`
+	PaymentStatus               string                      `json:"payment_status"`
+	FulfillmentStatus           string                      `json:"fulfillment_status"`
+	SubscriptionID              string                      `json:"subscription_id,omitempty"`
+	Start                       time.Time                   `json:"start"`
+	End                         time.Time                   `json:"end"`
+	PeriodStart                 time.Time                   `json:"period_start"`
+	PeriodEnd                   time.Time                   `json:"period_end"`
+	GrantAmount                 string                      `json:"grant_amount"`
+	CreatedAt                   time.Time                   `json:"created_at"`
+	RefundStatus                string                      `json:"refund_status,omitempty"`
+	RefundActorID               string                      `json:"refund_actor_id,omitempty"`
+	RefundKey                   string                      `json:"refund_key,omitempty"`
+	RefundReason                string                      `json:"refund_reason,omitempty"`
+	FundingAuthorizationVersion int64                       `json:"funding_authorization_version,omitempty"`
+	RenewalAuthorizationVersion int64                       `json:"renewal_authorization_version,omitempty"`
 }
 type PurchaseRequest struct {
 	OfferID string `json:"offer_id"`
 	Key     string `json:"key"`
 }
 type Quote struct {
-	PaymentSource       string    `json:"payment_source,omitempty"`
-	RoundingRule        string    `json:"rounding_rule,omitempty"`
-	OriginalAmount      string    `json:"original_amount,omitempty"`
-	PeriodEnd           time.Time `json:"period_end,omitempty"`
-	ID                  string    `json:"id"`
-	AccountID           string    `json:"account_id"`
-	SubscriptionID      string    `json:"subscription_id"`
-	SubscriptionVersion int64     `json:"subscription_version"`
-	Offer               Offer     `json:"offer"`
-	Amount              string    `json:"amount"`
-	GrantAmount         string    `json:"grant_amount"`
-	PeriodStart         time.Time `json:"period_start"`
-	ExpiresAt           time.Time `json:"expires_at"`
-	CreatedAt           time.Time `json:"created_at"`
+	ProductCreditUpgrade *ProductCreditUpgrade `json:"product_credit_upgrade,omitempty"`
+	PaymentSource        string                `json:"payment_source,omitempty"`
+	RoundingRule         string                `json:"rounding_rule,omitempty"`
+	OriginalAmount       string                `json:"original_amount,omitempty"`
+	PeriodEnd            time.Time             `json:"period_end,omitempty"`
+	ID                   string                `json:"id"`
+	AccountID            string                `json:"account_id"`
+	SubscriptionID       string                `json:"subscription_id"`
+	SubscriptionVersion  int64                 `json:"subscription_version"`
+	Offer                Offer                 `json:"offer"`
+	Amount               string                `json:"amount"`
+	GrantAmount          string                `json:"grant_amount"`
+	PeriodStart          time.Time             `json:"period_start"`
+	ExpiresAt            time.Time             `json:"expires_at"`
+	CreatedAt            time.Time             `json:"created_at"`
+}
+
+type ProductCreditUpgrade struct {
+	PreviousOrderID        string `json:"previous_order_id"`
+	PreviousSubscriptionID string `json:"previous_subscription_id"`
+	PreviousVersion        int64  `json:"previous_version"`
+	EstimatedRefundAmount  string `json:"estimated_refund_amount"`
+	RefundPaymentSource    string `json:"refund_payment_source"`
+}
+
+type ProductCreditUpgradeReturn struct {
+	ReplacementOrderID string    `json:"replacement_order_id"`
+	Cutover            time.Time `json:"cutover"`
+	CreditCeiling      string    `json:"credit_ceiling"`
+	ServiceAmount      string    `json:"service_amount,omitempty"`
+	ComputeAmount      string    `json:"compute_amount,omitempty"`
+	Amount             string    `json:"amount,omitempty"`
+	RefundID           string    `json:"refund_id,omitempty"`
 }
 type Authorization struct {
 	ProductID       string    `json:"product_id"`
@@ -130,6 +159,7 @@ type Authorization struct {
 	ActorID         string    `json:"actor_id"`
 }
 type Batch struct {
+	CreditScope    string    `json:"credit_scope,omitempty"`
 	ID             string    `json:"id"`
 	AccountID      string    `json:"account_id"`
 	ProductID      string    `json:"product_id"`
@@ -188,6 +218,8 @@ type Allocation struct {
 	Amount  string `json:"amount"`
 }
 type Call struct {
+	FundingSubscriptionID string       `json:"funding_subscription_id,omitempty"`
+	CreditScope           string       `json:"credit_scope,omitempty"`
 	NativePricing         *NativeQuote `json:"native_pricing,omitempty"`
 	NativeQuota           string       `json:"native_quota,omitempty"`
 	CredentialVersion     int64        `json:"credential_version,omitempty"`

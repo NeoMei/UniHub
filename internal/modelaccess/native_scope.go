@@ -27,22 +27,40 @@ type APIKeyScopeRequest struct {
 	ModelScope      string `json:"model_scope"`
 }
 
-func (s *Service) nativeAuthorityOn(ctx context.Context, q accounts.Querier, actor, account, product, instance, funding string) (billing.UsageAuthorization, error) {
-	if product != "superwagie" || !instanceID.MatchString(instance) || s.productUsers == nil || !s.productUsers.Managed(product, instance) || funding != "" && funding != billing.FundingPrepaidCash && funding != billing.FundingCredits {
+func (s *Service) nativePrincipalOn(ctx context.Context, q accounts.Querier, actor, account, product, instance string) error {
+	if !instanceID.MatchString(instance) || s.productUsers == nil || !s.productUsers.Managed(product, instance) {
+		return accounts.ErrForbidden
+	}
+	if e := s.activeOn(ctx, q, actor); e != nil {
+		return e
+	}
+	if _, e := s.accounts.RoleOn(ctx, q, actor, account); e != nil {
+		return e
+	}
+	return s.apiKeyProductActive(ctx, q, actor, product, instance)
+}
+
+func (s *Service) nativeAuthorityOn(ctx context.Context, q accounts.Querier, actor, account, product, instance, funding, creditScope string) (billing.UsageAuthorization, error) {
+	if (creditScope != "" && creditScope != billing.ProductCreditScopeV1) || (product != "superwagie" && creditScope != billing.ProductCreditScopeV1) || funding != "" && funding != billing.FundingPrepaidCash && funding != billing.FundingCredits {
 		return billing.UsageAuthorization{}, accounts.ErrForbidden
 	}
 	policy, ok := s.eligibility.(BillingUsageEligibilityOn)
 	if !ok {
 		return billing.UsageAuthorization{}, accounts.ErrForbidden
 	}
-	if e := s.activeOn(ctx, q, actor); e != nil {
+	if e := s.nativePrincipalOn(ctx, q, actor, account, product, instance); e != nil {
 		return billing.UsageAuthorization{}, e
 	}
-	if _, e := s.accounts.RoleOn(ctx, q, actor, account); e != nil {
-		return billing.UsageAuthorization{}, e
-	}
-	if e := s.apiKeyProductActive(ctx, q, actor, product, instance); e != nil {
-		return billing.UsageAuthorization{}, e
+	if creditScope == billing.ProductCreditScopeV1 {
+		membership, ok := s.eligibility.(interface {
+			RequireProductCreditMembershipOn(context.Context, accounts.Querier, string, string) error
+		})
+		if !ok {
+			return billing.UsageAuthorization{}, accounts.ErrForbidden
+		}
+		if e := membership.RequireProductCreditMembershipOn(ctx, q, account, product); e != nil {
+			return billing.UsageAuthorization{}, e
+		}
 	}
 	auth, e := policy.AuthorizeUsageOn(ctx, q, actor, account, product, funding)
 	if e != nil {
@@ -51,8 +69,11 @@ func (s *Service) nativeAuthorityOn(ctx context.Context, q accounts.Querier, act
 	if auth.ProfileVersion < 0 || !nativeFundingMatches(auth.FundingMode, auth.Asset, nativePricingSource(auth.Asset)) {
 		return billing.UsageAuthorization{}, accounts.ErrForbidden
 	}
+	if creditScope != "" && auth.Asset != billing.CreditAsset {
+		return billing.UsageAuthorization{}, accounts.ErrForbidden
+	}
 	if auth.Asset == billing.CreditAsset {
-		if _, e := s.nativeCreditConversionOn(ctx, q, product); e != nil {
+		if _, e := s.nativeCreditConversionOn(ctx, q, product, creditScope); e != nil {
 			return billing.UsageAuthorization{}, e
 		}
 	}
@@ -73,12 +94,15 @@ func (s *Service) createNativeAPIKey(ctx context.Context, actor, account string,
 	if r.FundingMode == "" {
 		r.FundingMode = billing.FundingPrepaidCash
 	}
+	if r.CreditScope != "" && (r.CreditScope != billing.ProductCreditScopeV1 || r.FundingMode != billing.FundingCredits) {
+		return APIKey{}, billing.ErrInvalid
+	}
 	if r.FundingMode == billing.FundingCredits {
-		ready, e := s.NativeCreditsReadiness(ctx, actor, account, r.OriginProductID, r.InstanceID)
+		ready, e := s.nativeCreditsReadinessForKey(ctx, actor, account, r.OriginProductID, r.InstanceID, r.CreditScope)
 		if e != nil {
 			return APIKey{}, e
 		}
-		if !ready.Ready {
+		if !ready.Ready || (r.CreditScope != "" && ready.CreditScope != r.CreditScope) {
 			return APIKey{}, accounts.ErrForbidden
 		}
 	}
@@ -113,12 +137,12 @@ func (s *Service) createNativeAPIKey(ctx context.Context, actor, account string,
 	if e = nativeScopeLocks(ctx, tx, r.OriginProductID, r.InstanceID, account); e != nil {
 		return APIKey{}, e
 	}
-	auth, e := s.nativeAuthorityOn(ctx, tx, actor, account, r.OriginProductID, r.InstanceID, r.FundingMode)
+	auth, e := s.nativeAuthorityOn(ctx, tx, actor, account, r.OriginProductID, r.InstanceID, r.FundingMode, r.CreditScope)
 	if e != nil {
 		return APIKey{}, e
 	}
 	data, _ := json.Marshal(models)
-	_, e = tx.Exec(ctx, `INSERT INTO model_credentials(id,token_hash,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,name,instance_id,max_total,max_per_call,model_scope,pricing_source,credential_version) VALUES($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,'api_key',$11,$12,$13,$14,$15,$16,1)`, id, digest(token), actor, account, r.OriginProductID, data, expiry, auth.FundingMode, auth.Asset, auth.ProfileVersion, r.Name, r.InstanceID, r.MaxTotal, r.MaxPerCall, ScopeLLMRouterAvailable, nativePricingSource(auth.Asset))
+	_, e = tx.Exec(ctx, `INSERT INTO model_credentials(id,token_hash,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,name,instance_id,max_total,max_per_call,model_scope,pricing_source,credential_version,credit_scope) VALUES($1,$2,$3,$4,$5,$6,'',$7,$8,$9,$10,'api_key',$11,$12,$13,$14,$15,$16,1,$17)`, id, digest(token), actor, account, r.OriginProductID, data, expiry, auth.FundingMode, auth.Asset, auth.ProfileVersion, r.Name, r.InstanceID, r.MaxTotal, r.MaxPerCall, ScopeLLMRouterAvailable, nativePricingSource(auth.Asset), r.CreditScope)
 	if e != nil {
 		return APIKey{}, e
 	}
@@ -172,7 +196,7 @@ func (s *Service) UpgradeAPIKeyScope(ctx context.Context, actor, account, id str
 		return APIKey{}, e
 	}
 	for _, user := range slices.Compact([]string{actor, key.ActorID}) {
-		if _, e = s.nativeAuthorityOn(ctx, tx, user, account, key.OriginProductID, key.InstanceID, key.FundingMode); e != nil {
+		if _, e = s.nativeAuthorityOn(ctx, tx, user, account, key.OriginProductID, key.InstanceID, key.FundingMode, key.CreditScope); e != nil {
 			return APIKey{}, e
 		}
 	}

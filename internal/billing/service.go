@@ -19,17 +19,19 @@ import (
 )
 
 type Service struct {
-	pool               *pgxpool.Pool
-	accounts           *accounts.Store
-	ledger             ledger.Ledger
-	now                func() time.Time
-	mu                 sync.RWMutex
-	operators, trusted map[string]bool
-	sandbox            bool
-	productUsers       *productusers.Store
-	paymentProviders   map[string]payments.Provider
-	paymentSource      func(context.Context) ([]payments.Provider, []payments.Provider, error)
-	checkoutReadiness  func(context.Context, string, string, string) (NativeCreditReadiness, error)
+	pool                    *pgxpool.Pool
+	accounts                *accounts.Store
+	ledger                  ledger.Ledger
+	legacyCreditProofSource legacyCreditProofSource
+	now                     func() time.Time
+	mu                      sync.RWMutex
+	operators, trusted      map[string]bool
+	sandbox                 bool
+	productUsers            *productusers.Store
+	paymentProviders        map[string]payments.Provider
+	paymentSource           func(context.Context) ([]payments.Provider, []payments.Provider, error)
+	checkoutReadiness       func(context.Context, string, string, string) (NativeCreditReadiness, error)
+	scopedCheckoutReadiness func(context.Context, string, string, string, string) (NativeCreditReadiness, error)
 }
 
 func New(p *pgxpool.Pool, a *accounts.Store, l ledger.Ledger) *Service {
@@ -161,10 +163,10 @@ func event(ctx context.Context, tx pgx.Tx, account, actor, entity, action string
 	_, e := tx.Exec(ctx, `INSERT INTO billing_events(account_id,actor_id,entity_id,action,detail) VALUES($1,$2,$3,$4,$5)`, account, actor, entity, action, encode(detail))
 	return e
 }
-func (s *Service) clear(ctx context.Context, c *pgxpool.Conn, account string) error {
+func (s *Service) clear(ctx context.Context, c accounts.Querier, account string) error {
 	return s.clearExceptOrder(ctx, c, account, "")
 }
-func (s *Service) clearExceptOrder(ctx context.Context, c *pgxpool.Conn, account, except string) error {
+func (s *Service) clearExceptOrder(ctx context.Context, c accounts.Querier, account, except string) error {
 	var pending bool
 	e := c.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM billing_commands WHERE account_id=$1 AND status IN ('CREATED','SUBMITTING','UNKNOWN')) OR EXISTS(SELECT 1 FROM wallet_operations WHERE account_id=$1 AND status IN ('CREATED','SUBMITTING','UNKNOWN') AND ($2='' OR created_at <= (SELECT (snapshot->>'created_at')::timestamptz FROM billing_orders WHERE id=$2 AND account_id=$1))) OR EXISTS(SELECT 1 FROM billing_orders WHERE account_id=$1 AND id<>$2 AND ((snapshot->>'payment_status'='PAID' AND snapshot->>'fulfillment_status'='PENDING' AND COALESCE(snapshot->>'refund_status','') IN ('','REJECTED')) OR snapshot->>'refund_status'='FROZEN'))`, account, except).Scan(&pending)
 	if e != nil {

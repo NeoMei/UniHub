@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/billing"
 	"unihub/internal/database"
@@ -73,6 +74,54 @@ func TestNativeCreditKeyOptInAndCatalogPreservesLegacyCash(t *testing.T) {
 		t.Fatal(e)
 	}
 	profiles[0].Version = 2
+	profiles[0].CreditScope = billing.ProductCreditScopeV1
+	profiles[0].NativeCreditConversion = &billing.NativeConversion{Version: "product-microcredit-fixture", Numerator: "1", Denominator: "1", Rounding: "lr-cumulative-ceil-v1"}
+	profiles[0].Subscription.Enabled = true
+	profiles[0].Usage.RequireSubscriptionForCredits = true
+	if e = b.ApplyConfiguredProfiles(ctx, profiles); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = p.Exec(ctx, `INSERT INTO billing_subscriptions(id,account_id,product_id,snapshot) VALUES('native-credit-membership',$1,'superwagie',jsonb_build_object('status','active','paid_through',$2::timestamptz))`, as[0].ID, time.Now().Add(time.Hour)); e != nil {
+		t.Fatal(e)
+	}
+	request.FundingMode = billing.FundingCredits
+	data, _ := json.Marshal(request)
+	var productRequest map[string]any
+	_ = json.Unmarshal(data, &productRequest)
+	productRequest["credit_scope"] = billing.ProductCreditScopeV1
+	data, _ = json.Marshal(productRequest)
+	_ = json.Unmarshal(data, &request)
+	productKey, e := s.CreateAPIKey(ctx, u.ID, as[0].ID, request)
+	if e != nil {
+		t.Fatal(e)
+	}
+	productClaim, e := s.VerifyForInstance(ctx, productKey.Token, "model", "default")
+	if e != nil {
+		t.Fatal(e)
+	}
+	data, _ = json.Marshal(productClaim)
+	_ = json.Unmarshal(data, &fields)
+	if string(fields["credit_scope"]) != `"product_v1"` || string(fields["funding_product_id"]) != `"superwagie"` || len(fields["source_verified"]) != 0 {
+		t.Fatalf("incorrect persisted product offer proof: %s", data)
+	}
+	legacyClaim, e := s.VerifyForInstance(ctx, key.Token, "model", "default")
+	if e != nil {
+		t.Fatal(e)
+	}
+	data, _ = json.Marshal(legacyClaim)
+	fields = nil
+	_ = json.Unmarshal(data, &fields)
+	if len(fields["credit_scope"]) != 0 || legacyClaim.NativeCreditConversion == nil || legacyClaim.NativeCreditConversion.Numerator != "3" || legacyClaim.NativeCreditConversion.Denominator != "2" {
+		t.Fatalf("legacy key was converted: %s", data)
+	}
+	if _, e = p.Exec(ctx, `UPDATE billing_subscriptions SET snapshot=jsonb_set(snapshot,'{paid_through}',to_jsonb(now()-interval '1 minute')) WHERE id='native-credit-membership'`); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.VerifyForInstance(ctx, productKey.Token, "model", "default"); !errors.Is(e, billing.ErrSubscriptionRequired) {
+		t.Fatalf("new dispatch didn't detect membership lapse: %v", e)
+	}
+	profiles[0].Version = 3
+	profiles[0].CreditScope = ""
 	profiles[0].NativeCreditConversion = nil
 	if e = b.ApplyConfiguredProfiles(ctx, profiles); e != nil {
 		t.Fatal(e)
@@ -83,12 +132,16 @@ func TestNativeCreditKeyOptInAndCatalogPreservesLegacyCash(t *testing.T) {
 	if _, e = s.VerifyForInstance(ctx, old.Token, "model", "default"); e != nil {
 		t.Fatalf("cash disabled %v", e)
 	}
+	receipt, e := s.VerifyReceiptForInstance(ctx, productKey.Token, "model", "default")
+	if e != nil || receipt.CreditScope != billing.ProductCreditScopeV1 || receipt.FundingProductID != "superwagie" {
+		t.Fatalf("durable receipt authentication was lost after lapse and tariff removal: %+v %v", receipt, e)
+	}
 }
 
 type nativeCreditCatalog struct{}
 
 func (nativeCreditCatalog) Discover(_ context.Context, r ProviderCatalogRequest) (ProviderCatalogResponse, error) {
-	return ProviderCatalogResponse{ProviderCatalogRequest: r, NativeCreditProtocol: billing.NativeCreditPricingVersion, SchemaVersion: 1, CatalogVersion: "test", ModelScope: ScopeLLMRouterAvailable, PricingSource: PricingLLMRouterNative, Models: []Model{{ID: "model"}}}, nil
+	return ProviderCatalogResponse{ProviderCatalogRequest: r, NativeCreditProtocol: billing.NativeCreditPricingVersion, CreditScopes: []string{billing.ProductCreditScopeV1}, SchemaVersion: 1, CatalogVersion: "test", ModelScope: ScopeLLMRouterAvailable, PricingSource: PricingLLMRouterNative, Models: []Model{{ID: "model"}}}, nil
 }
 
 func TestNativeCreditProviderProtocolReadinessIsExplicit(t *testing.T) {

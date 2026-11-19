@@ -20,21 +20,25 @@ type CheckoutRequest struct {
 	Key       string `json:"-"`
 }
 type Checkout struct {
-	ID                string            `json:"id"`
-	AccountID         string            `json:"account_id"`
-	ProductID         string            `json:"product_id"`
-	Provider          string            `json:"provider"`
-	OfferName         string            `json:"offer_name"`
-	Amount            string            `json:"amount"`
-	Currency          string            `json:"currency"`
-	PaymentStatus     string            `json:"payment_status"`
-	FulfillmentStatus string            `json:"fulfillment_status"`
-	RefundStatus      string            `json:"refund_status,omitempty"`
-	ExpiresAt         time.Time         `json:"expires_at"`
-	CreatedAt         time.Time         `json:"created_at"`
-	Session           *payments.Session `json:"session,omitempty"`
-	OrderID           string            `json:"order_id,omitempty"`
-	ErrorCode         string            `json:"error_code,omitempty"`
+	ProductCreditUpgrade *ProductCreditUpgrade `json:"product_credit_upgrade,omitempty"`
+	UpgradeReturnStatus  string                `json:"upgrade_return_status,omitempty"`
+	UpgradeRefundAmount  string                `json:"upgrade_refund_amount,omitempty"`
+	SubscriptionID       string                `json:"subscription_id,omitempty"`
+	ID                   string                `json:"id"`
+	AccountID            string                `json:"account_id"`
+	ProductID            string                `json:"product_id"`
+	Provider             string                `json:"provider"`
+	OfferName            string                `json:"offer_name"`
+	Amount               string                `json:"amount"`
+	Currency             string                `json:"currency"`
+	PaymentStatus        string                `json:"payment_status"`
+	FulfillmentStatus    string                `json:"fulfillment_status"`
+	RefundStatus         string                `json:"refund_status,omitempty"`
+	ExpiresAt            time.Time             `json:"expires_at"`
+	CreatedAt            time.Time             `json:"created_at"`
+	Session              *payments.Session     `json:"session,omitempty"`
+	OrderID              string                `json:"order_id,omitempty"`
+	ErrorCode            string                `json:"error_code,omitempty"`
 }
 type checkoutRecord struct {
 	Checkout
@@ -128,7 +132,7 @@ func (s *Service) checkoutProvider(ctx context.Context, name, merchant string) (
 	}
 	return nil, ErrPaymentUnavailable
 }
-func (s *Service) commercialClear(ctx context.Context, c *pgxpool.Conn, account string) error {
+func (s *Service) commercialClear(ctx context.Context, c accounts.Querier, account string) error {
 	var pending bool
 	e := c.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM billing_checkouts WHERE account_id=$1 AND COALESCE(snapshot->>'refund_status','')<>'SUCCEEDED' AND (snapshot->>'payment_status' IN ('CREATED','PENDING','UNKNOWN','REVIEW') OR (snapshot->>'payment_status'='PAID' AND snapshot->>'fulfillment_status'<>'FULFILLED') OR snapshot->>'refund_status' IN ('PENDING','REVIEW')))`, account).Scan(&pending)
 	if e != nil {
@@ -202,6 +206,14 @@ func (s *Service) checkoutView(ctx context.Context, x checkoutRecord) (Checkout,
 }
 
 func checkoutOrderView(v Checkout, o Order) Checkout {
+	if o.UpgradeReturn != nil {
+		v.UpgradeReturnStatus = o.RefundStatus
+		v.UpgradeRefundAmount = o.UpgradeReturn.Amount
+	}
+	if o.ProductCreditUpgrade != nil {
+		v.ProductCreditUpgrade = o.ProductCreditUpgrade
+		v.SubscriptionID = o.SubscriptionID
+	}
 	v.FulfillmentStatus = o.FulfillmentStatus
 	if v.FulfillmentStatus == "CANCELED" {
 		v.FulfillmentStatus = "NOT_STARTED"
@@ -221,8 +233,13 @@ func (s *Service) ConfigureCheckoutReadiness(probe func(context.Context, string,
 	defer s.mu.Unlock()
 	s.checkoutReadiness = probe
 }
+func (s *Service) ConfigureScopedCheckoutReadiness(probe func(context.Context, string, string, string, string) (NativeCreditReadiness, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scopedCheckoutReadiness = probe
+}
 func nativePointsOffer(o Offer) bool {
-	return !o.Sandbox && o.Entitlements["pricing_program"] == "superwagie-ai-points-v1"
+	return o.CreditScope == ProductCreditScopeV1 || !o.Sandbox && o.Entitlements["pricing_program"] == "superwagie-ai-points-v1"
 }
 
 // NativeCheckoutReadiness is the runtime readiness used both for advertised
@@ -233,25 +250,47 @@ func (s *Service) NativeCheckoutReadiness(ctx context.Context, actor, account, p
 	if e != nil || !policy.Ready {
 		return policy, e
 	}
+	return s.probeCheckoutReadiness(ctx, actor, account, product, policy)
+}
+
+func (s *Service) NativeCheckoutReadinessForScope(ctx context.Context, actor, account, product, scope string) (NativeCreditReadiness, error) {
+	policy, e := s.NativeCreditsReadinessForScopeOn(ctx, s.pool, product, scope)
+	if e != nil || !policy.Ready {
+		return policy, e
+	}
+	return s.probeCheckoutReadiness(ctx, actor, account, product, policy)
+}
+
+func (s *Service) probeCheckoutReadiness(ctx context.Context, actor, account, product string, policy NativeCreditReadiness) (NativeCreditReadiness, error) {
 	s.mu.RLock()
 	probe := s.checkoutReadiness
+	scopedProbe := s.scopedCheckoutReadiness
 	s.mu.RUnlock()
+	if scopedProbe != nil {
+		return scopedProbe(ctx, actor, account, product, policy.CreditScope)
+	}
 	if probe == nil {
 		policy.Ready = false
 		policy.Reason = "native_credit_runtime_unverified"
 		return policy, nil
 	}
-	return probe(ctx, actor, account, product)
+	result, e := probe(ctx, actor, account, product)
+	if e == nil && result.Ready && result.CreditScope != policy.CreditScope {
+		policy.Ready = false
+		policy.Reason = "native_credit_scope_unverified"
+		return policy, nil
+	}
+	return result, e
 }
 func (s *Service) externalCheckoutReady(ctx context.Context, actor, account string, o Offer) error {
 	if !nativePointsOffer(o) {
 		return nil
 	}
-	r, e := s.NativeCheckoutReadiness(ctx, actor, account, o.ProductID)
+	r, e := s.NativeCheckoutReadinessForScope(ctx, actor, account, o.ProductID, o.CreditScope)
 	if e != nil {
 		return e
 	}
-	if !r.Ready {
+	if !r.Ready || r.CreditScope != o.CreditScope {
 		return ErrCreditRatesUnavailable
 	}
 	return nil

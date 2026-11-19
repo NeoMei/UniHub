@@ -131,6 +131,10 @@ func callFundingMode(call Call) string {
 	return call.FundingMode
 }
 func (s *Service) callFundingAllowed(ctx context.Context, q accounts.Querier, call Call, now time.Time) error {
+	if call.NativePricing != nil && call.CreditScope == ProductCreditScopeV1 {
+		_, e := s.nativeUsageFundingOn(ctx, q, call, now)
+		return e
+	}
 	auth, e := s.authorizeUsageOn(ctx, q, call.ActorID, call.AccountID, call.OriginProductID, callFundingMode(call), now)
 	if e != nil {
 		return e

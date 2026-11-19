@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"unihub/internal/accounts"
 	"unihub/internal/billing"
@@ -47,7 +48,16 @@ func (s *api) apiKeyRoutes(add func(string, action)) {
 		if e != nil {
 			return e
 		}
+		if body.CreditScope == billing.ProductCreditScopeV1 {
+			if e = s.requireProductWallet(r); e != nil {
+				return e
+			}
+		}
 		out, e := a.CreateAPIKey(r.Context(), u.ID, r.PathValue("account"), body)
+		if errors.Is(e, billing.ErrSubscriptionRequired) && body.CreditScope == billing.ProductCreditScopeV1 {
+			fail(w, http.StatusForbidden, "product_membership_expired")
+			return nil
+		}
 		if e != nil {
 			return e
 		}

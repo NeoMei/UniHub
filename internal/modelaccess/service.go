@@ -51,6 +51,9 @@ type Request struct {
 	TaskID          string   `json:"task_id"`
 }
 type Claims struct {
+	CreditScope            string                    `json:"credit_scope,omitempty"`
+	FundingProductID       string                    `json:"funding_product_id,omitempty"`
+	SourceVerified         bool                      `json:"source_verified,omitempty"`
 	NativeCreditConversion *billing.NativeConversion `json:"native_credit_conversion,omitempty"`
 	ModelScope             string                    `json:"model_scope"`
 	PricingSource          string                    `json:"pricing_source"`
@@ -249,7 +252,11 @@ func (s *Service) Verify(ctx context.Context, token, model string) (Claims, erro
 }
 
 func (s *Service) VerifyForInstance(ctx context.Context, token, model, instance string) (Claims, error) {
-	return s.verify(ctx, token, model, instance, true)
+	c, e := s.verify(ctx, token, model, instance, true)
+	if e == nil && c.CreditScope == billing.ProductCreditScopeV1 {
+		_, e = s.nativeAuthorityOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID, c.FundingMode, c.CreditScope)
+	}
+	return c, e
 }
 
 // VerifyWireForInstance authorizes a fixed gateway route for the requested model.
@@ -390,7 +397,7 @@ func (s *Service) verifyScoped(ctx context.Context, token, model, instance strin
 	}
 	var c Claims
 	var data []byte
-	e := s.pool.QueryRow(ctx, `SELECT id,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,instance_id,model_scope,pricing_source,credential_version FROM model_credentials WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&c.ID, &c.ActorID, &c.AccountID, &c.OriginProductID, &data, &c.TaskID, &c.ExpiresAt, &c.FundingMode, &c.Asset, &c.BillingProfileVersion, &c.CredentialKind, &c.InstanceID, &c.ModelScope, &c.PricingSource, &c.CredentialVersion)
+	e := s.pool.QueryRow(ctx, `SELECT id,actor_id,account_id,origin_product_id,models,task_id,expires_at,funding_mode,asset,billing_profile_version,credential_kind,instance_id,model_scope,pricing_source,credential_version,credit_scope FROM model_credentials WHERE token_hash=$1 AND revoked_at IS NULL AND expires_at>now()`, digest(token)).Scan(&c.ID, &c.ActorID, &c.AccountID, &c.OriginProductID, &data, &c.TaskID, &c.ExpiresAt, &c.FundingMode, &c.Asset, &c.BillingProfileVersion, &c.CredentialKind, &c.InstanceID, &c.ModelScope, &c.PricingSource, &c.CredentialVersion, &c.CreditScope)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return c, ErrCredential
 	}
@@ -422,11 +429,25 @@ func (s *Service) verifyScoped(ctx context.Context, token, model, instance strin
 		if c.CredentialKind != "api_key" || !nativeFundingMatches(c.FundingMode, c.Asset, c.PricingSource) {
 			return Claims{}, ErrCredential
 		}
-		if _, e := s.nativeAuthorityOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID, c.FundingMode); e != nil {
+		if c.CreditScope == billing.ProductCreditScopeV1 {
+			if e := s.nativePrincipalOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID); e != nil {
+				return Claims{}, ErrCredential
+			}
+			if enforceRate {
+				c.NativeCreditConversion, e = s.nativeCreditConversionOn(ctx, s.pool, c.OriginProductID, c.CreditScope)
+				if e != nil {
+					return Claims{}, ErrCredential
+				}
+			}
+			c.FundingProductID = c.OriginProductID
+			c.Audience = "llmrouter"
+			return c, nil
+		}
+		if _, e := s.nativeAuthorityOn(ctx, s.pool, c.ActorID, c.AccountID, c.OriginProductID, c.InstanceID, c.FundingMode, c.CreditScope); e != nil {
 			return Claims{}, ErrCredential
 		}
 		if c.Asset == billing.CreditAsset {
-			c.NativeCreditConversion, e = s.nativeCreditConversionOn(ctx, s.pool, c.OriginProductID)
+			c.NativeCreditConversion, e = s.nativeCreditConversionOn(ctx, s.pool, c.OriginProductID, c.CreditScope)
 			if e != nil {
 				return Claims{}, ErrCredential
 			}

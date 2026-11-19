@@ -46,6 +46,9 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 			if e = requireBillingProduct(r, q.Offer.ProductID); e != nil {
 				return e
 			}
+			if originProduct(r) != "" && q.ProductCreditUpgrade != nil && (q.Offer.ProductID != originProduct(r) || !productWalletRequested(r)) {
+				return accounts.ErrForbidden
+			}
 		}
 		x, e := b.CreateCheckout(r.Context(), u.ID, r.PathValue("account"), body)
 		if e != nil {

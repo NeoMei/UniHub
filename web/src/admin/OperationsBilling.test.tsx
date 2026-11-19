@@ -67,9 +67,87 @@ test("unrelated offer edit preserves the approved 12-month add-on validity in PU
   expect(saved?.version).toBe(1);
 });
 
+test('scoped offer creation and publication submit the approved amounts and server draft version', async () => {
+  const submissions: { path: string; body: unknown }[] = [];
+  const offer = { id: 'superwagie-product-credit-v1-addon-2000', product_id: 'superwagie', name: '2,000 积分加量包', account_kind: 'personal', kind: 'addon', period: '',
+    price: '20000000', monthly_credit: '2000000000', credit_scope: 'product_v1', service_amount: '0', compute_amount: '20000000',
+    rank: 0, validity_months: 1, sandbox: false, entitlements: {}, refund_rule: 'unused_only_v1', upgrade_rule: '', status: 'draft' };
+  vi.stubGlobal('fetch', vi.fn(async (path: string, options: RequestInit) => {
+    if (options.method === 'POST') { submissions.push({ path, body: JSON.parse(String(options.body)) }); return json({}); }
+    return json(submissions.length ? { items: [{ ...offer, version: 'fixture-draft-version' }], total: 1 } : { items: [], total: 0 });
+  }));
+  render(<Operations resource="offers" principal={principal} csrf="fixture-csrf" />);
+  fireEvent.click(screen.getByRole('button', { name: '新增商品草稿' }));
+  expect(screen.queryByLabelText(/服务金额/)).toBeNull();
+  fireEvent.change(screen.getByLabelText('积分范围'), { target: { value: 'product_v1' } });
+  const inputs = {
+    商品标识: offer.id, 产品标识: 'superwagie', 商品名称: offer.name,
+    账户类型: 'personal', 类型: 'addon', '价格（百万分之一元）': '20000000', '每月/加量包额度（百万分之一）': '2000000000',
+    '服务金额（百万分之一元）': '0', '算力金额（百万分之一元）': '20000000', 有效月数: '1', 是否测试商品: 'false', 升级规则: 'none', 退款规则: 'unused_only_v1',
+    操作原因: '录入已审核加量包',
+  };
+  Object.entries(inputs).forEach(([label, value]) => fireEvent.change(screen.getByLabelText(label), { target: { value } }));
+  fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+  const publish = await screen.findByRole('button', { name: '发布' });
+  expect(submissions).toEqual([{ path: '/admin/v1/offers', body: { offer, version: '', reason: inputs.操作原因 } }]);
+  expect(screen.getByText('0 / 20000000')).toBeTruthy();
+  fireEvent.click(publish);
+  fireEvent.change(screen.getByLabelText('操作原因'), { target: { value: '核对后发布加量包' } });
+  fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+  await waitFor(() => expect(submissions[1]).toEqual({ path: `/admin/v1/offers/${offer.id}/publish`, body: { version: 'fixture-draft-version', reason: '核对后发布加量包' } }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: '新增商品草稿' }));
+  expect(screen.queryByLabelText(/服务金额/)).toBeNull();
+});
+
+test.each([null, { key: ' value=exact ' }])('editing the name of a scoped draft preserves validity, rules, split, entitlements %j and CAS', async entitlements => {
+  const draft = {
+    id: 'superwagie-product-credit-v1-standard-year', product_id: 'superwagie', name: '标准版', kind: 'membership',
+    account_kind: 'personal', period: 'year', validity_months: 0, rank: 1, price: '1188000000', monthly_credit: '4000000000',
+    credit_scope: 'product_v1', service_amount: '708000000', compute_amount: '480000000',
+    refund_rule: 'unused_only_v1', upgrade_rule: '', status: 'draft', sandbox: false, entitlements,
+  };
+  const version = 'a05304b61ff485acef9a644359fc5f45';
+  let payload: unknown;
+  vi.stubGlobal('fetch', vi.fn(async (_path: string, options: RequestInit) => {
+    if (options.method === 'PUT') { payload = JSON.parse(String(options.body)); return json({}); }
+    return json({ items: [{ ...draft, version, configuration_source: 'deployment' }], total: 1 });
+  }));
+  render(<Operations resource="offers" principal={principal} csrf="fixture-csrf" />);
+  fireEvent.click(await screen.findByRole('button', { name: '编辑草稿' }));
+  fireEvent.change(screen.getByLabelText('商品名称'), { target: { value: '标准版年付' } });
+  fireEvent.change(screen.getByLabelText('操作原因'), { target: { value: '更新商品名称' } });
+  fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+  await waitFor(() => expect(payload).toEqual({ offer: { ...draft, name: '标准版年付' }, version, reason: '更新商品名称' }));
+});
+
 
 const nativeConversion = { version: 'sw-native-cny10-20261109-v1', numerator: '146', denominator: '1', rounding: 'lr-cumulative-ceil-v1' };
 const nativeProfile = { product_id: 'superwagie', version: 2, subscription: { enabled: true }, included_credits: { enabled: true }, addons: { enabled: true }, usage: { enabled: true, require_subscription: true, require_subscription_for_credits: true, funding_modes: ['credits', 'prepaid_cash'], default_funding_mode: 'prepaid_cash', models: [] }, native_credit_conversion: nativeConversion };
+
+test.each([false, true])('scope is explicit or preserved with exact profile policy when already scoped is %s', async alreadyScoped => {
+ const scopedConversion = { ...nativeConversion, version: 'superwagie-product-credit-v1', numerator: '1' };
+ const persisted = { ...nativeProfile, ...(alreadyScoped ? { credit_scope: 'product_v1', native_credit_conversion: scopedConversion } : {}) };
+ let payload: unknown;
+ vi.stubGlobal('fetch', vi.fn(async (_path: string, options: RequestInit) => {
+  if (options.method === 'PUT') { payload = JSON.parse(String(options.body)); return json({}); }
+  return json({ items: [{ ...persisted, status: 'published' }], total: 1 });
+ }));
+ render(<Operations resource="billing-profiles" principal={principal} csrf="fixture-csrf" />);
+ fireEvent.click(await screen.findByRole('button', { name: '更新计费配置' }));
+ if (!alreadyScoped) {
+  fireEvent.change(screen.getByLabelText('积分范围'), { target: { value: 'product_v1' } });
+  fireEvent.change(screen.getByLabelText(/原生 CREDIT 换算操作/), { target: { value: 'update' } });
+  fireEvent.change(screen.getByLabelText(/原生换算版本/), { target: { value: scopedConversion.version } });
+  fireEvent.change(screen.getByLabelText(/原生换算分子/), { target: { value: '1' } });
+ }
+ fireEvent.change(screen.getByLabelText('加量包能力'), { target: { value: 'no' } });
+ fireEvent.change(screen.getByLabelText('操作原因'), { target: { value: '核对积分范围和费率' } });
+ fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+ await waitFor(() => expect(payload).toEqual({ version: 2, reason: '核对积分范围和费率', profile: {
+  ...nativeProfile, credit_scope: 'product_v1', addons: { enabled: false }, native_credit_conversion: scopedConversion,
+ } }));
+});
 
 test.each([[], null, ['fixture-model']])('unrelated profile edits preserve exact tariff, subscription policy, models %j and CAS', async models => {
  const writes: { options: RequestInit; body: typeof nativeProfile & { profile: typeof nativeProfile } }[] = [];

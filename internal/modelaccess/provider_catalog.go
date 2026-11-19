@@ -17,6 +17,7 @@ import (
 var ErrProviderCatalog = errors.New("provider model catalog unavailable")
 
 type ProviderCatalogRequest struct {
+	CreditScope     string `json:"credit_scope,omitempty"`
 	Purpose         string `json:"purpose,omitempty"`
 	OriginProductID string `json:"origin_product_id"`
 	InstanceID      string `json:"instance_id"`
@@ -25,7 +26,8 @@ type ProviderCatalogRequest struct {
 }
 
 type ProviderCatalogResponse struct {
-	NativeCreditProtocol string `json:"native_credit_protocol,omitempty"`
+	CreditScopes         []string `json:"credit_scopes,omitempty"`
+	NativeCreditProtocol string   `json:"native_credit_protocol,omitempty"`
 	ProviderCatalogRequest
 	SchemaVersion  int     `json:"schema_version"`
 	CatalogVersion string  `json:"catalog_version"`
@@ -75,7 +77,11 @@ func (c *providerCatalogClient) Discover(ctx context.Context, r ProviderCatalogR
 		return ProviderCatalogResponse{}, ErrProviderCatalog
 	}
 	var out ProviderCatalogResponse
-	if e = json.Unmarshal(raw, &out); e != nil || out.ProviderCatalogRequest != r || out.SchemaVersion != 1 || out.CatalogVersion == "" || len(out.CatalogVersion) > 256 || out.ModelScope != ScopeLLMRouterAvailable || out.PricingSource != PricingLLMRouterNative || out.Models == nil {
+	expectedPricing := PricingLLMRouterNative
+	if r.CreditScope == billing.ProductCreditScopeV1 {
+		expectedPricing = PricingLLMRouterNativeCredit
+	}
+	if e = json.Unmarshal(raw, &out); e != nil || out.ProviderCatalogRequest != r || out.SchemaVersion != 1 || out.CatalogVersion == "" || len(out.CatalogVersion) > 256 || out.ModelScope != ScopeLLMRouterAvailable || out.PricingSource != expectedPricing || out.Models == nil {
 		return ProviderCatalogResponse{}, ErrProviderCatalog
 	}
 	seen := map[string]bool{}
@@ -94,18 +100,21 @@ func (s *Service) nativeDiscovery(ctx context.Context, actor string, out Discove
 	if s.providerCatalog == nil {
 		return Discovery{}, ErrProviderCatalog
 	}
-	catalog, e := s.providerCatalog.Discover(ctx, ProviderCatalogRequest{OriginProductID: out.OriginProductID, InstanceID: out.InstanceID, ActorID: actor, AccountID: out.AccountID})
+	catalog, e := s.providerCatalog.Discover(ctx, ProviderCatalogRequest{CreditScope: out.CreditScope, OriginProductID: out.OriginProductID, InstanceID: out.InstanceID, ActorID: actor, AccountID: out.AccountID})
 	if e != nil {
 		return Discovery{}, e
 	}
 	if out.PricingSource == PricingLLMRouterNativeCredit {
-		if catalog.NativeCreditProtocol != billing.NativeCreditPricingVersion {
+		if !supportsNativeCredit(catalog, out.CreditScope) {
 			return Discovery{}, ErrProviderCatalog
 		}
-		out.NativeCreditConversion, e = s.nativeCreditConversionOn(ctx, s.pool, out.OriginProductID)
+		out.NativeCreditConversion, e = s.nativeCreditConversionOn(ctx, s.pool, out.OriginProductID, out.CreditScope)
 		if e != nil {
 			return Discovery{}, e
 		}
+	}
+	if out.CreditScope == billing.ProductCreditScopeV1 {
+		out.FundingProductID = out.OriginProductID
 	}
 	out.Models = catalog.Models
 	out.SchemaVersion = catalog.SchemaVersion
@@ -123,8 +132,12 @@ func (s *Service) DiscoverAccountWithScope(ctx context.Context, actor, account, 
 }
 
 func (s *Service) DiscoverAccountWithFundingScope(ctx context.Context, actor, account, product, instance, scope, funding string) (Discovery, error) {
+	return s.DiscoverAccountWithCreditScope(ctx, actor, account, product, instance, scope, funding, "")
+}
+
+func (s *Service) DiscoverAccountWithCreditScope(ctx context.Context, actor, account, product, instance, scope, funding, creditScope string) (Discovery, error) {
 	if scope == "" || scope == ScopeSelected {
-		if funding != "" {
+		if funding != "" || creditScope != "" {
 			return Discovery{}, billing.ErrInvalid
 		}
 		return s.DiscoverAccount(ctx, actor, account, product, instance)
@@ -132,12 +145,12 @@ func (s *Service) DiscoverAccountWithFundingScope(ctx context.Context, actor, ac
 	if scope != ScopeLLMRouterAvailable {
 		return Discovery{}, billing.ErrInvalid
 	}
-	auth, e := s.nativeAuthorityOn(ctx, s.pool, actor, account, product, instance, funding)
+	auth, e := s.nativeAuthorityOn(ctx, s.pool, actor, account, product, instance, funding, creditScope)
 	if e != nil {
 		return Discovery{}, e
 	}
 
-	return s.nativeDiscovery(ctx, actor, Discovery{PricingSource: nativePricingSource(auth.Asset), AccountID: account, InstanceID: instance, OriginProductID: product, ExpiresAt: auth.ExpiresAt})
+	return s.nativeDiscovery(ctx, actor, Discovery{CreditScope: creditScope, PricingSource: nativePricingSource(auth.Asset), AccountID: account, InstanceID: instance, OriginProductID: product, ExpiresAt: auth.ExpiresAt})
 }
 
 // NativeCreditProtocol is a service-authenticated runtime negotiation. No
@@ -145,4 +158,8 @@ func (s *Service) DiscoverAccountWithFundingScope(ctx context.Context, actor, ac
 func (c *providerCatalogClient) NativeCreditProtocol(ctx context.Context, product string) (string, error) {
 	out, e := c.Discover(ctx, ProviderCatalogRequest{OriginProductID: product, Purpose: "native_credit_readiness"})
 	return out.NativeCreditProtocol, e
+}
+
+func (c *providerCatalogClient) NativeCreditCapabilities(ctx context.Context, product string) (ProviderCatalogResponse, error) {
+	return c.Discover(ctx, ProviderCatalogRequest{CreditScope: billing.ProductCreditScopeV1, OriginProductID: product, Purpose: "native_credit_readiness"})
 }

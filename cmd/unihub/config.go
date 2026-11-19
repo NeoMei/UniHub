@@ -42,6 +42,7 @@ type config struct {
 	Production, SandboxCatalog                                    bool
 	Sandbox                                                       bool
 	SigningKey                                                    []byte
+	ProductModelSigningKey                                        []byte
 }
 
 func readConfig(get func(string) string) (config, error) {
@@ -163,6 +164,14 @@ func readConfig(get func(string) string) (config, error) {
 	}
 	if len(c.ProductRuntime) > 0 && c.PublicURL == "" {
 		return c, fmt.Errorf("product runtime requires canonical PUBLIC_URL")
+	}
+	c.ProductModelSigningKey = []byte(get("PRODUCT_MODEL_PROOF_SIGNING_KEY"))
+	for _, service := range c.ProductRuntime {
+		for _, op := range service.AllowedOps {
+			if op == "model:authorize" && len(c.ProductModelSigningKey) < 32 {
+				return c, fmt.Errorf("model:authorize requires PRODUCT_MODEL_PROOF_SIGNING_KEY with at least 32 bytes")
+			}
+		}
 	}
 	adminID := regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	for _, id := range strings.Split(get("USER_ADMIN_IDS"), ",") {

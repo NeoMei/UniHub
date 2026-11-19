@@ -30,6 +30,7 @@ type UsagePolicy struct {
 	DefaultFundingMode            string   `json:"default_funding_mode"`
 }
 type BillingProfile struct {
+	CreditScope            string            `json:"credit_scope,omitempty"`
 	NativeCreditConversion *NativeConversion `json:"native_credit_conversion,omitempty"`
 	ProductID              string            `json:"product_id"`
 	Version                int64             `json:"version"`
@@ -83,7 +84,10 @@ func (p BillingProfile) Validate() error {
 	if p.Addons.Enabled && !modes[FundingCredits] {
 		return ErrInvalid
 	}
-	if p.NativeCreditConversion != nil && (p.ProductID != "superwagie" || !p.Usage.Enabled || !modes[FundingCredits] || !validNativeCreditConversion(*p.NativeCreditConversion)) {
+	if p.CreditScope != "" && (p.CreditScope != ProductCreditScopeV1 || !p.Usage.RequireSubscription && !p.Usage.RequireSubscriptionForCredits || !exactProductCreditConversion(p.NativeCreditConversion)) {
+		return ErrInvalid
+	}
+	if p.NativeCreditConversion != nil && (p.ProductID != "superwagie" && p.CreditScope != ProductCreditScopeV1 || !p.Usage.Enabled || !modes[FundingCredits] || !validNativeCreditConversion(*p.NativeCreditConversion)) {
 		return ErrInvalid
 	}
 	return nil
@@ -248,6 +252,9 @@ func (s *Service) offerForSaleOn(ctx context.Context, q accounts.Querier, o Offe
 	p, e := s.ProfileOn(ctx, q, o.ProductID)
 	if e != nil {
 		return e
+	}
+	if o.CreditScope == ProductCreditScopeV1 && p.CreditScope != o.CreditScope {
+		return accounts.ErrForbidden
 	}
 	n, e := integer(o.MonthlyCredit, false)
 	if e != nil {

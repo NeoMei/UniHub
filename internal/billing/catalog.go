@@ -32,7 +32,7 @@ func validateOffer(o Offer) error {
 	if o.UpgradeRule != "" && o.UpgradeRule != "remaining_term_prorata_v1" {
 		return ErrInvalid
 	}
-	return nil
+	return validateProductCreditOffer(o)
 }
 func (s *Service) SaveOffer(ctx context.Context, actor string, o Offer) (Offer, error) {
 	if e := s.operator(actor); e != nil {

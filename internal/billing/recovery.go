@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
@@ -21,6 +23,7 @@ type effect struct {
 	RuntimeAdjustment    *RuntimeAdjustment `json:"runtime_adjustment,omitempty"`
 	RuntimeRequestDigest string             `json:"runtime_request_digest,omitempty"`
 	Order                *Order             `json:"order,omitempty"`
+	ReplacedOrder        *Order             `json:"replaced_order,omitempty"`
 	Subscription         *Subscription      `json:"subscription,omitempty"`
 	Batches              []Batch            `json:"batches,omitempty"`
 	Call                 *Call              `json:"call,omitempty"`
@@ -100,6 +103,11 @@ func (s *Service) apply(ctx context.Context, c *pgxpool.Conn, x command, ledgerI
 			return e
 		}
 	}
+	if x.Effect.ReplacedOrder != nil {
+		if e = saveOrder(ctx, tx, *x.Effect.ReplacedOrder); e != nil {
+			return e
+		}
+	}
 	if x.Effect.Subscription != nil {
 		if e = saveSubscription(ctx, tx, *x.Effect.Subscription); e != nil {
 			return e
@@ -109,10 +117,42 @@ func (s *Service) apply(ctx context.Context, c *pgxpool.Conn, x command, ledgerI
 		if e = saveBatch(ctx, tx, b); e != nil {
 			return e
 		}
+		if b.CreditScope == ProductCreditScopeV1 && !b.Frozen && (x.Kind == "monthly" || x.Kind == "fulfillment") {
+			if e = queueProductCreditAutoAddon(ctx, tx, b.AccountID, b.ProductID, b.ID, "funded", 0); e != nil {
+				return e
+			}
+		}
 	}
-	if x.Effect.Call != nil {
-		if e = saveCall(ctx, tx, *x.Effect.Call); e != nil {
+	if x.Kind == "expire" {
+		b, e := load[Batch](ctx, tx, `SELECT snapshot FROM billing_batches WHERE id=$1 AND account_id=$2`, x.Key, x.Account)
+		if e != nil {
 			return e
+		}
+		if b.CreditScope == ProductCreditScopeV1 {
+			if e = queueProductCreditAutoAddon(ctx, tx, b.AccountID, b.ProductID, b.ID, "expired", 0); e != nil {
+				return e
+			}
+		}
+	}
+	if call := x.Effect.Call; call != nil {
+		if e = saveCall(ctx, tx, *call); e != nil {
+			return e
+		}
+		if call.CreditScope == ProductCreditScopeV1 {
+			kind := ""
+			switch {
+			case x.Kind == "settle" && call.Status == "SETTLED" && call.Charged != "0":
+				kind = "settled"
+			case (x.Kind == "settle" || x.Kind == "release") && slices.ContainsFunc(x.Ledger.Postings, func(p ledger.Posting) bool {
+				return p.Asset == CreditAsset && strings.HasSuffix(p.Destination, ":expired")
+			}):
+				kind = "expired"
+			}
+			if kind != "" {
+				if e = queueProductCreditAutoAddon(ctx, tx, call.AccountID, call.OriginProductID, call.CallID, kind, 0); e != nil {
+					return e
+				}
+			}
 		}
 	}
 	if _, e = tx.Exec(ctx, `UPDATE billing_commands SET status='APPLIED',ledger_transaction_id=$2 WHERE id=$1`, x.ID, ledgerID); e != nil {
@@ -370,7 +410,14 @@ func (s *Service) Maintain(ctx context.Context, now time.Time) (MaintenanceResul
 	if e != nil {
 		return out, e
 	}
+	runtimeReadiness := map[string]bool{}
 	for _, sub := range subs {
+		if sub.Offer.CreditScope == ProductCreditScopeV1 && sub.Status == "active" && !now.Before(sub.PaidThrough) {
+			if _, seen := runtimeReadiness[sub.ProductID]; !seen {
+				ready, _ := s.NativeCheckoutReadiness(ctx, "", "", sub.ProductID)
+				runtimeReadiness[sub.ProductID] = ready.Ready && ready.CreditScope == ProductCreditScopeV1
+			}
+		}
 		e = s.locked(ctx, sub.AccountID, func(c *pgxpool.Conn) error {
 			if e := s.clear(ctx, c, sub.AccountID); e != nil {
 				return e
@@ -383,7 +430,7 @@ func (s *Service) Maintain(ctx context.Context, now time.Time) (MaintenanceResul
 				return nil
 			}
 			if !now.Before(current.PaidThrough) {
-				return s.renewLocked(ctx, c, current, now.UTC())
+				return s.renewLocked(ctx, c, current, now.UTC(), runtimeReadiness[current.ProductID])
 			}
 			return s.monthlyLocked(ctx, c, current, now.UTC())
 		})
@@ -409,7 +456,10 @@ func (s *Service) Maintain(ctx context.Context, now time.Time) (MaintenanceResul
 			failures = errors.Join(failures, e)
 		}
 	}
-	return out, failures
+	autoAddons, autoErr := s.maintainProductCreditAutoAddons(ctx, now.UTC())
+	out.Processed += autoAddons.Processed
+	out.Pending += autoAddons.Pending
+	return out, errors.Join(failures, autoErr)
 }
 
 func (s *Service) validateNewAllocation(ctx context.Context, q accounts.Querier, x command) error {
@@ -428,8 +478,13 @@ func (s *Service) validateNewAllocation(ctx context.Context, q accounts.Querier,
 			if e != nil {
 				return e
 			}
-			if b.AccountID != x.Account || b.Frozen || now.Before(b.StartsAt) || !now.Before(b.ExpiresAt) {
+			if !batchFundsCall(b, *x.Effect.Call) || b.Frozen || now.Before(b.StartsAt) || !now.Before(b.ExpiresAt) {
 				return ErrInvalid
+			}
+			if x.Effect.Call.CreditScope == ProductCreditScopeV1 {
+				if e = validateProductCreditBatchForHold(ctx, q, b); e != nil {
+					return e
+				}
 			}
 			break
 		}

@@ -45,3 +45,38 @@ func TestProviderCatalogFailsClosedOnWrongOwnerAndMalformedResponse(t *testing.T
 		})
 	}
 }
+
+func TestScopedProviderCatalogRejectsLegacyPricingAndPreservesTariffRevision(t *testing.T) {
+	for _, pricingSource := range []string{PricingLLMRouterNative, PricingLLMRouterNativeCredit} {
+		t.Run(pricingSource, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req ProviderCatalogRequest
+				if e := json.NewDecoder(r.Body).Decode(&req); e != nil {
+					t.Error(e)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(ProviderCatalogResponse{
+					ProviderCatalogRequest: req, SchemaVersion: 1, CatalogVersion: "model-tariff-revision", ModelScope: ScopeLLMRouterAvailable, PricingSource: pricingSource,
+					NativeCreditProtocol: "lr-native-credit-v1", CreditScopes: []string{"product_v1"},
+					Models: []Model{{ID: "m", CapabilityMetadata: json.RawMessage(`{"operations":[{"public_tariff":{"asset":"CREDIT/6","revision":"current-revision"}}]}`)}},
+				})
+			}))
+			defer server.Close()
+			client, e := NewProviderCatalog(server.URL+"/internal/v1/provider-catalog", strings.Repeat("t", 32))
+			if e != nil {
+				t.Fatal(e)
+			}
+			wantScope := ProviderCatalogRequest{CreditScope: "product_v1", OriginProductID: "agentwiki", InstanceID: "default", ActorID: "actor", AccountID: "account"}
+			got, e := client.Discover(context.Background(), wantScope)
+			if pricingSource == PricingLLMRouterNative {
+				if !errors.Is(e, ErrProviderCatalog) {
+					t.Fatalf("accepted legacy catalog for scoped request: %+v %v", got, e)
+				}
+				return
+			}
+			if e != nil || len(got.Models) != 1 || !strings.Contains(string(got.Models[0].CapabilityMetadata), "current-revision") {
+				t.Fatalf("scoped provider tariff was lost: %+v %v", got, e)
+			}
+		})
+	}
+}

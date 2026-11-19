@@ -118,11 +118,13 @@ func run(args []string, getenv func(string) string, euid int) error {
 		return e
 	}
 	var commandID, commandStatus, transactionID string
+	var noPostings bool
 	var originalCommands json.RawMessage
-	if e = pool.QueryRow(ctx, `SELECT w.release_command_id,c.status,COALESCE(c.ledger_transaction_id,''),w.original_commands FROM billing_platform_fault_waivers w JOIN billing_commands c ON c.id=w.release_command_id WHERE w.case_id=$1 AND w.call_id=$2 AND w.operator_id=$3 AND w.approval_sha256=$4`, approval.CaseID, approval.CallID, operator, *digest).Scan(&commandID, &commandStatus, &transactionID, &originalCommands); e != nil {
+	if e = pool.QueryRow(ctx, `SELECT w.release_command_id,c.status,COALESCE(c.ledger_transaction_id,''),COALESCE(c.command->'postings'='[]'::jsonb,false),w.original_commands FROM billing_platform_fault_waivers w JOIN billing_commands c ON c.id=w.release_command_id WHERE w.case_id=$1 AND w.call_id=$2 AND w.operator_id=$3 AND w.approval_sha256=$4`, approval.CaseID, approval.CallID, operator, *digest).Scan(&commandID, &commandStatus, &transactionID, &noPostings, &originalCommands); e != nil {
 		return e
 	}
-	if call.Status != "RELEASED" || call.Charged != "0" || commandStatus != "APPLIED" || transactionID == "" {
+	zero := approval.Held == "0"
+	if call.Status != "RELEASED" || call.Charged != "0" || commandStatus != "APPLIED" || zero != (transactionID == "") || zero != noPostings {
 		return errors.New("waiver remains unresolved; inspect its durable release command")
 	}
 	return json.NewEncoder(os.Stdout).Encode(map[string]any{"case_id": approval.CaseID, "call_id": call.CallID, "status": call.Status, "charged": call.Charged, "returned_amount": approval.Held, "asset": call.ChargeAsset, "provider_state": approval.ProviderState, "approval_sha256": *digest, "release_command_id": commandID, "release_command_status": commandStatus, "release_ledger_transaction_id": transactionID, "release_reference": "unihub:billing:" + commandID, "original_hold_commands": originalCommands})

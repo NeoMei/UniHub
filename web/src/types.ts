@@ -22,6 +22,7 @@ export type NativeCreditConversion = {
   rounding: string;
 };
 export type BillingProfile = {
+  credit_scope?: string;
   native_credit_conversion?: NativeCreditConversion | null;
   product_id: string;
   version: number;

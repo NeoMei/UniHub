@@ -47,6 +47,9 @@ func (s *Service) RefundCheckout(ctx context.Context, actor, account, checkout, 
 		if e != nil {
 			return e
 		}
+		if o.UpgradeReturn != nil {
+			return ErrConflict
+		}
 		if o.PaymentStatus != "PAID" {
 			return ErrPending
 		}
@@ -295,10 +298,8 @@ func (s *Service) recoverCheckoutRefund(ctx context.Context, account, checkout s
 					posts = append(posts, ledger.Posting{Source: BatchAddress(b.ID, "available"), Destination: BatchAddress(b.ID, "withdrawn"), Asset: CreditAsset, Amount: n})
 				}
 			}
-			source := externalReceived(x.ID)
 			var sub *Subscription
 			if o.FulfillmentStatus == "FULFILLED" {
-				source = "commercial:revenue:" + o.ProductID
 				if o.SubscriptionID != "" {
 					value, e := load[Subscription](ctx, c, `SELECT snapshot FROM billing_subscriptions WHERE id=$1`, o.SubscriptionID)
 					if e != nil {
@@ -310,7 +311,16 @@ func (s *Service) recoverCheckoutRefund(ctx context.Context, account, checkout s
 				}
 			}
 			amount, _ := integer(x.Amount, true)
-			posts = append(posts, ledger.Posting{Source: source, Destination: "commercial:external:refunded:" + x.ID, Asset: wallet.Asset, Amount: amount})
+			destination := "commercial:external:refunded:" + x.ID
+			if o.FulfillmentStatus == "FULFILLED" {
+				cashRefund, e := orderRefundPostings(o, []orderCashAllocation{{address: destination, amount: amount}})
+				if e != nil {
+					return e
+				}
+				posts = append(posts, cashRefund...)
+			} else {
+				posts = append(posts, ledger.Posting{Source: externalReceived(x.ID), Destination: destination, Asset: wallet.Asset, Amount: amount})
+			}
 			o.RefundStatus = "REFUNDED"
 			o.FulfillmentStatus = "CANCELED"
 			tx, e := c.Begin(ctx)

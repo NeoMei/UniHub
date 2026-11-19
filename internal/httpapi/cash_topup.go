@@ -28,6 +28,18 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		}
 		body.ReturnURL = cashTopupReturnURL(r)
 		body.UnifiedWallet = cashTopupUsesUnifiedWallet(r, body.ProductID)
+		if productWalletRequested(r) {
+			if body.ProductID != originProduct(r) {
+				return accounts.ErrForbidden
+			}
+			if e := s.requireProductWallet(r); e != nil {
+				return e
+			}
+			policy, _ := productPolicy(r)
+			body.UnifiedWallet = true
+			body.ReturnURL = policy.AccountSettingsURL
+			body.RequireQR = body.Provider == "alipay" && r.Header.Get("X-UniHub-Alipay-QR") == "1"
+		}
 		x, e := c.Create(r.Context(), u.ID, r.PathValue("account"), body)
 		if e != nil {
 			return e

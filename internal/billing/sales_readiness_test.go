@@ -126,7 +126,7 @@ func TestCreditSaleUpgradeAndRenewalRecheckReadiness(t *testing.T) {
 		t.Fatal(e)
 	}
 	now := dt("2024-03-01T12:00:00Z")
-	e = f.s.locked(ctx, f.account, func(c *pgxpool.Conn) error { return f.s.renewLocked(ctx, c, subs[0], now) })
+	e = f.s.locked(ctx, f.account, func(c *pgxpool.Conn) error { return f.s.renewLocked(ctx, c, subs[0], now, false) })
 	if e != ErrCreditRatesUnavailable {
 		t.Fatalf("renewal: %v", e)
 	}
@@ -152,7 +152,7 @@ func TestCreditSalePendingRenewalReplaysAfterRetirement(t *testing.T) {
 	now := dt("2024-03-01T12:00:00Z")
 	f.s.now = func() time.Time { return now }
 	f.s.ledger = &responseLoss{Ledger: f.l, remaining: 1}
-	e = f.s.locked(ctx, f.account, func(c *pgxpool.Conn) error { return f.s.renewLocked(ctx, c, subs[0], now) })
+	e = f.s.locked(ctx, f.account, func(c *pgxpool.Conn) error { return f.s.renewLocked(ctx, c, subs[0], now, false) })
 	if !errors.Is(e, ErrPending) {
 		t.Fatalf("expected persisted pending renewal: %v", e)
 	}
@@ -160,7 +160,7 @@ func TestCreditSalePendingRenewalReplaysAfterRetirement(t *testing.T) {
 		t.Fatal(e)
 	}
 	f.s.ledger = f.l
-	if e = f.s.locked(ctx, f.account, func(c *pgxpool.Conn) error { return f.s.renewLocked(ctx, c, subs[0], now) }); e != nil {
+	if e = f.s.locked(ctx, f.account, func(c *pgxpool.Conn) error { return f.s.renewLocked(ctx, c, subs[0], now, false) }); e != nil {
 		t.Fatalf("original renewal recovery blocked: %v", e)
 	}
 	orders, e := f.s.Orders(ctx, f.actor, f.account)

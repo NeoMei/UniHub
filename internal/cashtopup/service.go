@@ -45,6 +45,7 @@ type Request struct {
 	Key           string `json:"-"`
 	ReturnURL     string `json:"-"`
 	UnifiedWallet bool   `json:"-"`
+	RequireQR     bool   `json:"-"`
 }
 
 type Checkout struct {
@@ -223,6 +224,9 @@ func (s *Service) Create(ctx context.Context, actor, account string, r Request) 
 		if r.ReturnURL != "" {
 			parts = append(parts, r.ReturnURL)
 		}
+		if r.RequireQR {
+			parts = append(parts, "require_qr")
+		}
 		d := digest(parts)
 		rec, err := load(ctx, c, account, r.Key)
 		switch {
@@ -272,7 +276,7 @@ func (s *Service) Create(ctx context.Context, actor, account string, r Request) 
 			returnURL = u.String()
 		}
 		session, err := p.Create(ctx, payments.Request{OrderID: rec.ID, Amount: rec.Amount,
-			Description: "Cash wallet topup", ExpiresAt: rec.ExpiresAt, ReturnURL: returnURL})
+			Description: "Cash wallet topup", ExpiresAt: rec.ExpiresAt, ReturnURL: returnURL, RequireQR: r.RequireQR})
 		if err != nil {
 			return err
 		}
