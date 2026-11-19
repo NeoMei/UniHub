@@ -8,6 +8,11 @@ import { RateEditor } from './RateEditor';
 import { can, encoded, go, text } from './types';
 import type { AdminPrincipal, Row } from './types';
 import type { BillingProfile } from '../types';
+const productCreditScope = 'product_v1';
+const creditScopeField = {
+ key: 'credit_scope', label: '积分范围', options: ['legacy', productCreditScope],
+ optionLabels: { legacy: '旧版共享积分', [productCreditScope]: '产品积分（product_v1）' },
+};
 const columns:Record<string,Column[]>={
  accounts:[['name','账户'],['kind','类型'],['id','账户 ID'],['management_recovery_required','待恢复管理'],['created_at','建立时间']],
  'api-keys':[['name','名称'],['user_id','用户'],['account_id','付费账户'],['product_id','产品'],['instance_id','实例'],['status','状态'],['expires_at','到期时间']],
@@ -19,9 +24,9 @@ const columns:Record<string,Column[]>={
  subscriptions:[['id','订阅'],['account_id','账户'],['product_id','产品'],['offer.name','套餐'],['paid_through','有效期至'],['status','状态']],
  'credit-batches':[['id','额度批次'],['account_id','账户'],['product_id','产品'],['available','可用额度（百万分之一）'],['reserved','预占额度（百万分之一）'],['consumed','已用额度（百万分之一）'],['expires_at','到期']],
  products:[['name','产品'],['id','标识'],['enabled','启用'],['configuration_source','配置来源']],
- offers:[['name','商品'],['id','标识'],['product_id','产品'],['kind','类型'],['period','周期'],['price','价格（百万分之一元）'],['monthly_credit','额度（百万分之一）'],['status','状态']],
+ offers:[['name','商品'],['id','标识'],['product_id','产品'],['kind','类型'],['period','周期'],['price','价格（百万分之一元）'],['credit_scope','积分范围'],['service_amount','服务 / 算力（百万分之一元）',r=>r.credit_scope===productCreditScope?`${text(r.service_amount)} / ${text(r.compute_amount)}`:undefined],['monthly_credit','额度（百万分之一）'],['status','状态']],
  rates:[['id','费率版本'],['metered.operation','操作',r=>r.semantics==='exclusive_v1'?'chat':(r.metered as Row|undefined)?.operation],['semantics','计价协议'],['model','模型'],['asset','资产'],['input.numerator','输入分子'],['input.denominator','输入分母'],['metered.terms','原生计量价格',r=>{const terms=(r.metered as Row|undefined)?.terms;return Array.isArray(terms)?terms.map((term:Row)=>{const price=term.price as Row|undefined;return `${text(term.key)}: ${text(price?.numerator)}/${text(price?.denominator)} ${text(term.unit)}${term.provider_unit?` (${text(term.provider_unit)})`:''}`;}).join('; '):undefined;}],['status','状态']],
- 'billing-profiles':[['product_id','产品'],['version','版本'],['subscription.enabled','订阅'],['included_credits.enabled','赠送额度'],['addons.enabled','加量包'],['usage.enabled','按量'],['usage.default_funding_mode','默认资金模式']],
+ 'billing-profiles':[['product_id','产品'],['version','版本'],['credit_scope','积分范围'],['subscription.enabled','订阅'],['included_credits.enabled','赠送额度'],['addons.enabled','加量包'],['usage.enabled','按量'],['usage.default_funding_mode','默认资金模式']],
  'usage-budgets':[['account_id','账户'],['product_id','产品'],['instance_id','实例'],['asset','资产'],['max_total','总上限（百万分之一）'],['max_per_call','单次上限（百万分之一）'],['version','版本']],
  'audit-events':[['created_at','时间'],['actor_id','操作者'],['target_id','目标'],['account_id','账户'],['action','动作'],['reason','原因'],['source','来源']],
 };
@@ -46,7 +51,7 @@ export function Operations({resource,principal,csrf,detail}:{resource:string;pri
   if(resource==='refunds'&&finance&&row.refund_status==='MANUAL_REVIEW')return <div className="admin-row-actions">{row.payment_source==='external'&&row.fulfillment_status!=='FULFILLED'?<Notice>该订单已收款但尚未履约，仍需完成履约或确认原路退款；不能以拒绝申请解除待核对状态。</Notice>:<Mutation title="拒绝退款申请" path={`/admin/v1/accounts/${encoded(row.account_id)}/orders/${encoded(row.id)}/refund-review`} body={{version:row.version,decision:'reject'}} csrf={csrf} onSaved={refresh}><Notice>拒绝本次申请并解除该订单的退款冻结。原支付记录保留。</Notice></Mutation>}{row.payment_source==='external'?<Mutation title="批准未使用订单全额原路退款" path={`/admin/v1/accounts/${encoded(row.account_id)}/orders/${encoded(row.id)}/refund-review`} body={{version:row.version,decision:'approve'}} csrf={csrf} onSaved={refresh} danger><Notice>仅限未使用且无预留额度的订单，按原支付渠道退回全额。已使用、仍有预留或订阅已变更时无法批准。提交后等待支付渠道确认，结果未知时继续核对原退款。</Notice><Info row={row} fields={[["id","原订单"],["account_id","原付费账户"],["amount","全额退款金额（百万分之一元）"]]}/></Mutation>:null}</div>;
   return null;
  }
- return <><div className="admin-page-heading"><div><h1>{titles[resource]||'平台记录'}</h1><p>{resource==='audit-events'?'按真实操作者和业务关联追踪操作。':resource==='calls'?'托管模型与原生产品调用按来源、资产和资金归属分别列示；原生产品自行计价。':resource==='api-keys'||resource==='rates'?'这里只管理 UniHub 托管模型 Key 和费率。原产品 Key、价格和历史资产仍由原产品管理。':resource==='transactions'?'待核实操作只能按原 ID 和原始引用核对；UNKNOWN 不代表成功，请勿重复付款。':'全平台范围 · 按条件检索并查看当前记录。'}</p></div>{resource==='offers'&&finance?<OfferEditor csrf={csrf} onSaved={refresh}/>:null}{resource==='rates'&&finance?<RateEditor csrf={csrf} onSaved={refresh}/>:null}{resource==='usage-budgets'&&finance?<BudgetEditor csrf={csrf} onSaved={refresh}/>:null}{resource==='transactions'&&can(principal,'admins:manage')?<ActionForm title="跨账户守恒划款" path="/admin/v1/transfers" csrf={csrf} onSaved={refresh} fields={[{key:'account_id',label:'目标账户 ID'},{key:'product_id',label:'目标产品 ID（留空为统一钱包）',required:false},{key:'amount_yuan',label:'金额（元）'}]} build={v=>({account_id:v.account_id,product_id:v.product_id||'',amount:parseCash(v.amount_yuan)})}/>:null}</div>
+ return <><div className="admin-page-heading"><div><h1>{titles[resource]||'平台记录'}</h1><p>{resource==='audit-events'?'按真实操作者和业务关联追踪操作。':resource==='calls'?'托管模型与原生产品调用按来源、资产和资金归属分别列示；原生产品自行计价。':resource==='api-keys'||resource==='rates'?'这里只管理 UniHub 托管模型 Key 和费率。原产品 Key、价格和历史资产仍由原产品管理。':resource==='transactions'?'待核实操作只能按原 ID 和原始引用核对；UNKNOWN 不代表成功，请勿重复付款。':'全平台范围 · 按条件检索并查看当前记录。'}</p></div>{resource==='offers'&&finance?<OfferEditor key={revision} csrf={csrf} onSaved={refresh}/>:null}{resource==='rates'&&finance?<RateEditor csrf={csrf} onSaved={refresh}/>:null}{resource==='usage-budgets'&&finance?<BudgetEditor csrf={csrf} onSaved={refresh}/>:null}{resource==='transactions'&&can(principal,'admins:manage')?<ActionForm title="跨账户守恒划款" path="/admin/v1/transfers" csrf={csrf} onSaved={refresh} fields={[{key:'account_id',label:'目标账户 ID'},{key:'product_id',label:'目标产品 ID（留空为统一钱包）',required:false},{key:'amount_yuan',label:'金额（元）'}]} build={v=>({account_id:v.account_id,product_id:v.product_id||'',amount:parseCash(v.amount_yuan)})}/>:null}</div>
  <DataList key={resource+window.location.search} endpoint={resource} columns={fields} actions={actions} refresh={revision} initialFilters={query} exportResource={['accounts','orders','calls','audit-events'].includes(resource)&&can(principal,'export:read')?resource:undefined}/></>;
 }
 function AccountDetail({id,principal,csrf}:{id:string;principal:AdminPrincipal;csrf?:string}) {
@@ -106,8 +111,59 @@ const metricNames:Record<string,string>={users:'平台用户',total_users:'平�
 function SystemStatus(){const [rev,setRev]=useState(0);const r=useResource<Row>('/admin/v1/system-status',rev);return <><h1>系统状态</h1><button onClick={()=>setRev(v=>v+1)}>刷新状态</button>{r.error?<Notice kind="error">{r.error}</Notice>:r.loading?<p role="status">正在检查…</p>:<div className="admin-status-grid">{Object.entries(r.data||{}).map(([key,v])=><Panel key={key} title={metricNames[key]||key}>{v&&typeof v==='object'?<Info row={v as Row} fields={Object.keys(v).map(k=>[k,metricNames[k]||k])}/>:<p>{text(v)}</p>}</Panel>)}</div>}</>;}
 function Wallets(){const [account,setAccount]=useState(new URLSearchParams(window.location.search).get('account_id')||'');const [selected,setSelected]=useState(account);return <><h1>钱包与资金</h1><p>余额由账本实时提供；人民币现金与模型额度分别显示。</p><form className="admin-filters" onSubmit={e=>{e.preventDefault();setSelected(account);}}><label>付费账户 ID<input required value={account} onChange={e=>setAccount(e.target.value)}/></label><button>查询余额</button></form>{selected?<DataList key={selected} endpoint="wallets" initialFilters={{account_id:selected}} columns={[["product_id","产品"],["asset","资产"],["amount","余额（百万分之一单位）"],["available","可用（百万分之一单位）"]]}/>:<Panel><p>选择具体账户查询权威余额。</p></Panel>}</>;}
 function OfferEditor({row,csrf,onSaved}:{row?:Row;csrf?:string;onSaved:()=>void}) {
- const initial={...Object.fromEntries(Object.entries(row||{}).filter(([,v])=>typeof v==='string').map(([k,v])=>[k,String(v)])),validity_months:row?.validity_months===undefined?'':String(row.validity_months),entitlements:row?.entitlements&&typeof row.entitlements==='object'?Object.entries(row.entitlements as Row).map(([k,v])=>`${k}=${String(v)}`).join('\n'):'',refund_rule:String(row?.refund_rule||''),upgrade_rule:String(row?.upgrade_rule||'remaining_term_prorata_v1')};
- return <ActionForm title={row?'编辑草稿':'新增商品草稿'} path={row?`/admin/v1/offers/${encoded(row.id)}`:'/admin/v1/offers'} method={row?'PUT':'POST'} csrf={csrf} onSaved={onSaved} initial={initial} fields={[{key:'id',label:'商品标识'},{key:'product_id',label:'产品标识'},{key:'name',label:'商品名称'},{key:'account_kind',label:'账户类型',options:['personal','team','both']},{key:'kind',label:'类型',options:['membership','addon']},{key:'period',label:'周期',options:['month','year'],required:false},{key:'price',label:'价格（百万分之一元）'},{key:'monthly_credit',label:'每月/加量包额度（百万分之一）'},{key:'rank',label:'升级等级',type:'number',required:false},{key:'validity_months',label:'有效月数',type:'number',required:false},{key:'sandbox',label:'是否测试商品',options:['true','false']},{key:'entitlements',label:'权益配置（每行 key=value）',type:'textarea',required:false},{key:'refund_rule',label:'退款规则',options:['unused_only_v1',''],required:false},{key:'upgrade_rule',label:'升级规则',options:['remaining_term_prorata_v1',''],required:false}]} build={v=>({offer:{id:v.id,product_id:v.product_id,name:v.name,account_kind:v.account_kind,kind:v.kind,period:v.period||'',price:v.price,monthly_credit:v.monthly_credit,rank:Number(v.rank||0),validity_months:Number(v.validity_months||1),entitlements:Object.fromEntries(v.entitlements.split(/\r?\n/).map(line=>line.trim()).filter(Boolean).map(line=>{const [key,...rest]=line.split('=');return [key.trim(),rest.join('=').trim()];}).filter(([key])=>key)),upgrade_rule:v.upgrade_rule||'',refund_rule:v.refund_rule||'',status:'draft',sandbox:v.sandbox==='true'},version:row?.version||''})}/>;
+ const existingEntitlements = row ? row.entitlements ?? null : {};
+ const initial = {
+  ...Object.fromEntries(Object.entries(row ?? {}).filter(([, value]) => typeof value === 'string').map(([key, value]) => [key, String(value)])),
+  credit_scope: String(row?.credit_scope || 'legacy'),
+  rank: String(row?.rank ?? ''),
+  validity_months: String(row?.validity_months ?? ''),
+  sandbox: String(row?.sandbox ?? false),
+  entitlements: Object.entries(existingEntitlements ?? {}).map(([key, value]) => `${key}=${String(value)}`).join('\n'),
+  refund_rule: String(row?.refund_rule || 'none'),
+  upgrade_rule: row ? String(row.upgrade_rule || 'none') : 'remaining_term_prorata_v1',
+ };
+ return <ActionForm key={String(row?.version ?? '')} title={row?'编辑草稿':'新增商品草稿'} path={row?`/admin/v1/offers/${encoded(row.id)}`:'/admin/v1/offers'} method={row?'PUT':'POST'} csrf={csrf} onSaved={onSaved} initial={initial}
+  fields={values => [
+   {key:'id',label:'商品标识'},
+   {key:'product_id',label:'产品标识'},
+   {key:'name',label:'商品名称'},
+   {key:'account_kind',label:'账户类型',options:['personal','team','both']},
+   {key:'kind',label:'类型',options:['membership','addon']},
+   {key:'period',label:'周期',options:['month','year'],required:false},
+   creditScopeField,
+   {key:'price',label:'价格（百万分之一元）'},
+   ...(values.credit_scope === productCreditScope ? [
+    {key:'service_amount',label:'服务金额（百万分之一元）'},
+    {key:'compute_amount',label:'算力金额（百万分之一元）'},
+   ] : []),
+   {key:'monthly_credit',label:'每月/加量包额度（百万分之一）'},
+   {key:'rank',label:'升级等级',type:'number',required:false},
+   {key:'validity_months',label:'有效月数',type:'number',required:false},
+   {key:'sandbox',label:'是否测试商品',options:['true','false']},
+   {key:'entitlements',label:'权益配置（每行 key=value）',type:'textarea',required:false},
+   {key:'refund_rule',label:'退款规则',options:['unused_only_v1','none'],optionLabels:{none:'不适用'},required:false},
+   {key:'upgrade_rule',label:'升级规则',options:['remaining_term_prorata_v1','none'],optionLabels:{none:'不适用'},required:false},
+  ]}
+  build={v => {
+   const scoped = v.credit_scope === productCreditScope;
+   const entitlements = v.entitlements === initial.entitlements ? existingEntitlements : Object.fromEntries(
+    v.entitlements.split(/\r?\n/).map(line => {
+     const [key, ...value] = line.split('=');
+     return [key.trim(), value.join('=').trim()];
+    }).filter(([key]) => key),
+   );
+   return {
+    offer: {
+     id: v.id, product_id: v.product_id, name: v.name, account_kind: v.account_kind, kind: v.kind,
+     period: v.period || '', price: v.price, monthly_credit: v.monthly_credit,
+     ...(scoped ? {credit_scope: productCreditScope, service_amount: v.service_amount, compute_amount: v.compute_amount} : {}),
+     rank: Number(v.rank || 0), validity_months: Number(v.validity_months || (scoped && v.kind === 'membership' ? 0 : 1)),
+     entitlements, refund_rule: v.refund_rule === 'none' ? '' : v.refund_rule || '',
+     upgrade_rule: v.upgrade_rule === 'none' ? '' : v.upgrade_rule || '', status: 'draft', sandbox: v.sandbox === 'true',
+    },
+    version: row?.version ?? '',
+   };
+  }}/>;
 }
 function ProfileEditor({row,csrf,onSaved}:{row:Row;csrf?:string;onSaved:()=>void}) {
  // The admin list adds audit metadata to the profile and permits implicit legacy rows.
@@ -116,11 +172,31 @@ function ProfileEditor({row,csrf,onSaved}:{row:Row;csrf?:string;onSaved:()=>void
  const conversion=current.native_credit_conversion;
  const yes=(v:unknown)=>v===true?'yes':'no';
  const modes=Array.isArray(usage.funding_modes)?usage.funding_modes.join(','):'none';
- const initial={subscription_enabled:yes((row.subscription as Row|undefined)?.enabled),included_credits_enabled:yes((row.included_credits as Row|undefined)?.enabled),addons_enabled:yes((row.addons as Row|undefined)?.enabled),usage_enabled:yes(usage.enabled),require_subscription:yes(usage.require_subscription),require_subscription_for_credits:yes(usage.require_subscription_for_credits),funding_modes:modes||'none',default_funding_mode:String(usage.default_funding_mode||'none'),models:Array.isArray(usage.models)?usage.models.join(','):'',conversion_action:'preserve',conversion_version:String(conversion?.version||''),conversion_numerator:String(conversion?.numerator||''),conversion_denominator:String(conversion?.denominator||''),conversion_rounding:String(conversion?.rounding||'lr-cumulative-ceil-v1')};
- return <ActionForm key={`${row.product_id}:${row.version}`} title="更新计费配置" path={`/admin/v1/billing-profiles/${encoded(row.product_id)}`} method="PUT" csrf={csrf} onSaved={onSaved} initial={initial} fields={[{key:'subscription_enabled',label:'订阅能力',options:['yes','no']},{key:'included_credits_enabled',label:'赠送额度',options:['yes','no']},{key:'addons_enabled',label:'加量包能力',options:['yes','no']},{key:'usage_enabled',label:'按量使用',options:['yes','no']},{key:'require_subscription',label:'所有资金模式使用前要求订阅',options:['yes','no']},{key:'require_subscription_for_credits',label:'使用 CREDIT 时要求订阅',options:['yes','no']},{key:'funding_modes',label:'支持的资金模式',options:['credits','prepaid_cash','credits,prepaid_cash','none']},{key:'default_funding_mode',label:'默认资金模式',options:['credits','prepaid_cash','none'],required:false},{key:'models',label:'模型白名单（逗号分隔，未改动保留原策略）',required:false},...(row.product_id==='superwagie'||row.native_credit_conversion?[{key:'conversion_action',label:'原生 CREDIT 换算操作（preserve 保留、update 更新、remove 移除）',options:['preserve','update','remove']},{key:'conversion_version',label:'原生换算版本（参数变更须使用新标识）',required:false},{key:'conversion_numerator',label:'原生换算分子（CREDIT/6 整数字符串）',required:false},{key:'conversion_denominator',label:'原生换算分母（quota 整数字符串）',required:false},{key:'conversion_rounding',label:'原生换算舍入规则',options:['lr-cumulative-ceil-v1']}]:[])]} build={v=>{
+ const initial={subscription_enabled:yes(current.subscription?.enabled),included_credits_enabled:yes(current.included_credits?.enabled),addons_enabled:yes(current.addons?.enabled),usage_enabled:yes(usage.enabled),require_subscription:yes(usage.require_subscription),require_subscription_for_credits:yes(usage.require_subscription_for_credits),funding_modes:modes||'none',default_funding_mode:String(usage.default_funding_mode||'none'),models:Array.isArray(usage.models)?usage.models.join(','):'',credit_scope:current.credit_scope||'legacy',conversion_action:'preserve',conversion_version:String(conversion?.version||''),conversion_numerator:String(conversion?.numerator||''),conversion_denominator:String(conversion?.denominator||''),conversion_rounding:String(conversion?.rounding||'lr-cumulative-ceil-v1')};
+ return <ActionForm key={`${row.product_id}:${row.version}`} title="更新计费配置" path={`/admin/v1/billing-profiles/${encoded(row.product_id)}`} method="PUT" csrf={csrf} onSaved={onSaved} initial={initial}
+ fields={values => [
+  creditScopeField,
+  {key:'subscription_enabled',label:'订阅能力',options:['yes','no']},
+  {key:'included_credits_enabled',label:'赠送额度',options:['yes','no']},
+  {key:'addons_enabled',label:'加量包能力',options:['yes','no']},
+  {key:'usage_enabled',label:'按量使用',options:['yes','no']},
+  {key:'require_subscription',label:'所有资金模式使用前要求订阅',options:['yes','no']},
+  {key:'require_subscription_for_credits',label:'使用 CREDIT 时要求订阅',options:['yes','no']},
+  {key:'funding_modes',label:'支持的资金模式',options:['credits','prepaid_cash','credits,prepaid_cash','none']},
+  {key:'default_funding_mode',label:'默认资金模式',options:['credits','prepaid_cash','none'],required:false},
+  {key:'models',label:'模型白名单（逗号分隔，未改动保留原策略）',required:false},
+  ...(current.product_id === 'superwagie' || conversion || values.credit_scope === productCreditScope ? [
+   {key:'conversion_action',label:'原生 CREDIT 换算操作（preserve 保留、update 更新、remove 移除）',options:['preserve','update','remove']},
+   {key:'conversion_version',label:'原生换算版本（参数变更须使用新标识）',required:false},
+   {key:'conversion_numerator',label:'原生换算分子（CREDIT/6 整数字符串）',required:false},
+   {key:'conversion_denominator',label:'原生换算分母（quota 整数字符串）',required:false},
+   {key:'conversion_rounding',label:'原生换算舍入规则',options:['lr-cumulative-ceil-v1']},
+  ] : []),
+ ]} build={v=>{
   // Only the owning BillingProfile contract belongs in the strict mutation body.
   const profile:BillingProfile={
    product_id:current.product_id,version:current.version,
+   credit_scope:v.credit_scope === 'legacy' ? undefined : v.credit_scope,
    subscription:{enabled:v.subscription_enabled==='yes'},
    included_credits:{enabled:v.included_credits_enabled==='yes'},
    addons:{enabled:v.addons_enabled==='yes'},
