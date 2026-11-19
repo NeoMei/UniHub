@@ -168,6 +168,44 @@ func TestLegacyCreditAdoptionBindsCurrentTermAndGrantEvidence(t *testing.T) {
 	}
 }
 
+func TestLegacyCreditAdoptionRejectsNewActivityAfterPreview(t *testing.T) {
+	f := setup(t)
+	f.auth(t)
+	ctx := t.Context()
+	o := f.buy(t, "sandbox-sw-month-1", "adopt-after-activity-membership")
+	publishProductCreditOffers(t, f, "month")
+	b, e := load[Batch](ctx, f.s.pool, `SELECT snapshot FROM billing_batches WHERE order_id=$1`, o.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	r := LegacyCreditAdoptionRequest{ActorID: f.actor, AccountID: f.account, ProductID: "superwagie", BatchIDs: []string{b.ID}}
+	planned, e := f.s.PreviewLegacyCreditAdoption(ctx, r)
+	if e != nil || !planned.CanApply {
+		t.Fatalf("valid preflight: %+v %v", planned, e)
+	}
+	call := Call{CallID: "zero-legacy-reserve", AccountID: f.account, OriginProductID: "superwagie", Held: "0", Status: "RESERVED"}
+	if _, e = f.s.pool.Exec(ctx, `INSERT INTO billing_calls(id,account_id,request_digest,snapshot) VALUES($1,$2,$1,$3)`, call.CallID, call.AccountID, encode(call)); e != nil {
+		t.Fatal(e)
+	}
+	blocked, e := f.s.PreviewLegacyCreditAdoption(ctx, r)
+	if e != nil || blocked.CanApply || !slices.Contains(blocked.Blockers, "unresolved_product_call") {
+		t.Fatalf("zero hold still has an unresolved provider outcome: %+v %v", blocked, e)
+	}
+	if _, e = f.s.ApplyLegacyCreditAdoption(ctx, r, planned.Digest); !errors.Is(e, ErrLegacyCreditAdoptionBlocked) {
+		t.Fatalf("attempt with open call: %v", e)
+	}
+	if _, e = f.s.pool.Exec(ctx, `UPDATE billing_calls SET snapshot=jsonb_set(snapshot,'{status}','"RELEASED"') WHERE id=$1`, call.CallID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = f.s.ApplyLegacyCreditAdoption(ctx, r, planned.Digest); !errors.Is(e, ErrConflict) {
+		t.Fatalf("completed call invalidates fresh approval even with unchanged balances: %v", e)
+	}
+	updated, e := f.s.PreviewLegacyCreditAdoption(ctx, r)
+	if e != nil || !updated.CanApply || updated.Digest == planned.Digest {
+		t.Fatalf("updated activity not bound: %+v %v", updated, e)
+	}
+}
+
 func TestLegacyCreditAdoptionVerifiesPaidServiceOnlyTerm(t *testing.T) {
 	f := setup(t)
 	f.auth(t)

@@ -282,8 +282,7 @@ func legacyAdoptionCoversBatch(ctx context.Context, q accounts.Querier, b Batch)
 		receipt.AppliedAt.IsZero() || receipt.CashAfter != plan.Cash || len(plan.Batches) != len(receipt.CreditsAfter) || len(plan.Batches) != len(plan.Request.BatchIDs) {
 		return false, nil
 	}
-	plan.Digest = ""
-	if hash(plan) != digest {
+	if !plan.HasValidDigest() {
 		return false, nil
 	}
 	for i, id := range plan.Request.BatchIDs {

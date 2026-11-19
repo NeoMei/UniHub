@@ -39,15 +39,33 @@ type LegacyCreditAdoptionBatch struct {
 }
 
 type LegacyCreditAdoptionPlan struct {
-	Request        LegacyCreditAdoptionRequest `json:"request"`
-	Asset          string                      `json:"asset"`
-	Digest         string                      `json:"digest"`
-	ProfileVersion int64                       `json:"profile_version"`
-	CanApply       bool                        `json:"can_apply"`
-	Blockers       []string                    `json:"blockers"`
-	Cash           LegacyCashBalances          `json:"cash_retained"`
-	Batches        []LegacyCreditAdoptionBatch `json:"batches"`
-	ActiveTerm     *LegacyCreditAdoptionTerm   `json:"active_legacy_term,omitempty"`
+	Request        LegacyCreditAdoptionRequest   `json:"request"`
+	Asset          string                        `json:"asset"`
+	Digest         string                        `json:"digest"`
+	ProfileVersion int64                         `json:"profile_version"`
+	CanApply       bool                          `json:"can_apply"`
+	Blockers       []string                      `json:"blockers"`
+	Cash           LegacyCashBalances            `json:"cash_retained"`
+	Batches        []LegacyCreditAdoptionBatch   `json:"batches"`
+	ActiveTerm     *LegacyCreditAdoptionTerm     `json:"active_legacy_term,omitempty"`
+	Activity       *LegacyCreditAdoptionActivity `json:"activity,omitempty"`
+}
+
+type LegacyCreditAdoptionActivity struct {
+	Calls            int64 `json:"calls"`
+	UnresolvedCalls  int64 `json:"unresolved_calls"`
+	Commands         int64 `json:"commands"`
+	Orders           int64 `json:"orders"`
+	PendingOrders    int64 `json:"pending_orders"`
+	Checkouts        int64 `json:"checkouts"`
+	CashCheckouts    int64 `json:"cash_checkouts"`
+	WalletOperations int64 `json:"wallet_operations"`
+}
+
+func (p LegacyCreditAdoptionPlan) HasValidDigest() bool {
+	digest := p.Digest
+	p.Digest = ""
+	return digest == hash(p)
 }
 
 type LegacyCreditAdoptionTerm struct {
@@ -170,6 +188,29 @@ func (s *Service) legacyCreditAdoptionPlanOn(ctx context.Context, tx pgx.Tx, r L
 		} else if check.err != nil {
 			return out, check.err
 		}
+	}
+	activity := LegacyCreditAdoptionActivity{}
+	e = tx.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM billing_calls WHERE account_id=$1),
+		(SELECT count(*) FROM billing_calls WHERE account_id=$1 AND snapshot->>'origin_product_id'=$2
+			AND COALESCE(snapshot->>'status','') NOT IN ('SETTLED','RELEASED','REJECTED')),
+		(SELECT count(*) FROM billing_commands WHERE account_id=$1),
+		(SELECT count(*) FROM billing_orders WHERE account_id=$1),
+		(SELECT count(*) FROM billing_orders WHERE account_id=$1 AND snapshot->>'payment_status'='PENDING'),
+		(SELECT count(*) FROM billing_checkouts WHERE account_id=$1),
+		(SELECT count(*) FROM cash_checkouts WHERE account_id=$1),
+		(SELECT count(*) FROM wallet_operations WHERE account_id=$1)`, r.AccountID, r.ProductID).
+		Scan(&activity.Calls, &activity.UnresolvedCalls, &activity.Commands, &activity.Orders,
+			&activity.PendingOrders, &activity.Checkouts, &activity.CashCheckouts, &activity.WalletOperations)
+	if e != nil {
+		return out, e
+	}
+	out.Activity = &activity
+	if activity.UnresolvedCalls > 0 {
+		out.Blockers = append(out.Blockers, "unresolved_product_call")
+	}
+	if activity.PendingOrders > 0 {
+		out.Blockers = append(out.Blockers, "pending_order_payment")
 	}
 	now := s.now().UTC()
 	term, termBlocker, e := s.legacyTermAdoptionProof(ctx, tx, r, now)
@@ -458,8 +499,7 @@ func (s *Service) verifyLegacyCreditAdoptionOn(ctx context.Context, tx pgx.Tx, r
 	out := LegacyCreditAdoptionVerification{Receipt: receipt, Current: []Batch{}}
 	plan := receipt.Plan
 	digest := plan.Digest
-	plan.Digest = ""
-	if digest != hash(plan) || hash(plan.Request) != hash(r) || plan.Cash != receipt.CashAfter ||
+	if !plan.HasValidDigest() || hash(plan.Request) != hash(r) || plan.Cash != receipt.CashAfter ||
 		len(receipt.CreditsAfter) != len(plan.Batches) || len(plan.Batches) != len(r.BatchIDs) {
 		return out, ErrConflict
 	}
