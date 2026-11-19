@@ -63,13 +63,18 @@ func TestProductionAdoptionRequiresLocalProductionConfiguration(t *testing.T) {
 		"APP_ENV":                      "production",
 		"UNIHUB_ADOPTION_DATABASE_URL": "postgres://unihub@127.0.0.1/unihub?sslmode=disable",
 		"UNIHUB_ADOPTION_LEDGER_URL":   "http://127.0.0.1:53478",
-		"UNIHUB_ADOPTION_LEDGER_NAME":  "unihub",
+		"UNIHUB_ADOPTION_LEDGER_NAME":  "unihub-live",
 	}
 	get := func(name string) string { return env[name] }
 	preview, _, _, e := productionConfig(get, "preview")
 	if e != nil || preview.ConnConfig.RuntimeParams["default_transaction_read_only"] != "on" {
 		t.Fatalf("preview did not force read-only: %v", e)
 	}
+	env["UNIHUB_ADOPTION_LEDGER_NAME"] = "unihub"
+	if _, _, _, e = productionConfig(get, "preview"); e == nil {
+		t.Fatal("production command accepted the retained ledger as current")
+	}
+	env["UNIHUB_ADOPTION_LEDGER_NAME"] = "unihub-live"
 	env["UNIHUB_ADOPTION_DATABASE_URL"] += "&search_path=legacy_credit_fixture_test"
 	if _, _, _, e = productionConfig(get, "apply"); e == nil {
 		t.Fatal("production entry point accepted a fixture schema")

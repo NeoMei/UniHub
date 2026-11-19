@@ -22,6 +22,7 @@ type Service struct {
 	pool                    *pgxpool.Pool
 	accounts                *accounts.Store
 	ledger                  ledger.Ledger
+	legacyCreditProofSource legacyCreditProofSource
 	now                     func() time.Time
 	mu                      sync.RWMutex
 	operators, trusted      map[string]bool

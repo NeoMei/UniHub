@@ -31,7 +31,9 @@ An applied receipt reconciles all five credit buckets and both cash balances bef
 
 ## Approved SuperWagie production cutover
 
-Build `./cmd/unihub-credit-adoption-production` from the reviewed UniHub release source. The independent fixture command retains its local schema and ledger restriction. Run the production command on the UniHub host under the service user. Bind `APP_ENV`, `UNIHUB_ADOPTION_DATABASE_URL`, `UNIHUB_ADOPTION_LEDGER_URL`, and `UNIHUB_ADOPTION_LEDGER_NAME` to the running service configuration without printing the values.
+Build `./cmd/unihub-credit-adoption-production` from the reviewed UniHub release source. The independent fixture command retains its local schema and ledger restriction. Run the production command on the UniHub host under the service user with `APP_ENV=production`. Bind `UNIHUB_ADOPTION_DATABASE_URL`, `UNIHUB_ADOPTION_LEDGER_URL`, and `UNIHUB_ADOPTION_LEDGER_NAME` to the running service configuration without printing the values.
+
+The active `unihub-live` Formance ledger supplies all cash and credit balances. When it confirms that the original reference is absent, the command checks the retained original `unihub` ledger for the exact transaction ID, reference and unreverted postings. A conflicting receipt or a lookup error blocks adoption. The approved plan and persisted receipt include the ledger that proved each original payment, fulfillment and grant.
 
 The production command is scoped to SuperWagie. It requires the active owner or billing administrator, the exact payer and batch IDs. Capture and review a private, read-only preview before enabling the product broker. A deployment can stage the code and migration tables before the scoped product profile is active. That preview reports the missing profile as a blocker and still checks the original payments, grants and lot balances. Stage the scoped profile while product offers and broker authorization remain disabled, then capture a fresh preview for cutover.
 

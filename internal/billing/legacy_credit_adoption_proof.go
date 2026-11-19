@@ -18,43 +18,72 @@ import (
 type LegacyCreditProof struct {
 	PaymentCommandID         string `json:"payment_command_id"`
 	PaymentTransactionID     string `json:"payment_transaction_id"`
+	PaymentLedger            string `json:"payment_ledger,omitempty"`
 	FulfillmentCommandID     string `json:"fulfillment_command_id"`
 	FulfillmentTransactionID string `json:"fulfillment_transaction_id,omitempty"`
+	FulfillmentLedger        string `json:"fulfillment_ledger,omitempty"`
 	GrantCommandID           string `json:"grant_command_id"`
 	GrantTransactionID       string `json:"grant_transaction_id"`
+	GrantLedger              string `json:"grant_ledger,omitempty"`
+}
+
+type legacyCreditProofReader interface {
+	Find(context.Context, string) (*ledger.Transaction, error)
+}
+
+type legacyCreditProofSource struct {
+	currentName, retainedName string
+	retained                  legacyCreditProofReader
+}
+
+type legacyCreditCommandReceipt struct {
+	transactionID, ledgerName string
+}
+
+// ConfigureLegacyCreditProofLedgers is called at startup by the adoption operator.
+// The retained reader only serves original payment and grant proof.
+func (s *Service) ConfigureLegacyCreditProofLedgers(currentName, retainedName string, retained legacyCreditProofReader) {
+	s.legacyCreditProofSource = legacyCreditProofSource{currentName: currentName, retainedName: retainedName, retained: retained}
 }
 
 type legacyCreditProofError string
 
 func (e legacyCreditProofError) Error() string { return string(e) }
 
-func (s *Service) verifiedLegacyCreditCommand(ctx context.Context, q accounts.Querier, account, kind, key string) (command, string, error) {
+func (s *Service) verifiedLegacyCreditCommand(ctx context.Context, q accounts.Querier, account, kind, key string) (command, legacyCreditCommandReceipt, error) {
+	var receipt legacyCreditCommandReceipt
 	var id, transactionID string
 	e := q.QueryRow(ctx, `SELECT id,COALESCE(ledger_transaction_id,'') FROM billing_commands WHERE account_id=$1 AND kind=$2 AND request_key=$3 AND status='APPLIED'`, account, kind, key).Scan(&id, &transactionID)
 	if errors.Is(e, pgx.ErrNoRows) {
-		return command{}, "", accounts.ErrNotFound
+		return command{}, receipt, accounts.ErrNotFound
 	}
 	if e != nil {
-		return command{}, "", e
+		return command{}, receipt, e
 	}
 	c, e := readCommand(ctx, q, id)
 	if e != nil {
-		return c, "", e
+		return c, receipt, e
 	}
 	if c.Account != account || c.Kind != kind || c.Key != key || c.Ledger.Reference != "unihub:billing:"+id {
-		return c, "", legacyCreditProofError("command_scope_mismatch")
+		return c, receipt, legacyCreditProofError("command_scope_mismatch")
 	}
 	if len(c.Ledger.Postings) == 0 && transactionID == "" {
-		return c, "", nil
+		return c, receipt, nil
 	}
+	source := s.legacyCreditProofSource
 	tr, e := s.ledger.Find(ctx, c.Ledger.Reference)
+	name := source.currentName
+	if e == nil && tr == nil && source.retained != nil {
+		tr, e = source.retained.Find(ctx, c.Ledger.Reference)
+		name = source.retainedName
+	}
 	if e != nil {
-		return c, "", e
+		return c, receipt, e
 	}
 	if tr == nil || transactionID == "" || tr.ID != transactionID || tr.Reference != c.Ledger.Reference || !slices.Equal(tr.Postings, c.Ledger.Postings) {
-		return c, "", legacyCreditProofError("ledger_command_mismatch")
+		return c, receipt, legacyCreditProofError("ledger_command_mismatch")
 	}
-	return c, transactionID, nil
+	return c, legacyCreditCommandReceipt{transactionID: transactionID, ledgerName: name}, nil
 }
 
 func (s *Service) legacyCreditProof(ctx context.Context, q accounts.Querier, b Batch) (LegacyCreditProof, error) {
@@ -76,9 +105,9 @@ func (s *Service) legacyCreditGrantProof(ctx context.Context, q accounts.Querier
 	if e != nil {
 		return proof, e
 	}
-	grantTxn := proof.FulfillmentTransactionID
+	grantReceipt := legacyCreditCommandReceipt{transactionID: proof.FulfillmentTransactionID, ledgerName: proof.FulfillmentLedger}
 	if len(grant.Effect.Batches) == 0 || grant.Effect.Batches[0].ID != b.ID {
-		grant, grantTxn, e = s.verifiedLegacyCreditCommand(ctx, q, o.AccountID, "monthly", b.SourceKey)
+		grant, grantReceipt, e = s.verifiedLegacyCreditCommand(ctx, q, o.AccountID, "monthly", b.SourceKey)
 		if errors.Is(e, accounts.ErrNotFound) {
 			return proof, legacyCreditProofError("grant_command_missing")
 		}
@@ -88,17 +117,17 @@ func (s *Service) legacyCreditGrantProof(ctx context.Context, q accounts.Querier
 	}
 	amount, _ := integer(b.Original, true)
 	wanted := ledger.Posting{Source: "world", Destination: BatchAddress(b.ID, "available"), Asset: CreditAsset, Amount: amount}
-	if grantTxn == "" || len(grant.Effect.Batches) != 1 || !sameCreditBatchOrigin(b, grant.Effect.Batches[0]) ||
+	if grantReceipt.transactionID == "" || len(grant.Effect.Batches) != 1 || !sameCreditBatchOrigin(b, grant.Effect.Batches[0]) ||
 		grant.Effect.Batches[0].CreditScope != "" || !slices.Equal(legacyPostingsForAsset(grant.Ledger.Postings, CreditAsset), []ledger.Posting{wanted}) {
 		return proof, legacyCreditProofError("grant_postings_or_batch_mismatch")
 	}
-	proof.GrantCommandID, proof.GrantTransactionID = grant.ID, grantTxn
+	proof.GrantCommandID, proof.GrantTransactionID, proof.GrantLedger = grant.ID, grantReceipt.transactionID, grantReceipt.ledgerName
 	return proof, nil
 }
 
 func (s *Service) legacyPaidOrderProof(ctx context.Context, q accounts.Querier, o Order) (LegacyCreditProof, command, error) {
 	var proof LegacyCreditProof
-	done, txn, e := s.verifiedLegacyCreditCommand(ctx, q, o.AccountID, "fulfillment", o.ID)
+	done, fulfillmentReceipt, e := s.verifiedLegacyCreditCommand(ctx, q, o.AccountID, "fulfillment", o.ID)
 	if errors.Is(e, accounts.ErrNotFound) {
 		return proof, done, legacyCreditProofError("fulfillment_command_missing")
 	}
@@ -108,13 +137,13 @@ func (s *Service) legacyPaidOrderProof(ctx context.Context, q accounts.Querier, 
 	if done.Effect.Order == nil || !sameLegacyOrderTerms(o, *done.Effect.Order) || done.Effect.Order.PaymentStatus != "PAID" || done.Effect.Order.FulfillmentStatus != "FULFILLED" {
 		return proof, done, legacyCreditProofError("fulfillment_order_mismatch")
 	}
-	proof.FulfillmentCommandID, proof.FulfillmentTransactionID = done.ID, txn
+	proof.FulfillmentCommandID, proof.FulfillmentTransactionID, proof.FulfillmentLedger = done.ID, fulfillmentReceipt.transactionID, fulfillmentReceipt.ledgerName
 
 	payKind, payKey, expected, e := legacyPaymentProof(ctx, q, o, done)
 	if e != nil {
 		return proof, done, e
 	}
-	paid, txn, e := s.verifiedLegacyCreditCommand(ctx, q, o.AccountID, payKind, payKey)
+	paid, paymentReceipt, e := s.verifiedLegacyCreditCommand(ctx, q, o.AccountID, payKind, payKey)
 	if errors.Is(e, accounts.ErrNotFound) {
 		return proof, done, legacyCreditProofError("payment_command_missing")
 	}
@@ -125,7 +154,7 @@ func (s *Service) legacyPaidOrderProof(ctx context.Context, q accounts.Querier, 
 		!sameLegacyOrderTerms(o, *paid.Effect.Order) || !slices.Equal(paid.Ledger.Postings, expected) {
 		return proof, done, legacyCreditProofError("payment_postings_or_order_mismatch")
 	}
-	proof.PaymentCommandID, proof.PaymentTransactionID = paid.ID, txn
+	proof.PaymentCommandID, proof.PaymentTransactionID, proof.PaymentLedger = paid.ID, paymentReceipt.transactionID, paymentReceipt.ledgerName
 	return proof, done, nil
 }
 

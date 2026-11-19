@@ -3,6 +3,8 @@ package billing
 import (
 	"context"
 	"errors"
+	"net/http"
+	"os"
 	"slices"
 	"testing"
 	"time"
@@ -128,6 +130,87 @@ func TestLegacyCreditAdoptionReusesAuthoritativeBatchAndKeepsCash(t *testing.T) 
 	if err != nil || len(verification.Current) != 1 || verification.Current[0].Consumed != "10" ||
 		verification.Current[0].ExpiresAt != before.ExpiresAt || verification.Receipt.CreditsAfter[0].Consumed != before.Consumed || verification.Cash != preview.Cash {
 		t.Fatalf("verify historical and current reconciliation: %+v %v", verification, err)
+	}
+}
+
+type legacyCreditProofFindOverlay struct {
+	ledger.Ledger
+	find func(context.Context, string) (*ledger.Transaction, error)
+}
+
+func (l legacyCreditProofFindOverlay) Find(ctx context.Context, reference string) (*ledger.Transaction, error) {
+	return l.find(ctx, reference)
+}
+
+func TestLegacyCreditAdoptionVerifiesOriginalReceiptsInRetainedLedger(t *testing.T) {
+	f := setup(t)
+	f.auth(t)
+	ctx := context.Background()
+	original := f.buy(t, "sandbox-sw-month-1", "retained-paid-membership")
+	publishProductCreditOffers(t, f, "month")
+	batches, err := f.s.Batches(ctx, f.actor, f.account)
+	if err != nil || len(batches) != 1 || batches[0].OrderID != original.ID {
+		t.Fatalf("no retained legacy batch: %+v %v", batches, err)
+	}
+	before := batches[0]
+	request := LegacyCreditAdoptionRequest{ActorID: f.actor, AccountID: f.account, ProductID: "superwagie", BatchIDs: []string{before.ID}}
+	liveName := id("legacy-current-")
+	live := ledger.NewFormance(os.Getenv("UNIHUB_TEST_LEDGER_URL"), liveName, &http.Client{Timeout: 10 * time.Second})
+	if err = live.Ensure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	amount, err := integer(before.Available, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = live.Post(ctx, ledger.Command{Reference: "balance-cutover", Postings: []ledger.Posting{
+		{Source: "world", Destination: BatchAddress(before.ID, "available"), Asset: CreditAsset, Amount: amount},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	f.s.ledger = live
+	preview, err := f.s.PreviewLegacyCreditAdoption(ctx, request)
+	if err != nil || preview.CanApply {
+		t.Fatalf("missing original receipts in current ledger: %+v %v", preview, err)
+	}
+	retainedName := "retained-original"
+	f.s.ConfigureLegacyCreditProofLedgers(liveName, retainedName, f.l)
+	preview, err = f.s.PreviewLegacyCreditAdoption(ctx, request)
+	if err != nil || !preview.CanApply || preview.Batches[0].Proof == nil {
+		t.Fatalf("exact original receipts in retained ledger: %+v %v", preview, err)
+	}
+	proof := preview.Batches[0].Proof
+	if proof.PaymentLedger != retainedName || proof.FulfillmentLedger != retainedName || proof.GrantLedger != retainedName ||
+		preview.ActiveTerm == nil || preview.ActiveTerm.Proof.GrantLedger != retainedName {
+		t.Fatalf("missing retained original provenance: %+v", proof)
+	}
+	paymentRef := "unihub:billing:" + proof.PaymentCommandID
+	f.s.ledger = legacyCreditProofFindOverlay{Ledger: live, find: func(ctx context.Context, reference string) (*ledger.Transaction, error) {
+		if reference == paymentRef {
+			return &ledger.Transaction{ID: "999999", Reference: reference}, nil
+		}
+		return live.Find(ctx, reference)
+	}}
+	conflict, err := f.s.PreviewLegacyCreditAdoption(ctx, request)
+	if err != nil || conflict.CanApply {
+		t.Fatalf("retained proof bypassed a conflicting current receipt: %+v %v", conflict, err)
+	}
+	f.s.ledger = legacyCreditProofFindOverlay{Ledger: live, find: func(context.Context, string) (*ledger.Transaction, error) {
+		return nil, ledger.ErrUnknown
+	}}
+	if _, err = f.s.PreviewLegacyCreditAdoption(ctx, request); !errors.Is(err, ledger.ErrUnknown) {
+		t.Fatalf("retained proof bypassed a current read error: %v", err)
+	}
+	f.s.ledger = live
+	got, err := f.s.ApplyLegacyCreditAdoption(ctx, request, preview.Digest)
+	expected := before
+	expected.CreditScope = ProductCreditScopeV1
+	if err != nil || !slices.Equal(got.Current, []Batch{expected}) || got.Cash != preview.Cash {
+		t.Fatalf("adoption changed liability or expiry: %+v %v", got, err)
+	}
+	f.s.ConfigureLegacyCreditProofLedgers("", "", nil)
+	if replay, e := f.s.VerifyLegacyCreditAdoption(ctx, request, preview.Digest); e != nil || !slices.Equal(replay.Current, got.Current) {
+		t.Fatalf("durable proof required a retained ledger lookup: %+v %v", replay, e)
 	}
 }
 

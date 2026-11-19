@@ -26,7 +26,11 @@ import (
 	"unihub/internal/ledger"
 )
 
-const maxPlanSize = 2 << 20
+const (
+	maxPlanSize        = 2 << 20
+	currentLedgerName  = "unihub-live"
+	retainedLedgerName = "unihub"
+)
 
 type listFlag []string
 
@@ -75,7 +79,7 @@ func productionConfig(get func(string) string, mode string) (*pgxpool.Config, st
 	target, name := get("UNIHUB_ADOPTION_LEDGER_URL"), get("UNIHUB_ADOPTION_LEDGER_NAME")
 	u, err := url.Parse(target)
 	if err != nil || u.Scheme != "http" && u.Scheme != "https" || !loopback(u.Hostname()) ||
-		u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Path != "" && u.Path != "/" || name != "unihub" {
+		u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Path != "" && u.Path != "/" || name != currentLedgerName {
 		return nil, "", "", errors.New("production adoption requires the local UniHub Formance ledger")
 	}
 	return cfg, target, name, nil
@@ -165,6 +169,7 @@ func run(args []string, get func(string) string, dest io.Writer) error {
 	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	service := billing.New(pool, accounts.New(pool), ledger.NewFormance(target, name, client))
+	service.ConfigureLegacyCreditProofLedgers(name, retainedLedgerName, ledger.NewFormance(target, retainedLedgerName, client))
 	output := json.NewEncoder(dest)
 	if *mode == "preview" {
 		plan, err := service.PreviewLegacyCreditAdoption(ctx, request)
