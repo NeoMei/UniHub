@@ -50,7 +50,7 @@ func freezeProductCreditOrder(o *Order) error {
 		}
 		return nil
 	}
-	if (o.Kind == "upgrade" && o.ProductCreditUpgrade == nil) || o.Amount != o.Offer.Price || o.GrantAmount != o.Offer.MonthlyCredit || o.ProductID != o.Offer.ProductID {
+	if (o.Kind == "upgrade" && o.ProductCreditUpgrade == nil) || o.GrantAmount != o.Offer.MonthlyCredit || o.ProductID != o.Offer.ProductID {
 		return ErrInvalid
 	}
 	if e := validateProductCreditOffer(o.Offer); e != nil {
@@ -58,7 +58,29 @@ func freezeProductCreditOrder(o *Order) error {
 	}
 	o.CreditScope = o.Offer.CreditScope
 	o.ServiceAmount, o.ComputeAmount = o.Offer.ServiceAmount, o.Offer.ComputeAmount
+	if !hasLegacyNetUpgrade(o.ProductCreditUpgrade) {
+		if o.Amount != o.Offer.Price {
+			return ErrInvalid
+		}
+		return nil
+	}
+	net, netErr := integer(o.Amount, true)
+	applied, appliedErr := integer(o.ProductCreditUpgrade.AppliedCreditAmount, false)
+	gross, _ := integer(o.Offer.Price, true)
+	if netErr != nil || appliedErr != nil || o.Kind != "upgrade" || o.ProductCreditUpgrade.EstimatedRefundAmount != "0" ||
+		net > gross || applied != gross-net {
+		return ErrInvalid
+	}
+	// A carried credit reduces the price. The previous cash can be in a
+	// retained ledger, so fund only the new cash and allocate compute first.
+	nominalCompute, _ := integer(o.Offer.ComputeAmount, true)
+	compute := min(net, nominalCompute)
+	o.ServiceAmount, o.ComputeAmount = str(net-compute), str(compute)
 	return nil
+}
+
+func hasLegacyNetUpgrade(upgrade *ProductCreditUpgrade) bool {
+	return upgrade != nil && upgrade.AppliedCreditAmount != ""
 }
 
 // Separate the prepaid compute by original order so the exact funding and

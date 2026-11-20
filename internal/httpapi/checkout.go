@@ -5,14 +5,27 @@ import (
 	"net/http"
 	"unihub/internal/accounts"
 	"unihub/internal/billing"
+	"unihub/internal/payments"
 )
+
+// Payment responses use UTC for existing clients that require a Z suffix.
+func paymentSessionForClient(session *payments.Session) *payments.Session {
+	if session == nil {
+		return nil
+	}
+	view := *session
+	view.ExpiresAt = view.ExpiresAt.UTC()
+	return &view
+}
 
 // Legacy clients accept only an Alipay redirect. Keep the original status
 // and order ID readable when another client creates an Alipay QR checkout.
 func checkoutForClient(r *http.Request, x billing.Checkout) billing.Checkout {
 	if x.Provider == "alipay" && x.Session != nil && x.Session.Kind == "qr" && r.Header.Get("X-UniHub-Alipay-QR") != "1" {
 		x.Session = nil
+		return x
 	}
+	x.Session = paymentSessionForClient(x.Session)
 	return x
 }
 
@@ -44,6 +57,9 @@ func (s *api) checkoutRoutes(m *http.ServeMux, add func(string, action)) {
 				return e
 			}
 			if e = requireBillingProduct(r, q.Offer.ProductID); e != nil {
+				return e
+			}
+			if e = requireLegacyNetUpgrade(r, q); e != nil {
 				return e
 			}
 			if originProduct(r) != "" && q.ProductCreditUpgrade != nil && (q.Offer.ProductID != originProduct(r) || !productWalletRequested(r)) {

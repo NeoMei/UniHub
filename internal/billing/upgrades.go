@@ -10,6 +10,10 @@ import (
 )
 
 func (s *Service) QuoteUpgrade(ctx context.Context, actor, account, subID, offerID string) (Quote, error) {
+	return s.quoteUpgrade(ctx, actor, account, subID, offerID, "")
+}
+
+func (s *Service) quoteUpgrade(ctx context.Context, actor, account, subID, offerID, legacyNetPaymentSource string) (Quote, error) {
 	var out Quote
 	e := s.locked(ctx, account, func(c *pgxpool.Conn) error {
 		if e := s.finance(ctx, c, actor, account); e != nil {
@@ -40,11 +44,22 @@ func (s *Service) QuoteUpgrade(ctx context.Context, actor, account, subID, offer
 		if !ok {
 			return ErrInvalid
 		}
-		if offer.CreditScope != sub.Offer.CreditScope {
+		legacyNet := legacyNetPaymentSource != "" && sub.ProductID == legacyNetUpgradeProduct && sub.Offer.CreditScope == "" && offer.CreditScope == ProductCreditScopeV1
+		if offer.CreditScope != sub.Offer.CreditScope && !legacyNet {
 			return ErrUnsupported
 		}
 		if offer.CreditScope == ProductCreditScopeV1 {
-			out, e = s.quoteProductCreditUpgrade(ctx, c, sub, offer, now, start, end)
+			if legacyNet {
+				out, e = quoteLegacyNetUpgrade(ctx, c, sub, offer, now, start, end)
+				if e == nil && legacyNetPaymentSource == "external" {
+					out, e = externalUpgradeQuote(out)
+				}
+				if e == nil {
+					e = s.verifyUpgradeFunding(ctx, c, sub, out.ProductCreditUpgrade)
+				}
+			} else {
+				out, e = s.quoteProductCreditUpgrade(ctx, c, sub, offer, now, start, end)
+			}
 			if e != nil {
 				return e
 			}
@@ -148,7 +163,7 @@ func (s *Service) AcceptUpgrade(ctx context.Context, actor, account, quoteID, ke
 		o := Order{ID: id("bo_"), AccountID: account, ActorID: actor, ProductID: offer.ProductID, Kind: "upgrade", Offer: offer, Amount: q.Amount, PaymentStatus: "PENDING", FulfillmentStatus: "PENDING", SubscriptionID: sub.ID, Start: now, End: sub.PaidThrough, PeriodStart: q.PeriodStart, PeriodEnd: q.ExpiresAt, GrantAmount: q.GrantAmount, CreatedAt: now}
 		setUpgradeOrderTerm(&o, q, sub)
 		if o.ProductCreditUpgrade != nil {
-			if _, e = previousProductUpgradeOrder(ctx, c, sub, o.ProductCreditUpgrade.PreviousOrderID); e != nil {
+			if e = s.verifyUpgradeFunding(ctx, c, sub, o.ProductCreditUpgrade); e != nil {
 				return e
 			}
 		}

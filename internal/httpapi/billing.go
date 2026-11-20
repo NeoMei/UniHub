@@ -123,15 +123,19 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 				return e
 			}
 		}
+		external := body.PaymentSource == "external"
+		if !external && body.PaymentSource != "" && body.PaymentSource != "wallet" {
+			return billing.ErrInvalid
+		}
 		var v billing.Quote
 		var e error
-		switch body.PaymentSource {
-		case "", "wallet":
-			v, e = b.QuoteUpgrade(r.Context(), u.ID, r.PathValue("account"), body.SubscriptionID, body.OfferID)
-		case "external":
-			v, e = b.QuoteExternalUpgrade(r.Context(), u.ID, r.PathValue("account"), body.SubscriptionID, body.OfferID)
-		default:
-			return billing.ErrInvalid
+		ctx, account := r.Context(), r.PathValue("account")
+		if legacyNetUpgradeRequested(r) {
+			v, e = b.QuoteUpgradeWithLegacyNet(ctx, u.ID, account, body.SubscriptionID, body.OfferID, external)
+		} else if external {
+			v, e = b.QuoteExternalUpgrade(ctx, u.ID, account, body.SubscriptionID, body.OfferID)
+		} else {
+			v, e = b.QuoteUpgrade(ctx, u.ID, account, body.SubscriptionID, body.OfferID)
 		}
 		if e != nil {
 			return e
@@ -143,11 +147,14 @@ func (s *api) billingRoutes(m *http.ServeMux, add func(string, action)) {
 		if e := decode(w, r, &body); e != nil {
 			return e
 		}
+		q, e := b.GetQuote(r.Context(), u.ID, r.PathValue("account"), r.PathValue("quote"))
+		if e != nil {
+			return e
+		}
+		if e = requireLegacyNetUpgrade(r, q); e != nil {
+			return e
+		}
 		if originProduct(r) != "" {
-			q, e := b.GetQuote(r.Context(), u.ID, r.PathValue("account"), r.PathValue("quote"))
-			if e != nil {
-				return e
-			}
 			if e = requireBillingProduct(r, q.Offer.ProductID); e != nil {
 				return e
 			}

@@ -56,7 +56,15 @@ func (s *Service) productComputeRecognition(ctx context.Context, q dbq, call Cal
 		if e != nil {
 			return nil, e
 		}
-		limit := compute * productCreditsPerCNY
+		paidLimit := compute * productCreditsPerCNY
+		limit := paidLimit
+		if hasLegacyNetUpgrade(o.ProductCreditUpgrade) {
+			nominal, e := integer(o.Offer.ComputeAmount, true)
+			if e != nil || nominal < compute || nominal > math.MaxInt64/productCreditsPerCNY {
+				return nil, ErrConflict
+			}
+			limit = nominal * productCreditsPerCNY
+		}
 		var previouslyUsed int64
 		for _, b := range bs {
 			if !batchFundsCall(b, call) {
@@ -75,9 +83,11 @@ func (s *Service) productComputeRecognition(ctx context.Context, q dbq, call Cal
 		if used > limit-previouslyUsed {
 			return nil, ErrConflict
 		}
-		// Only a whole cash atom moves. The consumed ledger retains the
-		// remainder across calls and months, including after command recovery.
-		delta := (previouslyUsed+used)/productCreditsPerCNY - previouslyUsed/productCreditsPerCNY
+		// Only a whole cash atom moves, up to the new order's paid compute.
+		// The remaining grant is covered by the applied upgrade credit.
+		before := min(previouslyUsed, paidLimit)
+		after := min(previouslyUsed+used, paidLimit)
+		delta := after/productCreditsPerCNY - before/productCreditsPerCNY
 		if delta > 0 {
 			posts = append(posts, ledger.Posting{Source: productComputePrepay(o), Destination: "commercial:compute_recognized:" + o.ProductID, Asset: CashAsset, Amount: delta})
 		}

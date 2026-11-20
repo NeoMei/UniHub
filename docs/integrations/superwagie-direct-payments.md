@@ -69,6 +69,21 @@ Keep all amounts exact. UniHub CNY/6 amounts must be divisible by 10,000 to beco
 
 Existing prorated upgrade quotes can contain sub-cent amounts. An adapter must not independently round the signed charge while fulfilling the original quote. External upgrades use `POST /accounts/{account}/quotes` with `payment_source:"external"`. The separate returned quote records `rounding_rule:"cny_cent_ceil_v1"`, exact `original_amount`, rounded-up integer-fen `amount`, preserved `period_end`, and a maximum 15-minute `expires_at`. Accept it only through checkout. Default/wallet quotes retain their exact historical prorated amount and existing acceptance endpoint. Compare the verified payment timestamp with the checkout deadline. Timing falls back to observation time if the merchant omits that timestamp. When closure conflicts with the receipt, the subscription version has changed, or the purchased benefit period has ended, the payment enters review and stays in the received-but-unfulfilled account.
 
+Registered SuperWagie clients using the product credit wallet can send
+`X-UniHub-Legacy-Net-Upgrade: 1` when creating a quote or paying it. For an
+eligible legacy subscription the quote prorates the original order's cash
+payment by the fraction of its fully paid term remaining at quote time.
+`product_credit_upgrade.applied_credit_amount` is the difference between the new
+offer price and the frozen charge, after external cent rounding when
+applicable. A verified payment starts a full term for the replacement plan. The
+new order records the price credit against the previous order and posts only
+the new cash to the active ledger, funding its compute allocation first.
+Usage can draw on the full new grant and recognizes cash only up to the amount
+paid for compute. Old subscription credit batches close at cutover.
+Separately purchased add-ons keep their
+original terms, and the original payment receives no separate refund for this
+replacement.
+
 New clients check the `alipay_checkout_qr` capability and request Alipay scan
 sessions through `require_qr`. Send `X-UniHub-Alipay-QR: 1` on checkout reads and
 writes to receive the scan session. Without this header the API includes the

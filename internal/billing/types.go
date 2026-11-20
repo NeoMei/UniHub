@@ -136,16 +136,18 @@ type ProductCreditUpgrade struct {
 	PreviousVersion        int64  `json:"previous_version"`
 	EstimatedRefundAmount  string `json:"estimated_refund_amount"`
 	RefundPaymentSource    string `json:"refund_payment_source"`
+	AppliedCreditAmount    string `json:"applied_credit_amount,omitempty"`
 }
 
 type ProductCreditUpgradeReturn struct {
-	ReplacementOrderID string    `json:"replacement_order_id"`
-	Cutover            time.Time `json:"cutover"`
-	CreditCeiling      string    `json:"credit_ceiling"`
-	ServiceAmount      string    `json:"service_amount,omitempty"`
-	ComputeAmount      string    `json:"compute_amount,omitempty"`
-	Amount             string    `json:"amount,omitempty"`
-	RefundID           string    `json:"refund_id,omitempty"`
+	ReplacementOrderID  string    `json:"replacement_order_id"`
+	Cutover             time.Time `json:"cutover"`
+	CreditCeiling       string    `json:"credit_ceiling"`
+	ServiceAmount       string    `json:"service_amount,omitempty"`
+	ComputeAmount       string    `json:"compute_amount,omitempty"`
+	Amount              string    `json:"amount,omitempty"`
+	RefundID            string    `json:"refund_id,omitempty"`
+	AppliedCreditAmount string    `json:"applied_credit_amount,omitempty"`
 }
 type Authorization struct {
 	ProductID       string    `json:"product_id"`

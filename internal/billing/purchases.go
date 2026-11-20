@@ -261,6 +261,19 @@ func (s *Service) fulfillLocked(ctx context.Context, c *pgxpool.Conn, orderID st
 			return e
 		}
 	}
+	if o.PaymentSource == "wallet" && hasLegacyNetUpgrade(o.ProductCreditUpgrade) &&
+		!now.Before(o.Offer.monthAnchor(o.Start, o.Offer.membershipMonths())) {
+		tx, e := c.Begin(ctx)
+		if e != nil {
+			return e
+		}
+		defer database.Rollback(tx)
+		o.FulfillmentStatus = "REVIEW"
+		if e = saveOrder(ctx, tx, o); e != nil {
+			return e
+		}
+		return tx.Commit(ctx)
+	}
 	if e = s.clearExceptOrder(ctx, c, o.AccountID, o.ID); e != nil {
 		return e
 	}

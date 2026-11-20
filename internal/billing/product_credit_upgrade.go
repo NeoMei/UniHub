@@ -27,6 +27,22 @@ func setUpgradeOrderTerm(o *Order, quote Quote, sub Subscription) {
 	}
 }
 
+func upgradeFundingOrder(ctx context.Context, q dbq, sub Subscription, upgrade *ProductCreditUpgrade) (Order, error) {
+	if hasLegacyNetUpgrade(upgrade) {
+		return previousLegacyNetUpgradeOrder(ctx, q, sub, upgrade.PreviousOrderID)
+	}
+	return previousProductUpgradeOrder(ctx, q, sub, upgrade.PreviousOrderID)
+}
+
+func (s *Service) verifyUpgradeFunding(ctx context.Context, q dbq, sub Subscription, upgrade *ProductCreditUpgrade) error {
+	old, e := upgradeFundingOrder(ctx, q, sub, upgrade)
+	if e != nil || !hasLegacyNetUpgrade(upgrade) {
+		return e
+	}
+	_, e = s.productUpgradeBatches(ctx, q, old)
+	return e
+}
+
 // A post-upgrade top-up may draw only the difference from the active replacement.
 func replacementFundingSubscription(ctx context.Context, q dbq, call Call, now time.Time) (string, error) {
 	sub, e := activeSubscriptionOn(ctx, q, call.AccountID, call.OriginProductID, now)
@@ -107,7 +123,11 @@ func upgradeReturnCeiling(o Order, sub Subscription, cutover time.Time) (credit,
 	}
 	loc := sub.Offer.billingLocation()
 	periods := monthsBetween(start.In(loc), o.End.In(loc))
-	compute, e := integer(o.ComputeAmount, true)
+	grantCompute := o.ComputeAmount
+	if hasLegacyNetUpgrade(o.ProductCreditUpgrade) {
+		grantCompute = o.Offer.ComputeAmount
+	}
+	compute, e := integer(grantCompute, true)
 	if e != nil || compute > math.MaxInt64/productCreditsPerCNY || periods < 1 || periods > 12 {
 		return 0, 0, ErrConflict
 	}
@@ -135,9 +155,17 @@ func (s *Service) productUpgradeBatches(ctx context.Context, q dbq, old Order) (
 	}
 	for i := range batches {
 		b := &batches[i]
-		if b.ProductID != old.ProductID || b.CreditScope != old.CreditScope || b.SubscriptionID != old.SubscriptionID ||
+		if b.ProductID != old.ProductID || b.SubscriptionID != old.SubscriptionID ||
 			b.Kind != "base" || b.Frozen != (old.UpgradeReturn != nil) {
 			return nil, ErrConflict
+		}
+		if b.CreditScope != old.CreditScope {
+			if old.CreditScope != "" || b.CreditScope != ProductCreditScopeV1 {
+				return nil, ErrConflict
+			}
+			if e = requireLegacyCreditAdoption(ctx, q, old, *b); e != nil {
+				return nil, e
+			}
 		}
 		if e = s.quantities(ctx, b); e != nil {
 			return nil, e
@@ -161,6 +189,15 @@ func (s *Service) productUpgradeBatches(ctx context.Context, q dbq, old Order) (
 }
 
 func upgradeReturnAmounts(old Order, batches []Batch, cutover time.Time, credit, service int64, estimate bool) (serviceCash, computeCash, total int64, e error) {
+	discounted := hasLegacyNetUpgrade(old.ProductCreditUpgrade)
+	var paidCredit int64
+	if discounted {
+		compute, e := integer(old.ComputeAmount, true)
+		if e != nil || compute > math.MaxInt64/productCreditsPerCNY {
+			return 0, 0, 0, ErrConflict
+		}
+		paidCredit = compute * productCreditsPerCNY
+	}
 	for _, b := range batches {
 		held, he := integer(b.Reserved, false)
 		if he != nil {
@@ -169,16 +206,32 @@ func upgradeReturnAmounts(old Order, batches []Batch, cutover time.Time, credit,
 		if !estimate && held > 0 {
 			return 0, 0, 0, ErrPending
 		}
-		if !b.ExpiresAt.After(cutover) {
+		active := b.ExpiresAt.After(cutover)
+		if !active && !discounted {
 			continue
 		}
 		used, ue := integer(b.Consumed, false)
-		if ue != nil || used > credit || held > credit-used {
+		if ue != nil {
 			return 0, 0, 0, ErrConflict
+		}
+		if discounted {
+			paidCredit = max(0, paidCredit-used)
+		}
+		if !active {
+			continue
+		}
+		if used > credit || held > credit-used {
+			return 0, 0, 0, ErrConflict
+		}
+		if discounted {
+			paidCredit = max(0, paidCredit-held)
 		}
 		credit -= used + held
 	}
 	computeCash = credit / productCreditsPerCNY
+	if discounted {
+		computeCash = min(computeCash, paidCredit/productCreditsPerCNY)
+	}
 	original, e := integer(old.Amount, true)
 	if e != nil || service > original || computeCash > original-service {
 		return 0, 0, 0, ErrConflict
@@ -200,13 +253,12 @@ func (s *Service) prepareProductCreditUpgrade(ctx context.Context, q dbq, o *Ord
 	if sub.Status != "active" || sub.Version != upgrade.PreviousVersion || !cutover.Before(o.PeriodEnd) {
 		return Order{}, nil, nil, ErrQuoteInvalidated
 	}
-	old, e := previousProductUpgradeOrder(ctx, q, sub, upgrade.PreviousOrderID)
+	old, e := upgradeFundingOrder(ctx, q, sub, upgrade)
 	if e != nil {
 		return Order{}, nil, nil, e
 	}
-	credit, service, e := upgradeReturnCeiling(old, sub, cutover)
-	if e != nil {
-		return Order{}, nil, nil, e
+	if cutover.Before(old.Start) || !cutover.Before(old.End) {
+		return Order{}, nil, nil, ErrQuoteInvalidated
 	}
 	batches, e := s.productUpgradeBatches(ctx, q, old)
 	if e != nil {
@@ -220,8 +272,19 @@ func (s *Service) prepareProductCreditUpgrade(ctx context.Context, q dbq, o *Ord
 			posts = append(posts, withdrawUpgradeBatch(*b)...)
 		}
 	}
-	old.RefundStatus = "UPGRADE_PENDING"
-	old.UpgradeReturn = &ProductCreditUpgradeReturn{ReplacementOrderID: o.ID, Cutover: cutover, CreditCeiling: str(credit), ServiceAmount: str(service)}
+	returnDetails := ProductCreditUpgradeReturn{ReplacementOrderID: o.ID, Cutover: cutover}
+	if hasLegacyNetUpgrade(upgrade) {
+		returnDetails.AppliedCreditAmount = upgrade.AppliedCreditAmount
+		returnDetails.CreditCeiling = "0"
+	} else {
+		credit, service, e := upgradeReturnCeiling(old, sub, cutover)
+		if e != nil {
+			return Order{}, nil, nil, e
+		}
+		old.RefundStatus = "UPGRADE_PENDING"
+		returnDetails.CreditCeiling, returnDetails.ServiceAmount = str(credit), str(service)
+	}
+	old.UpgradeReturn = &returnDetails
 	o.Start, o.End = cutover, o.Offer.monthAnchor(cutover, o.Offer.membershipMonths())
 	o.PeriodStart, o.PeriodEnd, _ = o.Offer.currentPeriod(cutover, o.End, cutover)
 	return old, batches, posts, nil

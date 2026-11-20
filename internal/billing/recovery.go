@@ -202,6 +202,19 @@ func (s *Service) reject(ctx context.Context, c *pgxpool.Conn, x command, status
 			return e
 		}
 	}
+	if reason == "insufficient_funds" && isNetUpgradeFulfillment(x) && x.Effect.Order.PaymentSource == "external" {
+		o, e := load[Order](ctx, tx, `SELECT snapshot FROM billing_orders WHERE id=$1 AND account_id=$2`, x.Effect.Order.ID, x.Account)
+		if e != nil {
+			return e
+		}
+		checkout, e := readCheckout(ctx, tx, x.Account, o.CheckoutID)
+		if e != nil {
+			return e
+		}
+		if e = markExternalFulfillmentForReview(ctx, tx, o, checkout, "upgrade_funding_unavailable"); e != nil {
+			return e
+		}
+	}
 	if (x.Kind == "reserve" || x.Kind == "topup") && x.Effect.Call != nil {
 		call := *x.Effect.Call
 		if x.Kind == "topup" {
@@ -314,8 +327,16 @@ func (s *Service) runLocked(ctx context.Context, c *pgxpool.Conn, cmdID string) 
 	} else {
 		tr, e = s.ledger.Post(ctx, x.Ledger)
 		if errors.Is(e, ledger.ErrInsufficientFunds) && x.Status == "CREATED" {
+			if isNetUpgradeFulfillment(x) && x.Effect.Order.PaymentSource == "wallet" {
+				// The wallet payment already posted. Retain fulfillment for
+				// reconciliation instead of abandoning the paid order.
+				return s.unknown(ctx, c, x, e)
+			}
 			if e = s.reject(ctx, c, x, "REJECTED", "insufficient_funds"); e != nil {
 				return e
+			}
+			if isNetUpgradeFulfillment(x) {
+				return nil // The original external payment is available for review and refund.
 			}
 			return ledger.ErrInsufficientFunds
 		}
@@ -327,6 +348,10 @@ func (s *Service) runLocked(ctx context.Context, c *pgxpool.Conn, cmdID string) 
 		return s.unknown(ctx, c, x, ledger.ErrConflict)
 	}
 	return s.apply(ctx, c, x, tr.ID)
+}
+
+func isNetUpgradeFulfillment(x command) bool {
+	return x.Kind == "fulfillment" && x.Effect.Order != nil && hasLegacyNetUpgrade(x.Effect.Order.ProductCreditUpgrade)
 }
 func (s *Service) unknown(ctx context.Context, c *pgxpool.Conn, x command, cause error) error {
 	_, e := c.Exec(ctx, `UPDATE billing_commands SET status='UNKNOWN',error_code=$2 WHERE id=$1`, x.ID, fmt.Sprint(cause))
