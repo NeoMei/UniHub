@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"net/http"
 	"time"
@@ -102,7 +103,7 @@ func (s *Service) CreateCheckout(ctx context.Context, actor, account string, r C
 				return ErrQuoteInvalidated
 			}
 			if q.ProductCreditUpgrade != nil {
-				if _, e = previousProductUpgradeOrder(ctx, c, sub, q.ProductCreditUpgrade.PreviousOrderID); e != nil {
+				if e = s.verifyUpgradeFunding(ctx, c, sub, q.ProductCreditUpgrade); e != nil {
 					return e
 				}
 			}
@@ -372,22 +373,20 @@ func (s *Service) closeCheckout(ctx context.Context, account, checkout string) (
 	closeErr := p.Close(ctx, checkout)
 	// Even an unsuccessful close can race an accepted payment or a completed close.
 	result, e := s.reconcileCheckout(ctx, account, checkout)
-	if e != nil || result.PaymentStatus != "UNKNOWN" || result.ErrorCode != "provider_query_unknown" {
+	if e != nil || closeErr != nil || result.PaymentStatus != "UNKNOWN" ||
+		(result.ErrorCode != "" && result.ErrorCode != "provider_query_unknown") {
 		return result, e
 	}
-	if closeErr != nil || s.now().Before(x.ExpiresAt) {
-		return result, nil
-	}
-	// A verified successful merchant close is terminal for this original expired
-	// order. A transient query failure cannot turn it back into an open checkout.
-	// A verified payment receipt always wins, including one received concurrently.
+	// A verified merchant close makes the original checkout terminal when the
+	// follow-up query is unavailable or cannot find it. A concurrent payment
+	// receipt or newer checkout status takes precedence.
 	e = s.locked(ctx, account, func(c *pgxpool.Conn) error {
 		current, e := readCheckout(ctx, c, account, checkout)
 		if e != nil {
 			return e
 		}
 		x = current
-		if x.Receipt != nil || x.PaymentStatus != "UNKNOWN" || x.ErrorCode != "provider_query_unknown" {
+		if x.Receipt != nil || x.RefundStatus != "" || x.PaymentStatus != result.PaymentStatus || x.ErrorCode != result.ErrorCode {
 			return nil
 		}
 		x.PaymentStatus = "CLOSED"
@@ -631,7 +630,7 @@ func (s *Service) externalFulfillmentReviewLocked(ctx context.Context, c *pgxpoo
 			reason = "quote_invalidated"
 		}
 		if reason == "" && x.Quote.ProductCreditUpgrade != nil {
-			_, e = previousProductUpgradeOrder(ctx, c, sub, x.Quote.ProductCreditUpgrade.PreviousOrderID)
+			e = s.verifyUpgradeFunding(ctx, c, sub, x.Quote.ProductCreditUpgrade)
 			if errors.Is(e, ErrQuoteInvalidated) {
 				reason = "quote_invalidated"
 			} else if e != nil {
@@ -651,23 +650,26 @@ func (s *Service) externalFulfillmentReviewLocked(ctx context.Context, c *pgxpoo
 	if reason == "" {
 		return false, nil
 	}
-	x.PaymentStatus = "REVIEW"
-	x.FulfillmentStatus = "REVIEW"
-	x.ErrorCode = reason
-	o.FulfillmentStatus = "REVIEW"
 	tx, e := c.Begin(ctx)
 	if e != nil {
 		return false, e
 	}
 	defer database.Rollback(tx)
-	if e = saveOrder(ctx, tx, o); e != nil {
-		return false, e
-	}
-	if _, e = tx.Exec(ctx, `UPDATE billing_checkouts SET snapshot=$2 WHERE id=$1`, x.ID, encode(x)); e != nil {
+	if e = markExternalFulfillmentForReview(ctx, tx, o, x, reason); e != nil {
 		return false, e
 	}
 	if e = tx.Commit(ctx); e != nil {
 		return false, e
 	}
 	return true, nil
+}
+
+func markExternalFulfillmentForReview(ctx context.Context, tx pgx.Tx, o Order, x checkoutRecord, reason string) error {
+	x.PaymentStatus, x.FulfillmentStatus, x.ErrorCode = "REVIEW", "REVIEW", reason
+	o.FulfillmentStatus = "REVIEW"
+	if e := saveOrder(ctx, tx, o); e != nil {
+		return e
+	}
+	_, e := tx.Exec(ctx, `UPDATE billing_checkouts SET snapshot=$2 WHERE id=$1`, x.ID, encode(x))
+	return e
 }

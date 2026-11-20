@@ -12,6 +12,20 @@ import (
 )
 
 const productWalletHeader = "X-UniHub-Product-Credit-Wallet"
+const legacyNetUpgradeHeader = "X-UniHub-Legacy-Net-Upgrade"
+
+func legacyNetUpgradeRequested(r *http.Request) bool {
+	values := r.Header.Values(legacyNetUpgradeHeader)
+	return originProduct(r) == "superwagie" && productWalletRequested(r) && len(values) == 1 && values[0] == "1"
+}
+
+func requireLegacyNetUpgrade(r *http.Request, q billing.Quote) error {
+	if q.ProductCreditUpgrade != nil && q.ProductCreditUpgrade.AppliedCreditAmount != "" &&
+		(q.Offer.ProductID != originProduct(r) || !legacyNetUpgradeRequested(r)) {
+		return accounts.ErrForbidden
+	}
+	return nil
+}
 
 func productWalletRequested(r *http.Request) bool {
 	policy, ok := productPolicy(r)

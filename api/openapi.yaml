@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.65"
+  "version": "0.4.66"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -2004,7 +2004,7 @@
     "post":
       "operationId": "quoteUpgrade"
       "summary": "quoteUpgrade"
-      "description": "Both subscription and offer must belong to approved products before any effect."
+      "description": "Both subscription and offer must belong to approved products before any effect. Registered SuperWagie product_v1 clients can send X-UniHub-Legacy-Net-Upgrade: 1 for a legacy subscription replacement quote."
       "security":
         -
           "BearerAuth": []
@@ -2061,7 +2061,7 @@
     "post":
       "operationId": "acceptQuote"
       "summary": "acceptQuote"
-      "description": "Accepts an upgrade using a stable Idempotency-Key. Existing orders under that key recover before checking quote validity. HTTP 409 quote_invalidated is emitted only for a new upgrade whose quote expired, billing period changed, or subscription version changed, before creating its order or payment. The client may fetch a fresh quote and request confirmation. Generic conflict, operation_pending, and unknown outcomes do not prove no debit and must retain the original key."
+      "description": "Accepts an upgrade using a stable Idempotency-Key. To accept a SuperWagie legacy net upgrade quote, also send X-UniHub-Legacy-Net-Upgrade: 1. Existing orders under that key recover before checking quote validity. HTTP 409 quote_invalidated means a new upgrade lost its quote, paid term, or original funding eligibility before creating its order or payment. The client may fetch a fresh quote and request confirmation. Generic conflict, operation_pending, and unknown outcomes do not prove no debit and must retain the original key."
       "security":
         -
           "BearerAuth": []
@@ -4124,6 +4124,7 @@
         "previous_version": {"type":"integer","minimum":1}
         "estimated_refund_amount": {"$ref":"#/components/schemas/IntegerString"}
         "refund_payment_source": {"enum":["external","wallet"]}
+        "applied_credit_amount": {"$ref":"#/components/schemas/IntegerString","description":"Present for legacy net upgrades. Amount carried forward from the legacy order. This amount plus the charge equals the full new offer price."}
       "required": ["previous_order_id","previous_subscription_id","previous_version","estimated_refund_amount","refund_payment_source"]
       "additionalProperties": false
     "ProductCreditUpgradeReturn":
@@ -4136,6 +4137,7 @@
         "compute_amount": {"$ref":"#/components/schemas/IntegerString"}
         "amount": {"$ref":"#/components/schemas/IntegerString"}
         "refund_id": {"type":"string"}
+        "applied_credit_amount": {"$ref":"#/components/schemas/IntegerString","description":"Present when the replacement used an immediate price credit."}
       "required": ["replacement_order_id","cutover","credit_ceiling"]
       "additionalProperties": false
     "PublicCreditBatch":

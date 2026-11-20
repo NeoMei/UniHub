@@ -44,6 +44,7 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		if e != nil {
 			return e
 		}
+		x.Session = paymentSessionForClient(x.Session)
 		return respond(w, 202, x)
 	})
 	add("GET /v1/accounts/{account}/cash-checkouts", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
@@ -65,6 +66,7 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		if e = requireBillingProduct(r, x.ProductID); e != nil {
 			return e
 		}
+		x.Session = paymentSessionForClient(x.Session)
 		return respond(w, 200, x)
 	})
 	add("POST /v1/accounts/{account}/cash-checkouts/{checkout}/reconcile", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
@@ -82,6 +84,7 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		if e = requireBillingProduct(r, x.ProductID); e != nil {
 			return e
 		}
+		x.Session = paymentSessionForClient(x.Session)
 		return respond(w, 200, x)
 	})
 	add("POST /v1/accounts/{account}/cash-checkouts/{checkout}/close", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
@@ -99,6 +102,7 @@ func (s *api) cashTopupRoutes(add func(string, action)) {
 		if e = requireBillingProduct(r, x.ProductID); e != nil {
 			return e
 		}
+		x.Session = paymentSessionForClient(x.Session)
 		return respond(w, 200, x)
 	})
 }

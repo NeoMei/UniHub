@@ -491,12 +491,14 @@ func (s *Service) finalPosts(ctx context.Context, c *pgxpool.Conn, call Call, ch
 			if !now.Before(b.ExpiresAt) {
 				bucket = "expired"
 			}
-			if call.CreditScope == ProductCreditScopeV1 && b.Frozen {
+			if b.Frozen {
 				order, e := load[Order](ctx, c, `SELECT snapshot FROM billing_orders WHERE id=$1 AND account_id=$2`, b.OrderID, b.AccountID)
 				if e != nil {
 					return nil, e
 				}
-				if order.UpgradeReturn != nil && b.ExpiresAt.After(order.UpgradeReturn.Cutover) {
+				if order.UpgradeReturn != nil &&
+					(call.CreditScope == ProductCreditScopeV1 || order.UpgradeReturn.AppliedCreditAmount != "") &&
+					b.ExpiresAt.After(order.UpgradeReturn.Cutover) {
 					bucket = "withdrawn"
 				}
 			}

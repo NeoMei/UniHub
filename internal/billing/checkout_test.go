@@ -216,6 +216,7 @@ func TestExternalCheckoutUnknownPreservesIdentityAndCommercialLock(t *testing.T)
 		t.Fatalf("unpaid checkout enqueued %d commands", n)
 	}
 	p.result = payments.Result{OrderID: x.ID, Status: "NOT_FOUND"}
+	f.s.ConfigurePayments([]payments.Provider{&checkoutCloseProvider{checkoutProvider: p, closeErr: payments.ErrUnavailable}})
 	x, e = f.s.CloseCheckout(ctx, f.actor, f.account, x.ID)
 	if e != nil || x.PaymentStatus == "CLOSED" {
 		t.Fatalf("premature close %+v %v", x, e)
