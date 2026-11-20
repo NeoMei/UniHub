@@ -22,6 +22,33 @@ import (
 	"unihub/internal/wallet"
 )
 
+func TestCheckoutForClientReturnsUTCSessionExpiry(t *testing.T) {
+	local := time.Date(2030, 4, 12, 19, 30, 45, 123456789, time.FixedZone("CST", 8*60*60))
+	checkout := billing.Checkout{Provider: "alipay", Session: &payments.Session{
+		Kind: "qr", URL: "https://qr.alipay.com/fixture", ExpiresAt: local,
+	}}
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	if legacy := checkoutForClient(request, checkout); legacy.Session != nil {
+		t.Fatal("a legacy client received an Alipay QR session without opting in")
+	}
+	request.Header.Set("X-UniHub-Alipay-QR", "1")
+	view := checkoutForClient(request, checkout)
+	if view.Session == nil {
+		t.Fatal("the QR-capable client did not receive its session")
+	}
+	encoded, err := json.Marshal(view.Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"kind":"qr","url":"https://qr.alipay.com/fixture","expires_at":"2030-04-12T11:30:45.123456789Z"}`
+	if string(encoded) != want {
+		t.Fatalf("session JSON = %s, want %s", encoded, want)
+	}
+	if checkout.Session.ExpiresAt != local {
+		t.Fatal("rendering the response changed the stored session's timestamp")
+	}
+}
+
 func TestProductFinanceExternalCheckoutIsolation(t *testing.T) {
 	base := os.Getenv("UNIHUB_TEST_LEDGER_URL")
 	if base == "" {
@@ -169,12 +196,13 @@ func TestProductFinanceExternalCheckoutIsolation(t *testing.T) {
 	}
 	r := send("POST", qrPath, `{"offer_id":"sandbox-sw-month-1","provider":"alipay","require_qr":true}`, true)
 	var scan billing.Checkout
-	if r.Code != 202 || json.Unmarshal(r.Body.Bytes(), &scan) != nil || scan.Session == nil || scan.Session.Kind != "qr" {
+	if r.Code != 202 || json.Unmarshal(r.Body.Bytes(), &scan) != nil || scan.Session == nil || scan.Session.Kind != "qr" || scan.Session.ExpiresAt.Location() != time.UTC {
 		t.Fatalf("new checkout %d %s", r.Code, r.Body)
 	}
 	var legacySession, privateQRSession bool
-	if err := p.QueryRow(ctx, `SELECT snapshot ? 'session', snapshot ? 'alipay_qr_session' FROM billing_checkouts WHERE id=$1`, scan.ID).Scan(&legacySession, &privateQRSession); err != nil || legacySession || !privateQRSession {
-		t.Fatalf("QR must remain separate from the stored legacy session: %v %v %v", legacySession, privateQRSession, err)
+	var storedExpiry string
+	if err := p.QueryRow(ctx, `SELECT snapshot ? 'session', snapshot ? 'alipay_qr_session', snapshot->'alipay_qr_session'->>'expires_at' FROM billing_checkouts WHERE id=$1`, scan.ID).Scan(&legacySession, &privateQRSession, &storedExpiry); err != nil || legacySession || !privateQRSession || !strings.HasSuffix(storedExpiry, "+08:00") {
+		t.Fatalf("QR must remain separate from the stored legacy session and keep its original timestamp: %v %v %q %v", legacySession, privateQRSession, storedExpiry, err)
 	}
 	legacyReplay := send("POST", qrPath, `{"offer_id":"sandbox-sw-month-1","provider":"alipay"}`, false)
 	if legacyReplay.Code != 202 || strings.Contains(legacyReplay.Body.String(), "qr.alipay.com") || !strings.Contains(legacyReplay.Body.String(), scan.ID) || alipay.creates != 1 {
@@ -186,6 +214,9 @@ func TestProductFinanceExternalCheckoutIsolation(t *testing.T) {
 			if r.Code != 200 || strings.Contains(r.Body.String(), "qr.alipay.com") != qr || !strings.Contains(r.Body.String(), scan.ID) {
 				t.Fatalf("mixed-version read qr=%v %d %s", qr, r.Code, r.Body)
 			}
+			if qr && !strings.Contains(r.Body.String(), `"expires_at":"`+scan.Session.ExpiresAt.Format(time.RFC3339Nano)+`"`) {
+				t.Fatalf("QR session expiry was not normalized on read: %s", r.Body)
+			}
 		}
 	}
 }
@@ -195,7 +226,7 @@ type alipayQRHTTPProvider struct{ checkoutHTTPProvider }
 func (*alipayQRHTTPProvider) ID() string { return "alipay" }
 func (p *alipayQRHTTPProvider) Create(_ context.Context, r payments.Request) (payments.Session, error) {
 	p.creates++
-	return payments.Session{Kind: "qr", URL: "https://qr.alipay.com/fixture", ExpiresAt: r.ExpiresAt}, nil
+	return payments.Session{Kind: "qr", URL: "https://qr.alipay.com/fixture", ExpiresAt: r.ExpiresAt.Add(-time.Minute).In(time.FixedZone("CST", 8*60*60))}, nil
 }
 
 type checkoutHTTPProvider struct {

@@ -206,7 +206,7 @@ func (s *Service) checkoutView(ctx context.Context, x checkoutRecord) (Checkout,
 }
 
 func checkoutOrderView(v Checkout, o Order) Checkout {
-	if o.UpgradeReturn != nil {
+	if o.UpgradeReturn != nil && o.UpgradeReturn.AppliedCreditAmount == "" {
 		v.UpgradeReturnStatus = o.RefundStatus
 		v.UpgradeRefundAmount = o.UpgradeReturn.Amount
 	}
