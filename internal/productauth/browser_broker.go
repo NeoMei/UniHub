@@ -20,9 +20,12 @@ import (
 )
 
 type BrowserApproval struct {
-	ClientID  string `json:"client_id"`
-	HandoffID string `json:"handoff_id"`
-	State     string `json:"state"`
+	ClientID                string `json:"client_id"`
+	HandoffID               string `json:"handoff_id"`
+	State                   string `json:"state"`
+	NativeSessionID         string `json:"native_session_id,omitempty"`
+	NativeSessionExpiresAt  int64  `json:"native_session_expires_at,omitempty"`
+	NativeHandoffGeneration string `json:"native_handoff_generation,omitempty"`
 }
 type BrowserApprovalReceipt struct {
 	FinishURL string `json:"finish_url"`
@@ -42,11 +45,13 @@ type BrowserGrant struct {
 	SourceProofExpiresAt int64               `json:"source_proof_expires_at,omitempty"`
 }
 type BrowserCompletion struct {
-	User        accounts.User
-	Claims      auth.Claims
-	BindingID   string
-	AuthVersion int64
-	RedirectURI string
+	User                   accounts.User
+	Claims                 auth.Claims
+	BindingID              string
+	AuthVersion            int64
+	NativeSessionID        string
+	NativeSessionExpiresAt *time.Time
+	RedirectURI            string
 }
 
 func (s *Service) ConfigureBrowserClients(clients map[string]products.Client) {
@@ -77,21 +82,44 @@ func browserRedirect(raw string, values url.Values) string {
 func validBrowserState(raw string) bool {
 	return len(raw) >= 32 && len(raw) <= 256 && !strings.ContainsAny(raw, "\r\n\x00")
 }
+
+func allowsBrowserHandoff(c products.Client, nativeSession, generation string) bool {
+	if c.NativeHandoffGeneration == "" {
+		return nativeSession == "" && generation == ""
+	}
+	return c.NativeHandoffGeneration != "disabled" && nativeSession != "" && generation == c.NativeHandoffGeneration
+}
+
 func (s *Service) BeginBrowserHandoff(ctx context.Context, client, state, browser string) (string, error) {
 	c, e := s.BrowserClient(client, "")
-	if e != nil || !validBrowserState(state) || len(browser) < 32 {
+	if e != nil || c.NativeHandoffGeneration == "disabled" || !validBrowserState(state) || len(browser) < 32 {
 		return "", accounts.ErrInvalid
 	}
 	id := randomToken()
-	_, e = s.pool.Exec(ctx, `INSERT INTO product_browser_handoffs(id_hash,client_id,state_hash,browser_hash,expires_at) VALUES($1,$2,$3,$4,now()+interval '120 seconds')`, digest(id), client, digest(state), digest(browser))
+	_, e = s.pool.Exec(ctx, `INSERT INTO product_browser_handoffs(id_hash,client_id,state_hash,browser_hash,expires_at) VALUES($1,$2,$3,$4,now()+$5::interval)`, digest(id), client, digest(state), digest(browser), nativeHandoffLifetime)
 	if e != nil {
 		return "", e
 	}
 	return browserRedirect(c.RedirectURIs[0], url.Values{"handoff": {id}, "state": {state}}), nil
 }
 func (s *Service) ApproveBrowserHandoff(ctx context.Context, actor, product, instance string, in BrowserApproval) (BrowserApprovalReceipt, error) {
+	var expiry *time.Time
+	if in.NativeSessionID != "" {
+		now := time.Now()
+		if !nativeBrowserSessionID.MatchString(in.NativeSessionID) ||
+			in.NativeSessionExpiresAt <= now.Unix() || !validNativeSessionExpiry(in.NativeSessionExpiresAt, now) {
+			return BrowserApprovalReceipt{}, accounts.ErrInvalid
+		}
+		deadline := time.Unix(in.NativeSessionExpiresAt, 0)
+		expiry = &deadline
+	} else if in.NativeSessionExpiresAt != 0 {
+		return BrowserApprovalReceipt{}, accounts.ErrInvalid
+	}
 	c, e := s.BrowserClient(in.ClientID, "")
 	if e != nil || c.ProductID != product || productusers.Instance(c.InstanceID) != productusers.Instance(instance) {
+		return BrowserApprovalReceipt{}, accounts.ErrForbidden
+	}
+	if !allowsBrowserHandoff(c, in.NativeSessionID, in.NativeHandoffGeneration) {
 		return BrowserApprovalReceipt{}, accounts.ErrForbidden
 	}
 	u, e := s.VerifyActor(ctx, actor, product, instance)
@@ -104,7 +132,16 @@ func (s *Service) ApproveBrowserHandoff(ctx context.Context, actor, product, ins
 	if e != nil {
 		return BrowserApprovalReceipt{}, accounts.ErrForbidden
 	}
-	row, e := s.pool.Exec(ctx, `UPDATE product_browser_handoffs SET approved_user_id=$4,source_binding_id=$5,source_auth_version=$6 WHERE id_hash=$1 AND client_id=$2 AND state_hash=$3 AND expires_at>now() AND NOT consumed AND (approved_user_id IS NULL OR approved_user_id=$4)`, digest(in.HandoffID), in.ClientID, digest(in.State), u.ID, binding, version)
+	row, e := s.pool.Exec(ctx, `UPDATE product_browser_handoffs h
+		SET approved_user_id=$4,source_binding_id=$5,source_auth_version=$6,
+		  native_session_id=NULLIF($7,''),native_session_expires_at=$8,native_handoff_generation=$9
+		WHERE h.id_hash=$1 AND h.client_id=$2 AND h.state_hash=$3 AND h.expires_at>now() AND NOT h.consumed
+		  AND ($8::timestamptz IS NULL OR $8>clock_timestamp())
+		  AND (h.approved_user_id IS NULL OR (h.approved_user_id=$4 AND h.native_session_id IS NOT DISTINCT FROM NULLIF($7,'')
+		    AND h.native_session_expires_at IS NOT DISTINCT FROM $8 AND h.native_handoff_generation=$9))
+		  AND NOT EXISTS (SELECT 1 FROM product_browser_native_session_revocations r
+		    WHERE r.binding_id=$5 AND r.native_session_id=$7 AND r.expires_at>clock_timestamp())`,
+		digest(in.HandoffID), in.ClientID, digest(in.State), u.ID, binding, version, in.NativeSessionID, expiry, in.NativeHandoffGeneration)
 	if e != nil {
 		return BrowserApprovalReceipt{}, e
 	}
@@ -130,20 +167,36 @@ func (s *Service) FinishBrowserHandoff(ctx context.Context, id, state, browser s
 		return BrowserCompletion{}, e
 	}
 	defer database.Rollback(tx)
-	var client, user, binding string
+	var client, user, binding, nativeSession, generation string
 	var version int64
-	e = tx.QueryRow(ctx, `UPDATE product_browser_handoffs h SET consumed=true FROM product_auth_subjects p,product_runtime_bindings b,product_user_access a,users u WHERE h.id_hash=$1 AND h.state_hash=$2 AND h.browser_hash=$3 AND h.expires_at>now() AND NOT h.consumed AND h.approved_user_id IS NOT NULL AND h.approved_user_id=b.user_id AND p.binding_id=h.source_binding_id AND p.auth_version=h.source_auth_version AND NOT p.deleted AND NOT p.native_locked AND b.id=p.binding_id AND a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id AND a.active AND u.id=b.user_id AND u.active RETURNING h.client_id,h.approved_user_id,h.source_binding_id,h.source_auth_version`, digest(id), digest(state), digest(browser)).Scan(&client, &user, &binding, &version)
+	var nativeExpiry *time.Time
+	e = tx.QueryRow(ctx, `UPDATE product_browser_handoffs h SET consumed=true
+		FROM product_auth_subjects p,product_runtime_bindings b,product_user_access a,users u
+		WHERE h.id_hash=$1 AND h.state_hash=$2 AND h.browser_hash=$3 AND h.expires_at>now()
+		  AND NOT h.consumed AND h.approved_user_id=b.user_id AND p.binding_id=h.source_binding_id
+		  AND p.auth_version=h.source_auth_version AND NOT p.deleted AND NOT p.native_locked
+		  AND b.id=p.binding_id AND a.user_id=b.user_id AND a.product_id=b.product_id
+		  AND a.instance_id=b.instance_id AND a.active AND u.id=b.user_id AND u.active
+		  AND (h.native_session_id IS NULL OR h.native_session_expires_at>clock_timestamp())
+		  AND NOT EXISTS (SELECT 1 FROM product_browser_native_session_revocations r
+		    WHERE r.binding_id=b.id AND r.native_session_id=h.native_session_id AND r.expires_at>clock_timestamp())
+		RETURNING h.client_id,h.approved_user_id,h.source_binding_id,h.source_auth_version,
+		  COALESCE(h.native_session_id,''),h.native_session_expires_at,h.native_handoff_generation`,
+		digest(id), digest(state), digest(browser)).Scan(&client, &user, &binding, &version, &nativeSession, &nativeExpiry, &generation)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return BrowserCompletion{}, accounts.ErrForbidden
 	}
 	if e != nil {
 		return BrowserCompletion{}, e
 	}
-	if e = tx.Commit(ctx); e != nil {
-		return BrowserCompletion{}, e
-	}
 	c, e := s.BrowserClient(client, "")
 	if e != nil {
+		return BrowserCompletion{}, e
+	}
+	if !allowsBrowserHandoff(c, nativeSession, generation) {
+		return BrowserCompletion{}, accounts.ErrForbidden
+	}
+	if e = tx.Commit(ctx); e != nil {
 		return BrowserCompletion{}, e
 	}
 	u, e := s.users.RuntimeUser(ctx, user)
@@ -154,19 +207,28 @@ func (s *Service) FinishBrowserHandoff(ctx context.Context, id, state, browser s
 	if e != nil {
 		return BrowserCompletion{}, e
 	}
-	return BrowserCompletion{u, claims, binding, version, browserRedirect(c.RedirectURIs[0], url.Values{"handoff_done": {"1"}, "state": {state}})}, nil
+	return BrowserCompletion{
+		User: u, Claims: claims, BindingID: binding, AuthVersion: version,
+		NativeSessionID: nativeSession, NativeSessionExpiresAt: nativeExpiry,
+		RedirectURI: browserRedirect(c.RedirectURIs[0], url.Values{"handoff_done": {"1"}, "state": {state}}),
+	}, nil
 }
 func (s *Service) BrowserSessionAllowed(ctx context.Context, sessionHash string) bool {
-	return s.browserSessionSourceAllowedOn(ctx, s.pool, sessionHash)
-}
-
-func (s *Service) browserSessionSourceAllowedOn(ctx context.Context, q interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}, sessionHash string) bool {
-	var source bool
-	var allowed bool
-	e := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM product_browser_session_origins WHERE session_id_hash=$1),EXISTS(SELECT 1 FROM product_browser_session_origins o JOIN product_auth_subjects p ON p.binding_id=o.binding_id JOIN product_runtime_bindings b ON b.id=p.binding_id JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id JOIN users u ON u.id=b.user_id WHERE o.session_id_hash=$1 AND o.auth_version=p.auth_version AND NOT p.deleted AND NOT p.native_locked AND a.active AND u.active)`, sessionHash).Scan(&source, &allowed)
-	return e == nil && (!source || allowed)
+	var user, product, instance string
+	var current bool
+	err := s.pool.QueryRow(ctx, `SELECT b.user_id,b.product_id,b.instance_id,
+		o.auth_version=p.auth_version AND NOT p.deleted AND NOT p.native_locked AND u.active AND COALESCE(a.active,false)
+		FROM product_browser_session_origins o
+		JOIN product_auth_subjects p ON p.binding_id=o.binding_id
+		JOIN product_runtime_bindings b ON b.id=p.binding_id
+		JOIN users u ON u.id=b.user_id
+		LEFT JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id
+		WHERE o.session_id_hash=$1`, sessionHash).Scan(&user, &product, &instance, &current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true
+	}
+	return err == nil && current && s.users.Managed(product, instance) &&
+		s.users.RequirePermissionOn(ctx, s.pool, user, product, instance, "product:use") == nil
 }
 
 func currentBrowserSourceSession(ctx context.Context, q interface {
@@ -248,23 +310,59 @@ func (s *Service) AuthorizeBrowser(ctx context.Context, claims auth.Claims, clie
 	if _, e = currentBrowserSourceSession(ctx, s.pool, sessionHash, u.ID); e != nil {
 		return "", accounts.ErrForbidden
 	}
-	access, e := s.users.Resolve(ctx, u, c.ProductID, c.InstanceID)
-	if e != nil || !slices.Contains(access.Permissions, "product:use") {
-		return "", accounts.ErrForbidden
-	}
 	var sourceBinding *string
 	var sourceVersion *int64
 	e = s.pool.QueryRow(ctx, `SELECT binding_id,auth_version FROM product_browser_session_origins WHERE session_id_hash=$1`, sessionHash).Scan(&sourceBinding, &sourceVersion)
 	if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 		return "", e
 	}
-	if sourceBinding != nil && !s.browserSourceAllowed(ctx, *sourceBinding, *sourceVersion) {
+	if sourceBinding != nil && (sourceVersion == nil || !s.browserSourceAllowed(ctx, *sourceBinding, *sourceVersion)) {
 		return "", accounts.ErrForbidden
 	}
 	code := randomToken()
-	_, e = s.pool.Exec(ctx, `INSERT INTO product_browser_codes(code_hash,client_id,user_id,pkce_challenge,nonce_hash,source_binding_id,source_auth_version,source_session_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '120 seconds')`, digest(code), client, u.ID, challenge, digest(nonce), sourceBinding, sourceVersion, sessionHash)
-	if e != nil {
-		return "", e
+	if c.IdentityLinkRole != "" {
+		// Evaluate the permission and capture the destination versions from
+		// one snapshot. Later changes cannot be adopted by this code.
+		tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+		if err != nil {
+			return "", err
+		}
+		defer database.Rollback(tx)
+		if err = s.users.RequirePermissionOn(ctx, tx, u.ID, c.ProductID, c.InstanceID, "product:use"); err != nil {
+			return "", err
+		}
+		result, err := tx.Exec(ctx, `INSERT INTO product_browser_codes(
+			code_hash,client_id,user_id,pkce_challenge,nonce_hash,source_binding_id,source_auth_version,source_session_hash,expires_at,
+			destination_binding_id,destination_assignment_version,destination_status_version,destination_auth_version)
+			SELECT $1,$2,$3,$4,$5,$6,$7,$8,now()+interval '120 seconds',b.id,a.version,u.status_version,p.auth_version
+			FROM product_runtime_bindings b JOIN product_auth_subjects p ON p.binding_id=b.id
+			JOIN product_user_access a USING(user_id,product_id,instance_id)
+			JOIN users u ON u.id=b.user_id
+			WHERE b.user_id=$3 AND b.product_id=$9 AND b.instance_id=$10
+			  AND u.active AND a.active AND NOT p.deleted AND NOT p.native_locked`,
+			digest(code), client, u.ID, challenge, digest(nonce), sourceBinding, sourceVersion, sessionHash,
+			c.ProductID, productusers.Instance(c.InstanceID))
+		if err != nil {
+			return "", err
+		}
+		if result.RowsAffected() != 1 {
+			return "", accounts.ErrForbidden
+		}
+		if err = tx.Commit(ctx); err != nil {
+			return "", err
+		}
+	} else {
+		access, err := s.users.Resolve(ctx, u, c.ProductID, c.InstanceID)
+		if err != nil || !slices.Contains(access.Permissions, "product:use") {
+			return "", accounts.ErrForbidden
+		}
+		_, err = s.pool.Exec(ctx, `INSERT INTO product_browser_codes
+			(code_hash,client_id,user_id,pkce_challenge,nonce_hash,source_binding_id,source_auth_version,source_session_hash,expires_at)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '120 seconds')`,
+			digest(code), client, u.ID, challenge, digest(nonce), sourceBinding, sourceVersion, sessionHash)
+		if err != nil {
+			return "", err
+		}
 	}
 	return browserRedirect(redirect, url.Values{"broker": {"1"}, "code": {code}, "state": {state}}), nil
 }
@@ -283,6 +381,9 @@ func (s *Service) ExchangeBrowser(ctx context.Context, product, instance string,
 	e = s.pool.QueryRow(ctx, `UPDATE product_browser_codes c SET consumed=true
 		WHERE c.code_hash=$1 AND c.client_id=$2 AND c.pkce_challenge=$3 AND c.nonce_hash=$4
 		  AND c.expires_at>now() AND NOT c.consumed
+		  AND ((NOT $5::boolean AND c.destination_binding_id IS NULL) OR
+		    ($5 AND EXISTS (`+currentIdentityBrowserCodeDestination+`
+		      AND b.product_id=$6 AND b.instance_id=$7)))
 		  AND (c.source_session_hash IS NULL OR EXISTS (
 		    SELECT 1 FROM browser_sessions s JOIN identities i ON i.issuer=s.issuer AND i.subject=s.subject
 		    JOIN users u ON u.id=i.user_id
@@ -290,7 +391,8 @@ func (s *Service) ExchangeBrowser(ctx context.Context, product, instance string,
 		      AND s.created_at>=u.session_not_before
 		      AND NOT EXISTS (SELECT 1 FROM identity_revocations r WHERE r.issuer=s.issuer AND r.subject=s.subject AND r.pending)))
 		RETURNING c.user_id,c.source_binding_id,c.source_auth_version,c.source_session_hash,
-		  (SELECT s.expires_at FROM browser_sessions s WHERE s.id_hash=c.source_session_hash)`, digest(in.Code), in.ClientID, challenge, digest(in.Nonce)).Scan(&user, &sourceBinding, &sourceVersion, &sourceSessionHash, &sourceExpires)
+		  (SELECT s.expires_at FROM browser_sessions s WHERE s.id_hash=c.source_session_hash)`, digest(in.Code), in.ClientID, challenge, digest(in.Nonce),
+		c.IdentityLinkRole != "", product, productusers.Instance(instance)).Scan(&user, &sourceBinding, &sourceVersion, &sourceSessionHash, &sourceExpires)
 	if e != nil {
 		return BrowserGrant{}, accounts.ErrForbidden
 	}

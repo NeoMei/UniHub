@@ -180,3 +180,55 @@ func TestIdentityLinkPreservesCanonicalUserAndExplicitAdmission(t *testing.T) {
 		}
 	})
 }
+
+func TestIdentityLinkRechecksEffectiveSourcePermission(t *testing.T) {
+	s, source, client := newBrowserSessionTestService(t)
+	ctx := context.Background()
+	session := browserSessionDigest(browserSecret())
+	if _, err := s.pool.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at)
+		VALUES($1,$2,$3,'Fixture','fixture@example.test','csrf',now()+interval '10 minutes')`,
+		session, source.Binding.Issuer, source.Binding.Subject); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO product_browser_session_origins(session_id_hash,binding_id,auth_version)
+		VALUES($1,$2,$3)`, session, source.Binding.ID, source.AuthVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	verifier := browserSecret()
+	sum := sha256.Sum256([]byte(verifier))
+	native := Authentication{LocalUserID: "destination-with-revoked-source", AuthenticationID: "fresh-destination-native",
+		Method: "password", AuthenticatedAt: time.Now().Unix(), AuthVersion: 1}
+	begin := BeginIdentityLink{ClientID: client.ClientID, State: browserSecret(), Nonce: browserSecret(),
+		Challenge: base64.RawURLEncoding.EncodeToString(sum[:]), Authentication: native}
+	link, err := s.BeginIdentityLink(ctx, client.ProductID, client.InstanceID, begin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination, err := s.AuthorizeIdentityLink(ctx, client.ClientID, client.RedirectURIs[0], begin.State, link.LinkID, session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callback, err := url.Parse(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	complete := CompleteIdentityLink{ClientID: client.ClientID, LinkID: link.LinkID, Code: callback.Query().Get("code"),
+		RedirectURI: client.RedirectURIs[0], Nonce: begin.Nonce, Verifier: verifier, CentralUserID: source.Binding.UserID, Authentication: native}
+	if _, err = s.PreviewIdentityLink(ctx, client.ProductID, client.InstanceID, complete); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.pool.Exec(ctx, `UPDATE product_user_access SET permission_overrides='{"product":{"use":false}}',version=version+1
+		WHERE user_id=$1 AND product_id=$2 AND instance_id=$3`, source.Binding.UserID, source.Binding.ProductID, source.Binding.InstanceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.PreviewIdentityLink(ctx, client.ProductID, client.InstanceID, complete); !errors.Is(err, accounts.ErrForbidden) {
+		t.Errorf("preview accepted a product session without product:use: %v", err)
+	}
+	if _, err = s.CompleteIdentityLink(ctx, client.ProductID, client.InstanceID, complete); !errors.Is(err, accounts.ErrForbidden) {
+		t.Errorf("completion accepted a product session without product:use: %v", err)
+	}
+	if _, err = s.IdentityLinkByCanonicalUser(ctx, client.ProductID, client.InstanceID, source.Binding.UserID); !errors.Is(err, accounts.ErrNotFound) {
+		t.Fatalf("denied link left a destination binding: %v", err)
+	}
+}

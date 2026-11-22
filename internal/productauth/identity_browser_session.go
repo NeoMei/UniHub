@@ -21,6 +21,15 @@ type ProductIdentitySession struct {
 	SourceProofExpiresAt int64    `json:"source_proof_expires_at"`
 }
 
+// currentIdentityBrowserCodeDestination checks the pinned destination of code c.
+const currentIdentityBrowserCodeDestination = `SELECT 1
+	FROM product_runtime_bindings b
+	JOIN product_auth_subjects p ON p.binding_id=b.id AND p.auth_version=c.destination_auth_version
+	JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id
+	JOIN users u ON u.id=b.user_id
+	WHERE b.id=c.destination_binding_id AND b.user_id=c.user_id AND u.status_version=c.destination_status_version
+	  AND a.version=c.destination_assignment_version AND a.active AND u.active AND NOT p.deleted AND NOT p.native_locked`
+
 // MatchesIdentityBrowser compares the browser code to an authenticated
 // local subject without redeeming the code or disclosing another subject.
 func (s *Service) MatchesIdentityBrowser(ctx context.Context, product, instance, local string, in BrowserExchange) (bool, error) {
@@ -36,10 +45,10 @@ func (s *Service) MatchesIdentityBrowser(ctx context.Context, product, instance,
 	var userID, sessionHash string
 	err = s.pool.QueryRow(ctx, `SELECT c.user_id, c.source_session_hash
 		FROM product_browser_codes c
-		JOIN product_runtime_bindings b ON b.user_id=c.user_id
 		WHERE c.code_hash=$1 AND c.client_id=$2 AND c.pkce_challenge=$3 AND c.nonce_hash=$4
 		  AND c.expires_at>now() AND NOT c.consumed AND c.source_session_hash IS NOT NULL
-		  AND b.product_id=$5 AND b.instance_id=$6 AND b.local_user_id=$7`,
+		  AND EXISTS (`+currentIdentityBrowserCodeDestination+`
+		    AND b.product_id=$5 AND b.instance_id=$6 AND b.local_user_id=$7)`,
 		digest(in.Code), in.ClientID, challenge, digest(in.Nonce), product, instance, local).Scan(&userID, &sessionHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -82,17 +91,16 @@ func (s *Service) ExchangeIdentityBrowser(ctx context.Context, product, instance
 	defer database.Rollback(tx)
 
 	userID, raw := grant.Access.User.ID, grant.SourceProofToken
-	// Promote the newly issued proof to the identity namespace and capture
-	// the exact versions used by verification and lookup in this snapshot.
+	// Carry the authorization epoch forward. The verification below rejects
+	// versions that changed while the code was being redeemed.
 	result, err := tx.Exec(ctx, `UPDATE product_browser_source_proofs f SET
-		token_hash=$2,destination_binding_id=b.id,destination_assignment_version=a.version,
-		destination_status_version=u.status_version,destination_auth_version=p.auth_version
-		FROM product_runtime_bindings b JOIN product_auth_subjects p ON p.binding_id=b.id
-		JOIN product_user_access a USING(user_id,product_id,instance_id)
-		JOIN users u ON u.id=b.user_id
+		token_hash=$2,destination_binding_id=c.destination_binding_id,destination_assignment_version=c.destination_assignment_version,
+		destination_status_version=c.destination_status_version,destination_auth_version=c.destination_auth_version
+		FROM product_browser_codes c
 		WHERE f.token_hash=$1 AND f.user_id=$3 AND f.product_id=$4 AND f.instance_id=$5 AND f.client_id=$6
-		  AND b.user_id=f.user_id AND b.product_id=f.product_id AND b.instance_id=f.instance_id`,
-		browserSessionDigest(raw), identityBrowserSourceProofDigest(raw), userID, product, instance, in.ClientID)
+		  AND c.code_hash=$7 AND c.consumed AND c.client_id=f.client_id AND c.user_id=f.user_id
+		  AND c.source_session_hash=f.source_session_hash AND c.destination_binding_id IS NOT NULL`,
+		browserSessionDigest(raw), identityBrowserSourceProofDigest(raw), userID, product, instance, in.ClientID, digest(in.Code))
 	if err != nil {
 		return ProductIdentitySession{}, err
 	}

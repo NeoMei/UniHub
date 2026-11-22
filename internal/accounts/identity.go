@@ -36,6 +36,40 @@ func LockIdentity(ctx context.Context, tx pgx.Tx, issuer, subject string) error 
 	return err
 }
 
+const identityEmailHintSQL = `lower(regexp_replace(email, '^[[:space:]]+|[[:space:]]+$', '', 'g'))`
+const inputIdentityEmailHintSQL = `(SELECT ` + identityEmailHintSQL + ` FROM (VALUES ($1::text)) AS input(email))`
+
+// LockIdentityEmail serializes new account writes sharing a profile email hint.
+// Call after locking the exact identity. Email does not identify the account.
+func LockIdentityEmail(ctx context.Context, tx pgx.Tx, email string) error {
+	if strings.TrimSpace(email) == "" {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('identity-email:' || `+inputIdentityEmailHintSQL+`,0))`, email)
+	return err
+}
+
+// RequireUnusedIdentityEmail is for automatic enrollment. In a read-committed
+// transaction, check in a separate statement so a creator that held the lock
+// is visible after its commit. Ordinary account creation can share an email.
+func RequireUnusedIdentityEmail(ctx context.Context, tx pgx.Tx, email string) error {
+	if strings.TrimSpace(email) == "" {
+		return ErrInvalid
+	}
+	if err := LockIdentityEmail(ctx, tx, email); err != nil {
+		return err
+	}
+	var exists bool
+	err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE `+identityEmailHintSQL+`=`+inputIdentityEmailHintSQL+`)`, email).Scan(&exists)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return ErrConflict
+	}
+	return nil
+}
+
 // EnsureIdentityOn creates or resolves an identity and its personal account in tx.
 func (s *Store) EnsureIdentityOn(ctx context.Context, tx pgx.Tx, identity Identity) (User, error) {
 	if err := LockIdentity(ctx, tx, identity.Issuer, identity.Subject); err != nil {
@@ -47,6 +81,9 @@ func (s *Store) EnsureIdentityOn(ctx context.Context, tx pgx.Tx, identity Identi
 		return user, nil
 	}
 	if domainError(err) != ErrNotFound {
+		return User{}, err
+	}
+	if err = LockIdentityEmail(ctx, tx, identity.Email); err != nil {
 		return User{}, err
 	}
 	user = User{ID: newID(), Name: identity.Name, Email: identity.Email}

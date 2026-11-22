@@ -36,6 +36,7 @@ func setupBrowserHandoffUI(t *testing.T) (*Service, http.Handler, map[string]pro
 	}
 	clients, err := products.Parse([]byte(`[
 		{"client_id":"wiki","product_id":"agentwiki","browser_sso":true,"identity_link_role":"member","redirect_uris":["https://wiki.test/return"],"origins":["https://wiki.test"],"native_login_url":"https://wiki.test/login?source=hub","native_login_label":"AgentWiki & Co"},
+		{"client_id":"wiki-native","product_id":"agentwiki","browser_sso":true,"identity_link_role":"member","redirect_uris":["https://wiki.test/return"],"native_handoff_generation":"1"},
 		{"client_id":"wiki-secondary","product_id":"agentwiki","browser_sso":true,"identity_link_role":"member","redirect_uris":["https://wiki-secondary.test/return"],"origins":["https://wiki-secondary.test"],"native_login_url":"https://wiki-secondary.test/login","native_login_label":"AgentWiki Secondary"},
 		{"client_id":"wiki-no-picker","product_id":"agentwiki","browser_sso":true,"identity_link_role":"member","redirect_uris":["https://wiki.test/return"]},
 		{"client_id":"router","product_id":"llmrouter","browser_sso":true,"redirect_uris":["https://router.test/return"]}
@@ -56,7 +57,7 @@ func setupBrowserHandoffUI(t *testing.T) (*Service, http.Handler, map[string]pro
 		})
 	}))
 	t.Cleanup(provider.Close)
-	browser, err := console.New(ctx, pool, nil, console.Options{Issuer: provider.URL, PublicURL: "https://hub.test", ClientID: "console"})
+	browser, err := console.New(ctx, pool, nil, console.Options{Issuer: provider.URL, PublicURL: "https://hub.test", ClientID: "console", ProductUsers: s.users})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,6 +292,82 @@ func TestBrowserHandoffProtectsCentralAccount(t *testing.T) {
 		checkSession(old, native.Binding.UserID)
 	})
 
+	t.Run("stale same-account GET cannot replace a confirmed switch", func(t *testing.T) {
+		departing := makeActor("agentwiki", "wiki-departing", "Departing account")
+		path, binding := begin(clients["wiki"], departing)
+		signedIn := handoffUIRequest(t, h, http.StatusSeeOther, http.MethodGet, path, nil, binding)
+		old := handoffUICookie(t, signedIn, "unihub_session")
+		checkSession(old, departing.Binding.UserID)
+
+		// Keep the current account recognizable, but require a fresh session
+		// for a same-account handoff after its native auth version changes.
+		local := departing.Binding.LocalUserID
+		if _, err := s.SyncLifecycle(ctx, "agentwiki", "default", Lifecycle{
+			LocalUserID: local, OperationID: "advance-departing-version", PreviousAuthVersion: 1, NextAuthVersion: 2,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		departing, err := s.Authenticate(ctx, "agentwiki", "default", Authentication{
+			LocalUserID: local, AuthenticationID: "reauthenticate-departing", Method: "password",
+			AuthenticatedAt: time.Now().Unix(), AuthVersion: 2,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		samePath, sameBinding := begin(clients["wiki"], departing)
+		switchPath, switchBinding := begin(clients["wiki"], native)
+		prompt := handoffUIRequest(t, h, http.StatusOK, http.MethodGet, switchPath, nil, old, switchBinding)
+		form := handoffUIForm(t, prompt)
+		form.Set("action", "confirm")
+
+		bounded, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		blocker, err := s.pool.Begin(bounded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer database.Rollback(blocker)
+		sameURL, err := url.Parse(samePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var held string
+		if err = blocker.QueryRow(bounded, `SELECT id_hash FROM product_browser_handoffs WHERE id_hash=$1 FOR UPDATE`,
+			digest(sameURL.Query().Get("handoff"))).Scan(&held); err != nil {
+			t.Fatal(err)
+		}
+
+		request := httptest.NewRequestWithContext(bounded, http.MethodGet, "https://hub.test"+samePath, nil)
+		request.AddCookie(old)
+		request.AddCookie(sameBinding)
+		stale := httptest.NewRecorder()
+		finished := make(chan struct{})
+		go func() {
+			h.ServeHTTP(stale, request)
+			close(finished)
+		}()
+		// The GET has inspected the old cookie and is waiting to redeem its
+		// own handoff. Confirm the other handoff before letting it continue.
+		waitForBlockedTransaction(t, bounded, blocker, finished)
+		switched := handoffUIRequest(t, h, http.StatusSeeOther, http.MethodPost, browserHandoffFinishPath, form, old, switchBinding)
+		winner := handoffUICookie(t, switched, "unihub_session")
+		if err = blocker.Commit(bounded); err != nil {
+			t.Fatal(err)
+		}
+		<-finished
+		if stale.Code != http.StatusConflict || len(stale.Result().Cookies()) != 0 {
+			t.Fatalf("stale same-account GET returned HTTP %d with %d cookies, want HTTP 409 and no cookies", stale.Code, len(stale.Result().Cookies()))
+		}
+		checkSession(winner, native.Binding.UserID)
+		checkSession(old, "")
+
+		path, binding = begin(clients["wiki"], departing)
+		stale = handoffUIRequest(t, h, http.StatusConflict, http.MethodGet, path, nil, old, binding)
+		if len(stale.Result().Cookies()) != 0 {
+			t.Fatal("GET with an already-replaced cookie wrote a cookie")
+		}
+	})
+
 	t.Run("signed out and legacy product handoffs proceed directly", func(t *testing.T) {
 		path, binding := begin(clients["wiki"], native)
 		done := handoffUIRequest(t, h, http.StatusSeeOther, http.MethodGet, path, nil, binding)
@@ -302,4 +379,36 @@ func TestBrowserHandoffProtectsCentralAccount(t *testing.T) {
 		checkSession(handoffUICookie(t, done, "unihub_session"), router.Binding.UserID)
 		checkSession(wikiSession, "")
 	})
+}
+
+func TestConsoleProductBrowserSessionRequiresEffectiveProductUse(t *testing.T) {
+	s, h, clients, _ := setupBrowserHandoffUI(t)
+	s.ConfigureBrowserClients(clients)
+	ctx := context.Background()
+	actor := nativeBrowserTestActor(t, s, "console-permission-source")
+	path, binding := approveNativeBrowserTestHandoff(t, s, h, actor, "wiki", "")
+	finish := handoffUIRequest(t, h, http.StatusSeeOther, http.MethodGet, path.RequestURI(), nil, binding)
+	source := handoffUICookie(t, finish, "unihub_session")
+
+	independent := &http.Cookie{Name: "unihub_session", Value: browserSecret()}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at)
+		SELECT $1,issuer,subject,name,email,'independent-csrf',expires_at FROM browser_sessions WHERE id_hash=$2`,
+		browserSessionDigest(independent.Value), browserSessionDigest(source.Value)); err != nil {
+		t.Fatal(err)
+	}
+	check := func(cookie *http.Cookie, want bool) {
+		t.Helper()
+		w := handoffUIRequest(t, h, http.StatusOK, http.MethodGet, "/auth/session", nil, cookie)
+		var body struct{ Authenticated bool }
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body.Authenticated != want {
+			t.Fatalf("console authenticated=%v, want %v (%v)", body.Authenticated, want, err)
+		}
+	}
+	check(source, true)
+	if _, err := s.pool.Exec(ctx, `UPDATE product_user_access SET permission_overrides='{"product":{"use":false}}',version=version+1
+		WHERE user_id=$1 AND product_id=$2 AND instance_id=$3`, actor.Binding.UserID, actor.Binding.ProductID, actor.Binding.InstanceID); err != nil {
+		t.Fatal(err)
+	}
+	check(source, false)
+	check(independent, true)
 }

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
@@ -419,16 +420,17 @@ func TestVerifyProductBrowserSourceRequiresCurrentSID(t *testing.T) {
 			})
 			apply(t, `UPDATE product_user_access SET permission_overrides='{"product":{"use":false}}' WHERE user_id=$1 AND product_id='agentwiki'`, source.Binding.UserID)
 		}},
-		{"destination has only default access", func(t *testing.T, _ string) {
+		{"destination has only default access", func(t *testing.T, sidHash string) {
 			t.Cleanup(func() {
 				apply(t, `INSERT INTO product_user_access(user_id,product_id,instance_id,roles,active,version)
 					VALUES($1,'agentwiki','default','["member"]',true,1)`, source.Binding.UserID)
 			})
 			apply(t, `DELETE FROM product_user_access WHERE user_id=$1 AND product_id='agentwiki'`, source.Binding.UserID)
-			in, _ := authorizeBrowserSessionTest(t, s, source, client, false)
-			out, err := s.ExchangeIdentityBrowser(ctx, client.ProductID, client.InstanceID, in)
-			if !errors.Is(err, accounts.ErrForbidden) || out.SourceProofToken != "" {
-				t.Fatalf("exchange without explicit destination assignment got %v, want forbidden", err)
+			claims := auth.Claims{Issuer: source.Binding.Issuer, Subject: source.Binding.Subject}
+			destination, err := s.AuthorizeBrowser(ctx, claims, client.ClientID, client.RedirectURIs[0],
+				browserSecret(), browserSecret(), strings.Repeat("a", 43), sidHash)
+			if !errors.Is(err, accounts.ErrForbidden) || destination != "" {
+				t.Fatalf("authorization without explicit destination assignment got %v, want forbidden", err)
 			}
 		}},
 		{"destination native subject locked", func(t *testing.T, _ string) {
@@ -525,4 +527,129 @@ func TestVerifyProductBrowserSourceRequiresCurrentNativeOrigin(t *testing.T) {
 	apply(`UPDATE product_browser_source_proofs SET source_auth_version=4 WHERE source_session_hash=$1`, freshSID)
 	verify(fresh, accounts.ErrForbidden)
 	verify(independent, nil)
+}
+
+func TestPendingIdentityBrowserCodeRequiresAuthorizationEpoch(t *testing.T) {
+	s, source, client := newBrowserSessionTestService(t)
+	admin := linkBrowserSessionTestDestination(t, s, source, client)
+	ctx := context.Background()
+	cases := []struct {
+		name   string
+		change func() error
+	}{
+		{"assignment", func() error {
+			if _, err := s.users.SetAccess(ctx, admin, source.Binding.UserID, client.ProductID, client.InstanceID, nil, false, 1); err != nil {
+				return err
+			}
+			_, err := s.users.SetAccess(ctx, admin, source.Binding.UserID, client.ProductID, client.InstanceID, []string{"member"}, true, 2)
+			return err
+		}},
+		{"central account status", func() error {
+			if _, err := s.users.SetStatus(ctx, admin, source.Binding.UserID, false, 1); err != nil {
+				return err
+			}
+			_, err := s.users.SetStatus(ctx, admin, source.Binding.UserID, true, 2)
+			return err
+		}},
+		{"native authenticator", func() error {
+			lock := SourceLifecycle{Lifecycle: Lifecycle{LocalUserID: sessionTestDestination, OperationID: "pending-code-lock",
+				PreviousAuthVersion: 1, NextAuthVersion: 2}, State: SourceStateLocked}
+			if _, err := s.SyncSourceLifecycle(ctx, client.ProductID, client.InstanceID, lock); err != nil {
+				return err
+			}
+			unlock := SourceLifecycle{Lifecycle: Lifecycle{LocalUserID: sessionTestDestination, OperationID: "pending-code-unlock",
+				PreviousAuthVersion: 2, NextAuthVersion: 3}, State: SourceStateActive}
+			_, err := s.SyncSourceLifecycle(ctx, client.ProductID, client.InstanceID, unlock)
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _ := authorizeBrowserSessionTest(t, s, source, client, false)
+			matches, err := s.MatchesIdentityBrowser(ctx, client.ProductID, client.InstanceID, sessionTestDestination, code)
+			if err != nil || !matches {
+				t.Fatalf("fresh code did not match: %v, %v", matches, err)
+			}
+			if err = tc.change(); err != nil {
+				t.Fatal(err)
+			}
+			matches, err = s.MatchesIdentityBrowser(ctx, client.ProductID, client.InstanceID, sessionTestDestination, code)
+			if err != nil || matches {
+				t.Errorf("stale code matched after a destination change: %v, %v", matches, err)
+			}
+			if _, err = s.ExchangeIdentityBrowser(ctx, client.ProductID, client.InstanceID, code); !errors.Is(err, accounts.ErrForbidden) {
+				t.Errorf("stale code issued an identity session: %v", err)
+			}
+			fresh, _ := issueIdentityBrowserSessionTestProof(t, s, source, client, false)
+			if err = s.VerifyProductBrowserSource(ctx, fresh.SourceProofToken, client.ProductID, client.InstanceID, client.ClientID, source.Binding.UserID); err != nil {
+				t.Fatalf("new authorization failed after access was restored: %v", err)
+			}
+		})
+	}
+}
+
+func TestIdentityBrowserExchangeKeepsAuthorizationEpochWhilePublishing(t *testing.T) {
+	s, source, client := newBrowserSessionTestService(t)
+	admin := linkBrowserSessionTestDestination(t, s, source, client)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	code, _ := authorizeBrowserSessionTest(t, s, source, client, false)
+
+	blocker, err := s.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Rollback(blocker)
+	if _, err = blocker.Exec(ctx, `LOCK TABLE product_browser_source_proofs IN SHARE MODE`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.ExchangeIdentityBrowser(ctx, client.ProductID, client.InstanceID, code)
+		done <- err
+	}()
+	for {
+		var consumed bool
+		if err = s.pool.QueryRow(ctx, `SELECT consumed FROM product_browser_codes WHERE code_hash=$1`, digest(code.Code)).Scan(&consumed); err != nil {
+			t.Fatal(err)
+		}
+		if consumed {
+			break
+		}
+		select {
+		case err = <-done:
+			t.Fatalf("exchange stopped before redeeming the code: %v", err)
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if _, err = s.users.SetAccess(ctx, admin, source.Binding.UserID, client.ProductID, client.InstanceID, []string{"member"}, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err = blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; !errors.Is(err, accounts.ErrForbidden) {
+		t.Fatalf("exchange adopted a destination epoch changed after redemption: %v", err)
+	}
+}
+
+func TestGenericBrowserCodeDoesNotRequireIdentityBinding(t *testing.T) {
+	s, source, identity := newBrowserSessionTestService(t)
+	linkBrowserSessionTestDestination(t, s, source, identity)
+	ctx := context.Background()
+	generic := products.Client{
+		ClientID: "generic-browser", ProductID: identity.ProductID, InstanceID: "edge",
+		BrowserSSO: true, RedirectURIs: []string{"https://edge.wiki.test/callback"},
+	}
+	s.ConfigureBrowserClients(map[string]products.Client{generic.ClientID: generic, identity.ClientID: identity})
+	in, _ := authorizeBrowserSessionTest(t, s, source, generic, false)
+	grant, err := s.ExchangeBrowser(ctx, generic.ProductID, generic.InstanceID, in)
+	if err != nil || grant.Access.User.ID != source.Binding.UserID || grant.SourceProofToken == "" {
+		t.Fatalf("generic exchange required an identity destination: %+v, %v", grant.Access, err)
+	}
+	if err = s.VerifyBrowserSourceProof(ctx, grant.SourceProofToken, generic.ProductID, generic.InstanceID, generic.ClientID, source.Binding.UserID); err != nil {
+		t.Fatalf("generic source proof failed verification: %v", err)
+	}
 }

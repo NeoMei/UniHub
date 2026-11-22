@@ -15,26 +15,28 @@ import (
 )
 
 type Client struct {
-	AccountSettingsURL string   `json:"account_settings_url,omitempty"`
-	InstanceID         string   `json:"instance_id,omitempty"`
-	ProductID          string   `json:"product_id"`
-	ClientID           string   `json:"client_id"`
-	Application        string   `json:"application,omitempty"`
-	Organization       string   `json:"organization,omitempty"`
-	RedirectURIs       []string `json:"redirect_uris,omitempty"`
-	Origins            []string `json:"origins,omitempty"`
-	Scopes             []string `json:"scopes,omitempty"`
-	BillingProducts    []string `json:"billing_products,omitempty"`
-	BrowserSSO         bool     `json:"browser_sso,omitempty"`
-	IdentityLinkRole   string   `json:"identity_link_role,omitempty"`
-	NativeLoginURL     string   `json:"native_login_url,omitempty"`
-	NativeLoginLabel   string   `json:"native_login_label,omitempty"`
-	PasswordLogin      bool     `json:"password_login,omitempty"`
-	Registration       bool     `json:"registration,omitempty"`
-	RefreshTokens      bool     `json:"refresh_tokens,omitempty"`
+	AccountSettingsURL      string   `json:"account_settings_url,omitempty"`
+	InstanceID              string   `json:"instance_id,omitempty"`
+	ProductID               string   `json:"product_id"`
+	ClientID                string   `json:"client_id"`
+	Application             string   `json:"application,omitempty"`
+	Organization            string   `json:"organization,omitempty"`
+	RedirectURIs            []string `json:"redirect_uris,omitempty"`
+	Origins                 []string `json:"origins,omitempty"`
+	Scopes                  []string `json:"scopes,omitempty"`
+	BillingProducts         []string `json:"billing_products,omitempty"`
+	BrowserSSO              bool     `json:"browser_sso,omitempty"`
+	IdentityLinkRole        string   `json:"identity_link_role,omitempty"`
+	NativeLoginURL          string   `json:"native_login_url,omitempty"`
+	NativeLoginLabel        string   `json:"native_login_label,omitempty"`
+	NativeHandoffGeneration string   `json:"native_handoff_generation,omitempty"`
+	PasswordLogin           bool     `json:"password_login,omitempty"`
+	Registration            bool     `json:"registration,omitempty"`
+	RefreshTokens           bool     `json:"refresh_tokens,omitempty"`
 }
 
 var productID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+var nativeHandoffGeneration = regexp.MustCompile(`^[a-zA-Z0-9._-]{1,64}$`)
 var supportedScopes = map[string]bool{
 	"access:read": true, "identity:read": true, "accounts:read": true, "accounts:write": true,
 	"profile:write": true,
@@ -86,6 +88,9 @@ func Parse(raw []byte) (map[string]Client, error) {
 		}
 		if c.IdentityLinkRole != "" && (!c.BrowserSSO || len(c.RedirectURIs) != 1 || !productID.MatchString(c.IdentityLinkRole)) {
 			return nil, errors.New("identity linking requires one registered browser redirect and an explicit role")
+		}
+		if c.NativeHandoffGeneration != "" && (c.IdentityLinkRole == "" || !nativeHandoffGeneration.MatchString(c.NativeHandoffGeneration)) {
+			return nil, errors.New("invalid native browser handoff generation")
 		}
 		if c.NativeLoginURL != "" {
 			if c.IdentityLinkRole == "" || !validURL(c.NativeLoginURL, false) || c.NativeLoginLabel == "" ||

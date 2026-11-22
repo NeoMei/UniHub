@@ -29,7 +29,10 @@ func browserSecret() string {
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 func (s *Service) browserCookie(w http.ResponseWriter, name, value, path string, ttl time.Duration) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: path, HttpOnly: true, Secure: strings.HasPrefix(s.issuer, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: int(ttl.Seconds()), Expires: time.Now().Add(ttl)})
+	s.setBrowserCookie(w, name, value, path, int(ttl.Seconds()), time.Now().Add(ttl))
+}
+func (s *Service) setBrowserCookie(w http.ResponseWriter, name, value, path string, maxAge int, expires time.Time) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: path, HttpOnly: true, Secure: strings.HasPrefix(s.issuer, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: maxAge, Expires: expires})
 }
 func (s *Service) browserSessionIdentity(ctx context.Context, raw string) (claims auth.Claims, userID string, err error) {
 	if len(raw) != 43 {
@@ -95,7 +98,7 @@ func (s *Service) BrowserHandler(next http.Handler) http.Handler {
 				http.Error(w, "Invalid Handoff", 400)
 				return
 			}
-			s.browserCookie(w, browserHandoffCookie, binding, browserHandoffFinishPath, 120*time.Second)
+			s.browserCookie(w, browserHandoffCookie, binding, browserHandoffFinishPath, nativeHandoffLifetime)
 			http.Redirect(w, r, destination, 303)
 		case browserHandoffFinishPath:
 			s.browserHandoffFinish(w, r, q.Get("handoff"), q.Get("state"), "", "")

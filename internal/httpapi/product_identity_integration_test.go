@@ -34,7 +34,7 @@ func TestAgentWikiIdentityBrowserRoundTrip(t *testing.T) {
 	a := accounts.New(pool)
 	users := productusers.New(pool, registry, "https://hub.test", nil)
 	auth := productauth.New(pool, a, users, "https://hub.test")
-	client := products.Client{ClientID: "wiki", ProductID: "agentwiki", InstanceID: "default", BrowserSSO: true, IdentityLinkRole: "member", RedirectURIs: []string{"https://wiki.test/auth/return"}}
+	client := products.Client{ClientID: "wiki", ProductID: "agentwiki", InstanceID: "default", BrowserSSO: true, IdentityLinkRole: "member", NativeHandoffGeneration: "1", RedirectURIs: []string{"https://wiki.test/auth/return"}}
 	auth.ConfigureBrowserClients(map[string]products.Client{"wiki": client})
 	serviceToken := strings.Repeat("s", 40)
 	handler := auth.BrowserHandler(New(runtimeVerifier{}, a, wallet.New(pool, a, nil), Options{
@@ -94,6 +94,16 @@ func TestAgentWikiIdentityBrowserRoundTrip(t *testing.T) {
 	}
 
 	const apiPath = "/internal/v1/product-runtime/identity"
+	var missing struct {
+		LocalUserID string `json:"local_user_id"`
+		Found       *bool  `json:"found"`
+	}
+	expect(request(http.MethodPost, apiPath+"/source-lifecycle/status", map[string]string{
+		"local_user_id": "not-yet-enrolled",
+	}, nil, ""), http.StatusOK, &missing)
+	if missing.LocalUserID != "not-yet-enrolled" || missing.Found == nil || *missing.Found {
+		t.Fatalf("expected a subject-matched absence response: %+v", missing)
+	}
 	proof := productauth.Authentication{LocalUserID: "old-wiki-user", AuthenticationID: "native-enroll-001", Method: "password", AuthenticatedAt: time.Now().Unix(), AuthVersion: 1}
 	var enrolled productauth.Identity
 	expect(request(http.MethodPost, apiPath+"/enroll", productauth.NativeEnrollment{ClientID: "wiki", Authentication: proof}, nil, ""), http.StatusOK, &enrolled)
@@ -106,7 +116,16 @@ func TestAgentWikiIdentityBrowserRoundTrip(t *testing.T) {
 	handoffID := location(start).Query().Get("handoff")
 	handoffCookie := getCookie(start, "unihub_product_handoff")
 	var approved productauth.BrowserApprovalReceipt
-	expect(request(http.MethodPost, apiPath+"/browser/approve", productauth.BrowserApproval{ClientID: "wiki", State: state, HandoffID: handoffID}, nil, actor.ActorToken), http.StatusOK, &approved)
+	nativeSessionID := strings.Repeat("a", 64)
+	nativeExpiry := time.Unix(time.Now().Add(3*time.Minute).Unix(), 0)
+	approval := map[string]any{
+		"client_id": "wiki", "state": state, "handoff_id": handoffID, "native_session_id": nativeSessionID,
+	}
+	expect(request(http.MethodPost, apiPath+"/browser/approve", approval, nil, actor.ActorToken), http.StatusBadRequest, nil)
+	approval["native_session_expires_at"] = nativeExpiry.Unix()
+	expect(request(http.MethodPost, apiPath+"/browser/approve", approval, nil, actor.ActorToken), http.StatusForbidden, nil)
+	approval["native_handoff_generation"] = "1"
+	expect(request(http.MethodPost, apiPath+"/browser/approve", approval, nil, actor.ActorToken), http.StatusOK, &approved)
 	finish, err := url.Parse(approved.FinishURL)
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +133,9 @@ func TestAgentWikiIdentityBrowserRoundTrip(t *testing.T) {
 	toHub := request(http.MethodGet, finish.RequestURI(), nil, handoffCookie, "")
 	location(toHub)
 	centralCookie := getCookie(toHub, "unihub_session")
+	if !centralCookie.Expires.Equal(nativeExpiry) || centralCookie.MaxAge <= 0 || centralCookie.MaxAge > 180 {
+		t.Fatalf("browser cookie outlived the native JWT: expires %v, max-age %d", centralCookie.Expires, centralCookie.MaxAge)
+	}
 
 	verifier, nonce := strings.Repeat("v", 43), strings.Repeat("n", 43)
 	hash := sha256.Sum256([]byte(verifier))
@@ -142,8 +164,28 @@ func TestAgentWikiIdentityBrowserRoundTrip(t *testing.T) {
 	if session.Identity.Binding.LocalUserID != proof.LocalUserID || session.Identity.Binding.UserID != enrolled.Binding.UserID || session.SourceProofToken == "" {
 		t.Fatalf("original identity lost: %+v", session.Identity.Binding)
 	}
+	if session.SourceProofExpiresAt != nativeExpiry.Unix() {
+		t.Fatalf("derived proof expiry %d, want %d", session.SourceProofExpiresAt, nativeExpiry.Unix())
+	}
 	verify := map[string]string{"central_user_id": enrolled.Binding.UserID, "source_proof_token": session.SourceProofToken}
 	expect(request(http.MethodPost, apiPath+"/session/verify", verify, nil, ""), http.StatusNoContent, nil)
+
+	revoke := map[string]any{"local_user_id": proof.LocalUserID, "native_session_id": nativeSessionID, "expires_at": nativeExpiry.Unix()}
+	dispatch := request(http.MethodPost, apiPath+"/source-session/revoke", revoke, nil, "")
+	expect(dispatch, http.StatusNoContent, nil)
+	if dispatch.Body.Len() != 0 {
+		t.Fatal("accepted revocation returned a body")
+	}
+	expect(request(http.MethodPost, apiPath+"/source-session/revoke", revoke, nil, ""), http.StatusNoContent, nil)
+	revoke["expires_at"] = time.Now().Add(-time.Minute).Unix()
+	expect(request(http.MethodPost, apiPath+"/source-session/revoke", revoke, nil, ""), http.StatusNoContent, nil)
+	revoke["local_user_id"] = "unverified-native-binding"
+	expect(request(http.MethodPost, apiPath+"/source-session/revoke", revoke, nil, ""), http.StatusNotFound, nil)
+	expect(request(http.MethodPost, apiPath+"/session/verify", verify, nil, ""), http.StatusForbidden, nil)
+	afterLogout := location(request(http.MethodGet, authorize, nil, centralCookie, ""))
+	if afterLogout.Query().Get("error") != "login_required" {
+		t.Fatal("native logout left the UniHub browser session usable")
+	}
 	expect(request(http.MethodPost, apiPath+"/source-lifecycle", productauth.SourceLifecycle{
 		Lifecycle: productauth.Lifecycle{LocalUserID: proof.LocalUserID, OperationID: "native-lock-001", PreviousAuthVersion: 1, NextAuthVersion: 2},
 		State:     productauth.SourceStateLocked,

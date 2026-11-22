@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	"unihub/internal/accounts"
@@ -128,6 +129,20 @@ func (s *api) addProductIdentityRoutes(add func(string, string, func(http.Respon
 		}
 		return respond(w, http.StatusOK, out)
 	})
+	add("POST /internal/v1/product-runtime/identity/source-session/revoke", "identity:source-lifecycle", func(w http.ResponseWriter, r *http.Request, c RuntimeService) error {
+		var in productauth.NativeSessionRevocation
+		if err := decode(w, r, &in); err != nil {
+			return err
+		}
+		if c.IdentityClientID == "" {
+			return accounts.ErrForbidden
+		}
+		if err := s.options.ProductAuth.RevokeNativeBrowserSession(r.Context(), c.ProductID, c.InstanceID, in); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return nil
+	})
 	add("POST /internal/v1/product-runtime/identity/source-lifecycle/status", "identity:source-lifecycle", func(w http.ResponseWriter, r *http.Request, c RuntimeService) error {
 		var in struct {
 			LocalUserID string `json:"local_user_id"`
@@ -139,6 +154,12 @@ func (s *api) addProductIdentityRoutes(add func(string, string, func(http.Respon
 			return accounts.ErrForbidden
 		}
 		out, err := s.options.ProductAuth.ReadSourceLifecycle(r.Context(), c.ProductID, c.InstanceID, in.LocalUserID)
+		if errors.Is(err, accounts.ErrNotFound) {
+			return respond(w, http.StatusOK, struct {
+				LocalUserID string `json:"local_user_id"`
+				Found       bool   `json:"found"`
+			}{LocalUserID: in.LocalUserID})
+		}
 		if err != nil {
 			return err
 		}

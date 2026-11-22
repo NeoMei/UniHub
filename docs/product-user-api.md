@@ -94,3 +94,16 @@ credentials, native wallet/quota operations or deployment/provisioning authority
 Identity, accounts, teams, wallet and billing remain managed by UniHub. Privileged
 product roles are never automatic defaults and require an explicit central user
 administrator assignment to the intended immutable subject.
+
+## AgentWiki native browser handoff
+
+Set the AgentWiki client's `native_handoff_generation` in `PRODUCT_CLIENTS_FILE`
+to the same value as `UNIHUB_IDENTITY_SESSION_GENERATION` on AgentWiki. A native
+approval is redeemed only against the matching generation. An example value is
+`pilot-1`.
+
+For rollout rollback, restore the ordinary AgentWiki application entry URL, apply
+`native_handoff_generation: "disabled"` to all UniHub browser instances, and turn
+off `UNIHUB_IDENTITY_ENABLED` on AgentWiki. Keep the private runtime connection
+for lifecycle events and logout delivery. Load a new shared generation in both
+services before reopening the pilot.

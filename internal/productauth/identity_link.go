@@ -281,17 +281,24 @@ func (s *Service) lockIdentityLinkSource(ctx context.Context, tx pgx.Tx, proof i
 	if err != nil {
 		return err
 	}
-	err = tx.QueryRow(ctx, `SELECT 1 FROM product_browser_session_origins o
+	var product, instance string
+	err = tx.QueryRow(ctx, `SELECT b.product_id,b.instance_id FROM product_browser_session_origins o
 		JOIN product_auth_subjects p ON p.binding_id=o.binding_id
 		JOIN product_runtime_bindings b ON b.id=p.binding_id
 		JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id
 		WHERE o.session_id_hash=$1 AND b.user_id=$2 AND b.id=$3 AND p.auth_version=o.auth_version
 		AND NOT p.deleted AND NOT p.native_locked AND a.active FOR SHARE OF p,a`,
-		proof.session, proof.central, origin).Scan(&row)
+		proof.session, proof.central, origin).Scan(&product, &instance)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return accounts.ErrForbidden
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if !s.users.Managed(product, instance) {
+		return accounts.ErrForbidden
+	}
+	return s.users.RequirePermissionOn(ctx, tx, proof.central, product, instance, "product:use")
 }
 
 func (s *Service) bindLinkedIdentity(ctx context.Context, tx pgx.Tx, client products.Client, central string, proof Authentication, operationID, requestDigest string) error {

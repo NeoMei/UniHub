@@ -23,12 +23,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
+	"unihub/internal/productusers"
 )
 
 type Options struct {
 	Issuer, ClientID, ClientSecret, PublicURL string
 	Production, Sandbox                       bool
 	StaticDir                                 string
+	ProductUsers                              *productusers.Store
 }
 
 type Server struct {
@@ -422,9 +424,30 @@ func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 		return auth.Claims{}, "", false
 	}
 	var claims auth.Claims
-	var csrf string
-	err = s.pool.QueryRow(r.Context(), `SELECT b.issuer,b.subject,b.name,b.email,b.csrf_token,extract(epoch from b.expires_at)::bigint,extract(epoch from b.created_at)::bigint FROM browser_sessions b JOIN identities i ON i.issuer=b.issuer AND i.subject=b.subject JOIN users u ON u.id=i.user_id WHERE b.id_hash=$1 AND b.expires_at>now() AND u.active AND b.created_at>=u.session_not_before AND NOT EXISTS(SELECT 1 FROM product_browser_session_origins o LEFT JOIN product_auth_subjects p ON p.binding_id=o.binding_id LEFT JOIN product_runtime_bindings pb ON pb.id=p.binding_id LEFT JOIN users pu ON pu.id=pb.user_id LEFT JOIN product_user_access a ON a.user_id=pb.user_id AND a.product_id=pb.product_id AND a.instance_id=pb.instance_id WHERE o.session_id_hash=b.id_hash AND (p.binding_id IS NULL OR p.deleted OR p.native_locked OR p.auth_version<>o.auth_version OR NOT pu.active OR NOT a.active))`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt, &claims.IssuedAt)
-	return claims, csrf, err == nil
+	var csrf, user string
+	var product, instance *string
+	ctx := r.Context()
+	err = s.pool.QueryRow(ctx, `SELECT b.issuer,b.subject,b.name,b.email,b.csrf_token,
+		extract(epoch from b.expires_at)::bigint,extract(epoch from b.created_at)::bigint,u.id,pb.product_id,pb.instance_id
+		FROM browser_sessions b
+		JOIN identities i ON i.issuer=b.issuer AND i.subject=b.subject
+		JOIN users u ON u.id=i.user_id
+		LEFT JOIN product_browser_session_origins o ON o.session_id_hash=b.id_hash
+		LEFT JOIN product_auth_subjects p ON p.binding_id=o.binding_id
+		LEFT JOIN product_runtime_bindings pb ON pb.id=p.binding_id
+		LEFT JOIN product_user_access a ON a.user_id=pb.user_id AND a.product_id=pb.product_id AND a.instance_id=pb.instance_id
+		WHERE b.id_hash=$1 AND b.expires_at>now() AND u.active AND b.created_at>=u.session_not_before
+		  AND (o.session_id_hash IS NULL OR (pb.user_id=u.id AND p.auth_version=o.auth_version
+		    AND NOT p.deleted AND NOT p.native_locked AND a.active))`,
+		digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt, &claims.IssuedAt, &user, &product, &instance)
+	if err != nil {
+		return auth.Claims{}, "", false
+	}
+	if product != nil && (s.opts.ProductUsers == nil || !s.opts.ProductUsers.Managed(*product, *instance) ||
+		s.opts.ProductUsers.RequirePermissionOn(ctx, s.pool, user, *product, *instance, "product:use") != nil) {
+		return auth.Claims{}, "", false
+	}
+	return claims, csrf, true
 }
 func (s *Server) csrf(r *http.Request, expected string) bool {
 	return r.Header.Get("Origin") == strings.TrimSuffix(s.opts.PublicURL, "/") && len(r.Header.Values("Origin")) == 1 && len(r.Header.Values("X-CSRF-Token")) == 1 && constantEqual(r.Header.Get("X-CSRF-Token"), expected)

@@ -211,6 +211,9 @@ func (s *Store) MaterializeIdentity(ctx context.Context, actor string, in Materi
 	if !errors.Is(e, pgx.ErrNoRows) {
 		return u, e
 	}
+	if e = accounts.LockIdentityEmail(ctx, tx, id.Email); e != nil {
+		return u, e
+	}
 	u = accounts.User{ID: centralIdentityID(), Name: id.DisplayName, Email: id.Email}
 	if _, e = tx.Exec(ctx, `INSERT INTO users(id,name,email,active) VALUES($1,$2,$3,$4)`, u.ID, u.Name, u.Email, !id.Disabled && !id.Pending); e != nil {
 		return u, e

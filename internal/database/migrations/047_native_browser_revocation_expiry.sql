@@ -1,0 +1,2 @@
+CREATE INDEX product_browser_native_session_revocations_expiry
+    ON product_browser_native_session_revocations(expires_at);

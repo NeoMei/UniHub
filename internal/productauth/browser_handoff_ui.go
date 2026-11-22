@@ -81,7 +81,7 @@ func (s *Service) showBrowserLoginPicker(w http.ResponseWriter, r *http.Request)
 	var methods []loginMethod
 	for _, id := range slices.Sorted(maps.Keys(s.browserClients)) {
 		client := s.browserClients[id]
-		if client.NativeLoginURL != "" {
+		if client.NativeLoginURL != "" && client.NativeHandoffGeneration != "disabled" {
 			methods = append(methods, loginMethod{URL: client.NativeLoginURL, Label: client.NativeLoginLabel})
 		}
 	}
@@ -95,12 +95,20 @@ func (s *Service) showBrowserLoginPicker(w http.ResponseWriter, r *http.Request)
 
 // pendingBrowserHandoff checks the browser binding without redeeming the handoff.
 func (s *Service) pendingBrowserHandoff(ctx context.Context, id, state, binding string) (clientID string, user accounts.User, err error) {
-	err = s.pool.QueryRow(ctx, `SELECT h.client_id,u.id,u.name,u.email
+	var nativeSession, generation string
+	err = s.pool.QueryRow(ctx, `SELECT h.client_id,u.id,u.name,u.email,
+		COALESCE(h.native_session_id,''),h.native_handoff_generation
 		FROM product_browser_handoffs h
 		JOIN users u ON u.id=h.approved_user_id
 		WHERE h.id_hash=$1 AND h.state_hash=$2 AND h.browser_hash=$3
 		  AND h.expires_at>now() AND NOT h.consumed AND u.active`,
-		digest(id), digest(state), digest(binding)).Scan(&clientID, &user.ID, &user.Name, &user.Email)
+		digest(id), digest(state), digest(binding)).Scan(&clientID, &user.ID, &user.Name, &user.Email, &nativeSession, &generation)
+	if err == nil {
+		client, clientErr := s.BrowserClient(clientID, "")
+		if clientErr != nil || !allowsBrowserHandoff(client, nativeSession, generation) {
+			err = pgx.ErrNoRows
+		}
+	}
 	return
 }
 
@@ -140,6 +148,11 @@ func (s *Service) confirmBrowserHandoff(w http.ResponseWriter, r *http.Request) 
 	s.browserHandoffFinish(w, r, r.PostForm.Get("handoff"), r.PostForm.Get("state"), r.PostForm.Get("action"), r.PostForm.Get("csrf"))
 }
 
+type browserHandoffReplacement struct {
+	sessionHash string
+	signedOut   bool
+}
+
 func (s *Service) browserHandoffFinish(w http.ResponseWriter, r *http.Request, handoff, state, action, csrf string) {
 	ctx := r.Context()
 	binding, err := r.Cookie(browserHandoffCookie)
@@ -162,11 +175,26 @@ func (s *Service) browserHandoffFinish(w http.ResponseWriter, r *http.Request, h
 		return
 	}
 	old, _ := r.Cookie("unihub_session")
+	var replacement *browserHandoffReplacement
+	if old != nil {
+		replacement = &browserHandoffReplacement{sessionHash: browserSessionDigest(old.Value)}
+		if r.Method == http.MethodGet {
+			// Only a cookie already removed by back-channel logout can take
+			// the recovery path. A later disappearance must lose the CAS.
+			err = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM product_browser_native_logout_cookies
+				WHERE session_id_hash=$1 AND expires_at>clock_timestamp())`,
+				replacement.sessionHash).Scan(&replacement.signedOut)
+			if err != nil {
+				http.Error(w, "Unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
+	}
 	preserve := false
 	protectAccount := client.IdentityLinkRole != ""
 	if protectAccount {
 		var current accounts.User
-		if old != nil {
+		if replacement != nil && !replacement.signedOut {
 			claims, userID, err := s.browserSessionIdentity(ctx, old.Value)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				http.Error(w, "Unavailable", http.StatusServiceUnavailable)
@@ -203,7 +231,7 @@ func (s *Service) browserHandoffFinish(w http.ResponseWriter, r *http.Request, h
 			})
 			return
 		} else {
-			preserve = current.ID != "" && s.BrowserSessionAllowed(ctx, browserSessionDigest(old.Value))
+			preserve = current.ID != "" && s.BrowserSessionAllowed(ctx, replacement.sessionHash)
 		}
 	} else if r.Method == http.MethodPost {
 		w.Header().Set("Allow", http.MethodGet)
@@ -216,14 +244,14 @@ func (s *Service) browserHandoffFinish(w http.ResponseWriter, r *http.Request, h
 		http.Error(w, "Invalid Handoff", http.StatusUnauthorized)
 		return
 	}
-	if !preserve && !s.writeBrowserHandoffSession(w, r, completion, old) {
+	if !preserve && !s.writeBrowserHandoffSession(w, r, completion, replacement) {
 		return
 	}
 	s.browserCookie(w, browserHandoffCookie, "", browserHandoffFinishPath, -time.Second)
 	http.Redirect(w, r, completion.RedirectURI, http.StatusSeeOther)
 }
 
-func (s *Service) writeBrowserHandoffSession(w http.ResponseWriter, r *http.Request, completion BrowserCompletion, old *http.Cookie) bool {
+func (s *Service) writeBrowserHandoffSession(w http.ResponseWriter, r *http.Request, completion BrowserCompletion, replacement *browserHandoffReplacement) bool {
 	ctx := r.Context()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -231,27 +259,52 @@ func (s *Service) writeBrowserHandoffSession(w http.ResponseWriter, r *http.Requ
 		return false
 	}
 	defer database.Rollback(tx)
-	if old != nil {
-		deleted, err := tx.Exec(ctx, `DELETE FROM browser_sessions WHERE id_hash=$1`, browserSessionDigest(old.Value))
-		if err != nil {
+	if err = s.lockBrowserHandoffSource(ctx, tx, completion); err != nil {
+		if errors.Is(err, accounts.ErrForbidden) {
+			http.Error(w, "Invalid Handoff", http.StatusUnauthorized)
+		} else {
 			http.Error(w, "Unavailable", http.StatusServiceUnavailable)
+		}
+		return false
+	}
+	var previousExpiry time.Time
+	if replacement != nil {
+		remove := `DELETE FROM browser_sessions WHERE id_hash=$1 RETURNING expires_at`
+		if replacement.signedOut {
+			remove = `DELETE FROM product_browser_native_logout_cookies
+				WHERE session_id_hash=$1 AND expires_at>clock_timestamp() RETURNING expires_at`
+		}
+		err = tx.QueryRow(ctx, remove, replacement.sessionHash).Scan(&previousExpiry)
+		// The live session or the observed logout record is single-use.
+		// A handoff that lost the race must leave the browser cookies alone.
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "Session Changed", http.StatusConflict)
 			return false
 		}
-		if r.Method == http.MethodPost && deleted.RowsAffected() != 1 {
-			http.Error(w, "Session Changed", http.StatusConflict)
+		if err != nil {
+			http.Error(w, "Unavailable", http.StatusServiceUnavailable)
 			return false
 		}
 	}
 	id, csrf := browserSecret(), browserSecret()
 	idHash := browserSessionDigest(id)
 	expiry := time.Now().Add(time.Hour)
-	if _, err = tx.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)`,
-		idHash, completion.Claims.Issuer, completion.Claims.Subject, completion.Claims.Name, completion.Claims.Email, csrf, expiry); err != nil {
+	if completion.NativeSessionExpiresAt != nil && completion.NativeSessionExpiresAt.Before(expiry) {
+		expiry = *completion.NativeSessionExpiresAt
+	}
+	inserted, err := tx.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at)
+		SELECT $1,$2,$3,$4,$5,$6,$7 WHERE $7::timestamptz>clock_timestamp()`,
+		idHash, completion.Claims.Issuer, completion.Claims.Subject, completion.Claims.Name, completion.Claims.Email, csrf, expiry)
+	if err != nil {
 		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
 		return false
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO product_browser_session_origins(session_id_hash,binding_id,auth_version) VALUES($1,$2,$3)`,
-		idHash, completion.BindingID, completion.AuthVersion); err != nil {
+	if inserted.RowsAffected() != 1 {
+		http.Error(w, "Invalid Handoff", http.StatusUnauthorized)
+		return false
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO product_browser_session_origins(session_id_hash,binding_id,auth_version,native_session_id)
+		VALUES($1,$2,$3,NULLIF($4,''))`, idHash, completion.BindingID, completion.AuthVersion, completion.NativeSessionID); err != nil {
 		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
 		return false
 	}
@@ -259,6 +312,33 @@ func (s *Service) writeBrowserHandoffSession(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
 		return false
 	}
-	s.browserCookie(w, "unihub_session", id, "/", time.Hour)
+	if completion.NativeSessionExpiresAt == nil {
+		s.browserCookie(w, "unihub_session", id, "/", time.Hour)
+	} else {
+		remaining := time.Until(expiry)
+		if remaining <= 0 {
+			if replacement != nil && replacement.signedOut {
+				// The committed session was never published. Recover the
+				// single-use record with its original expiry, even if the
+				// caller has already disconnected.
+				repairCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+				_, err = s.pool.Exec(repairCtx, `WITH unused AS (
+					DELETE FROM browser_sessions WHERE id_hash=$1 AND expires_at=$2
+				)
+				INSERT INTO product_browser_native_logout_cookies(session_id_hash,expires_at)
+				SELECT $3,$4::timestamptz WHERE $4>clock_timestamp()
+				ON CONFLICT(session_id_hash) DO NOTHING`,
+					idHash, expiry, replacement.sessionHash, previousExpiry)
+				cancel()
+				if err != nil {
+					http.Error(w, "Unavailable", http.StatusServiceUnavailable)
+					return false
+				}
+			}
+			http.Error(w, "Invalid Handoff", http.StatusUnauthorized)
+			return false
+		}
+		s.setBrowserCookie(w, "unihub_session", id, "/", int(remaining.Seconds()), expiry)
+	}
 	return true
 }

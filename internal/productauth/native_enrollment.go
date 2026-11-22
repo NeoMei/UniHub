@@ -3,8 +3,9 @@ package productauth
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"unihub/internal/accounts"
 	"unihub/internal/database"
@@ -34,7 +35,7 @@ func (s *Service) EnrollNativeIdentity(ctx context.Context, product, instance st
 	}
 
 	issuer := s.issuer + "/product-auth/" + product + "/" + instance
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return Identity{}, err
 	}
@@ -45,19 +46,8 @@ func (s *Service) EnrollNativeIdentity(ctx context.Context, product, instance st
 	binding, err := s.users.RuntimeBindingOn(ctx, tx, product, instance, in.Authentication.LocalUserID)
 	if errors.Is(err, accounts.ErrNotFound) {
 		if in.Automatic {
-			email := strings.ToLower(strings.TrimSpace(in.Email))
-			if email == "" {
-				return Identity{}, accounts.ErrInvalid
-			}
-			if err = accounts.LockIdentity(ctx, tx, s.issuer+"/automatic-enrollment-email", email); err != nil {
+			if err = accounts.RequireUnusedIdentityEmail(ctx, tx, in.Email); err != nil {
 				return Identity{}, err
-			}
-			var collision bool
-			if err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE lower(btrim(email))=$1)`, email).Scan(&collision); err != nil {
-				return Identity{}, err
-			}
-			if collision {
-				return Identity{}, accounts.ErrConflict
 			}
 		}
 		user, createErr := s.accounts.EnsureIdentityOn(ctx, tx, accounts.Identity{

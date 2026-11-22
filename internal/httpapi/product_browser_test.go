@@ -50,7 +50,7 @@ func TestNativeBrowserHandoffCreatesCentralSessionAndSecondProductBinding(t *tes
 		json.NewEncoder(w).Encode(map[string]any{"issuer": issuer.URL, "authorization_endpoint": issuer.URL + "/authorize", "token_endpoint": issuer.URL + "/token", "jwks_uri": issuer.URL + "/jwks"})
 	}))
 	defer issuer.Close()
-	browser, e := console.New(ctx, p, runtimeVerifier{}, console.Options{Issuer: issuer.URL, PublicURL: "https://hub.test", ClientID: "console"})
+	browser, e := console.New(ctx, p, runtimeVerifier{}, console.Options{Issuer: issuer.URL, PublicURL: "https://hub.test", ClientID: "console", ProductUsers: users})
 	if e != nil {
 		t.Fatal(e)
 	}

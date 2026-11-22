@@ -65,7 +65,7 @@ func TestCrossRepositoryProductBrowserAndOriginalBilling(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"issuer": oidc.URL, "authorization_endpoint": oidc.URL + "/authorize", "token_endpoint": oidc.URL + "/token", "jwks_uri": oidc.URL + "/jwks"})
 	}))
 	defer oidc.Close()
-	browser, e := console.New(ctx, p, runtimeVerifier{}, console.Options{Issuer: oidc.URL, PublicURL: publicURL, ClientID: "console"})
+	browser, e := console.New(ctx, p, runtimeVerifier{}, console.Options{Issuer: oidc.URL, PublicURL: publicURL, ClientID: "console", ProductUsers: users})
 	if e != nil {
 		t.Fatal(e)
 	}

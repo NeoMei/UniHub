@@ -15,6 +15,8 @@ func TestParseRejectsEscalationAndUnsafeURLs(t *testing.T) {
 		`[{"product_id":"Bad","client_id":"client"}]`,
 		`[{"product_id":"new-product","client_id":"client","client_secret":"secret"}]`,
 		`[{"product_id":"new-product","client_id":"client","origins":["https://app.test/path"]}]`,
+		`[{"product_id":"new-product","client_id":"client","native_handoff_generation":"pilot-1"}]`,
+		`[{"product_id":"new-product","client_id":"client","browser_sso":true,"redirect_uris":["https://app.test/callback"],"identity_link_role":"member","native_handoff_generation":"pilot 1"}]`,
 		`[{"product_id":"new-product","client_id":"client","origins":["https://*.test"]}]`,
 		`[{"product_id":"new-product","client_id":"client","redirect_uris":["http://app.test/callback"]}]`,
 		`[{"product_id":"new-product","client_id":"client","redirect_uris":["https://app.test/%2A"]}]`,
