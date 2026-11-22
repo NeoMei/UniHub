@@ -64,6 +64,25 @@ func (s *api) addProductIdentityRoutes(add func(string, string, func(http.Respon
 		}
 		return respond(w, http.StatusOK, out)
 	})
+	add("POST /internal/v1/product-runtime/identity/session/matches", "identity:session", func(w http.ResponseWriter, r *http.Request, c RuntimeService) error {
+		var in struct {
+			productauth.BrowserExchange
+			LocalUserID string `json:"local_user_id"`
+		}
+		if err := decode(w, r, &in); err != nil {
+			return err
+		}
+		if !c.matchesIdentityClient(in.ClientID) {
+			return accounts.ErrForbidden
+		}
+		matches, err := s.options.ProductAuth.MatchesIdentityBrowser(r.Context(), c.ProductID, c.InstanceID, in.LocalUserID, in.BrowserExchange)
+		if err != nil {
+			return err
+		}
+		return respond(w, http.StatusOK, struct {
+			Matches bool `json:"matches"`
+		}{matches})
+	})
 	add("POST /internal/v1/product-runtime/identity/session/exchange", "identity:session", func(w http.ResponseWriter, r *http.Request, c RuntimeService) error {
 		var in productauth.BrowserExchange
 		if err := decode(w, r, &in); err != nil {

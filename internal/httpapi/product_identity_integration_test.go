@@ -123,6 +123,20 @@ func TestAgentWikiIdentityBrowserRoundTrip(t *testing.T) {
 	}.Encode()
 	callback := location(request(http.MethodGet, authorize, nil, centralCookie, ""))
 	exchange := productauth.BrowserExchange{ClientID: "wiki", Code: callback.Query().Get("code"), Verifier: verifier, Nonce: nonce, RedirectURI: client.RedirectURIs[0]}
+	match := map[string]string{
+		"client_id": exchange.ClientID, "code": exchange.Code, "code_verifier": exchange.Verifier,
+		"nonce": exchange.Nonce, "redirect_uri": exchange.RedirectURI, "local_user_id": proof.LocalUserID,
+	}
+	var preview struct{ Matches bool }
+	expect(request(http.MethodPost, apiPath+"/session/matches", match, nil, ""), http.StatusOK, &preview)
+	if !preview.Matches {
+		t.Fatal("the active browser was not matched to the original product user")
+	}
+	match["local_user_id"] = "another-wiki-user"
+	expect(request(http.MethodPost, apiPath+"/session/matches", match, nil, ""), http.StatusOK, &preview)
+	if preview.Matches {
+		t.Fatal("a different product user matched the browser")
+	}
 	var session productauth.ProductIdentitySession
 	expect(request(http.MethodPost, apiPath+"/session/exchange", exchange, nil, ""), http.StatusOK, &session)
 	if session.Identity.Binding.LocalUserID != proof.LocalUserID || session.Identity.Binding.UserID != enrolled.Binding.UserID || session.SourceProofToken == "" {

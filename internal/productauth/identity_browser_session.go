@@ -2,6 +2,9 @@ package productauth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"errors"
 
 	"github.com/jackc/pgx/v5"
 
@@ -16,6 +19,42 @@ type ProductIdentitySession struct {
 	Identity             Identity `json:"identity"`
 	SourceProofToken     string   `json:"source_proof_token"`
 	SourceProofExpiresAt int64    `json:"source_proof_expires_at"`
+}
+
+// MatchesIdentityBrowser compares the browser code to an authenticated
+// local subject without redeeming the code or disclosing another subject.
+func (s *Service) MatchesIdentityBrowser(ctx context.Context, product, instance, local string, in BrowserExchange) (bool, error) {
+	instance = productusers.Instance(instance)
+	client, err := s.identityLinkClient(in.ClientID, in.RedirectURI)
+	if err != nil || in.RedirectURI == "" || client.ProductID != product ||
+		productusers.Instance(client.InstanceID) != instance || !localSubject.MatchString(local) ||
+		len(in.Verifier) < 43 || len(in.Verifier) > 128 || !validBrowserState(in.Nonce) {
+		return false, accounts.ErrForbidden
+	}
+	hash := sha256.Sum256([]byte(in.Verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
+	var userID, sessionHash string
+	err = s.pool.QueryRow(ctx, `SELECT c.user_id, c.source_session_hash
+		FROM product_browser_codes c
+		JOIN product_runtime_bindings b ON b.user_id=c.user_id
+		WHERE c.code_hash=$1 AND c.client_id=$2 AND c.pkce_challenge=$3 AND c.nonce_hash=$4
+		  AND c.expires_at>now() AND NOT c.consumed AND c.source_session_hash IS NOT NULL
+		  AND b.product_id=$5 AND b.instance_id=$6 AND b.local_user_id=$7`,
+		digest(in.Code), in.ClientID, challenge, digest(in.Nonce), product, instance, local).Scan(&userID, &sessionHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err = currentBrowserSourceSession(ctx, s.pool, sessionHash, userID); err != nil {
+		return false, err
+	}
+	if !s.BrowserSessionAllowed(ctx, sessionHash) {
+		return false, nil
+	}
+	identity, err := s.IdentityLinkByCanonicalUser(ctx, product, instance, userID)
+	return err == nil && identity.Binding.LocalUserID == local, err
 }
 
 func (s *Service) ExchangeIdentityBrowser(ctx context.Context, product, instance string, in BrowserExchange) (ProductIdentitySession, error) {

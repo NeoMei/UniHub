@@ -2,6 +2,8 @@ package productauth
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -34,6 +36,28 @@ func TestNativeEnrollmentIsStableAndNeverLinksByEmail(t *testing.T) {
 	in := NativeEnrollment{ClientID: "wiki", Email: "same@example.test", Authentication: Authentication{
 		LocalUserID: "existing-wiki-user", AuthenticationID: "fresh-native-sign-in", Method: "password", AuthenticatedAt: time.Now().Unix(), AuthVersion: 6,
 	}}
+	automatic := in
+	if err := json.Unmarshal([]byte(`{"automatic":true,"email":" SAME@example.test "}`), &automatic); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EnrollNativeIdentity(ctx, "agentwiki", "default", automatic); !errors.Is(err, accounts.ErrConflict) {
+		t.Fatalf("auto enrollment must not create a competing identity: %v", err)
+	}
+	if _, err := s.Lookup(ctx, "agentwiki", "default", in.Authentication.LocalUserID); !errors.Is(err, accounts.ErrNotFound) {
+		t.Fatalf("collision created a mapping: %v", err)
+	}
+	automatic.Authentication.Method = "session"
+	automatic.Email = "native-only@example.test"
+	automatic.Authentication.LocalUserID = "native-only-wiki-user"
+	native, err := s.EnrollNativeIdentity(ctx, "agentwiki", "default", automatic)
+	if err != nil || native.Binding.LocalUserID != automatic.Authentication.LocalUserID || native.Binding.UserID == canonical.ID {
+		t.Fatalf("verified native session should provision its own identity: %+v %v", native, err)
+	}
+	automatic.Email = "SAME@example.test"
+	known, err := s.EnrollNativeIdentity(ctx, "agentwiki", "default", automatic)
+	if err != nil || known.Binding != native.Binding {
+		t.Fatalf("an existing mapping must take precedence over a profile collision: %+v %v", known, err)
+	}
 	first, err := s.EnrollNativeIdentity(ctx, "agentwiki", "default", in)
 	if err != nil || first.Binding.UserID == canonical.ID || first.Binding.LocalUserID != in.Authentication.LocalUserID || first.AuthVersion != 6 {
 		t.Fatalf("wrong native enrollment: %+v %v", first, err)
@@ -45,7 +69,7 @@ func TestNativeEnrollmentIsStableAndNeverLinksByEmail(t *testing.T) {
 		t.Fatalf("enrollment retried under a new identity: %+v %v", repeat, err)
 	}
 	var centralCount int
-	if err = pool.QueryRow(ctx, "SELECT count(*) FROM users").Scan(&centralCount); err != nil || centralCount != 2 {
-		t.Fatalf("expected only two distinct proven accounts: %d %v", centralCount, err)
+	if err = pool.QueryRow(ctx, "SELECT count(*) FROM users").Scan(&centralCount); err != nil || centralCount != 3 {
+		t.Fatalf("expected exactly three distinct proven accounts: %d %v", centralCount, err)
 	}
 }

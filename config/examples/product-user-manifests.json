@@ -153,5 +153,20 @@
         ]
       }
     ]
+  },
+  {
+    "product_id": "agentwiki",
+    "instance_id": "default",
+    "name": "AgentWiki",
+    "entry_url": "https://wiki.example.test/api/auth/unihub/start?returnTo=%2Fdashboard",
+    "version": 1,
+    "default_roles": [],
+    "roles": [
+      {
+        "id": "member",
+        "name": "Member",
+        "permissions": ["product:use"]
+      }
+    ]
   }
 ]
