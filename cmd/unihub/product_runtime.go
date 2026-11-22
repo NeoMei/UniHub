@@ -32,6 +32,9 @@ func parseRuntimeServicesWithClients(raw string, registry productusers.Registry,
 		return nil, invalid
 	}
 	known := map[string]bool{"bindings:write": true, "access:read": true, "users:read": true, "users:write": true, "calls:refund": true, "calls:reprice": true, "identity:lifecycle": true, "billing:read": true, "billing:write": true, "cash:charge": true, "cash:payment": true, "credits:adjust": true, "credits:award": true, "credits:payment": true, "migrations:write": true, "budgets:read": true, "budgets:write": true, "identity:browser": true, "identity:register": true, "identity:authenticate": true, "identity:lookup": true, "identity:manage": true, "identity:import": true, "finance:read": true, "finance:write": true, "model:authorize": true}
+	known["identity:link"] = true
+	known["identity:session"] = true
+	known["identity:source-lifecycle"] = true
 	tokens := map[string]bool{}
 	for id, c := range out {
 		if id == "" || len(id) > 64 || strings.TrimSpace(id) != id || len(c.Token) < 32 || len(c.Token) > 512 || c.Token == legacyToken || strings.ContainsAny(c.Token, " \r\n\t") || tokens[c.Token] {
@@ -69,6 +72,16 @@ func parseRuntimeServicesWithClients(raw string, registry productusers.Registry,
 				return nil, invalid
 			}
 		} else if c.FinanceClientID != "" {
+			return nil, invalid
+		}
+		identityEnabled := seen["identity:link"] || seen["identity:session"] || seen["identity:source-lifecycle"]
+		if identityEnabled {
+			client, ok := clients[c.IdentityClientID]
+			if !ok || client.ClientID != c.IdentityClientID || client.ProductID != c.ProductID || productusers.Instance(client.InstanceID) != c.InstanceID ||
+				!client.BrowserSSO || client.IdentityLinkRole == "" {
+				return nil, invalid
+			}
+		} else if c.IdentityClientID != "" {
 			return nil, invalid
 		}
 		out[id] = c

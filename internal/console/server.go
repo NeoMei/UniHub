@@ -194,6 +194,11 @@ func (s *Server) Handler(api http.Handler) http.Handler {
 	})
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	productLinkReturn := r.URL.Query().Get("product_link_return")
+	if productLinkReturn != "" && !validProductLinkReturn(productLinkReturn) {
+		failure(w, http.StatusBadRequest)
+		return
+	}
 	state, err := randomSecret()
 	if err != nil {
 		failure(w, 500)
@@ -220,7 +225,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		failure(w, 503)
 		return
 	}
-	if _, err = s.pool.Exec(r.Context(), `INSERT INTO browser_login_transactions(state_hash,binding_hash,nonce,pkce_verifier,expires_at) VALUES($1,$2,$3,$4,$5)`, digest(state), digest(binding), nonce, verifier, expiry); err != nil {
+	if _, err = s.pool.Exec(r.Context(), `INSERT INTO browser_login_transactions(state_hash,binding_hash,nonce,pkce_verifier,expires_at,product_link_return) VALUES($1,$2,$3,$4,$5,$6)`, digest(state), digest(binding), nonce, verifier, expiry, productLinkReturn); err != nil {
 		failure(w, 503)
 		return
 	}
@@ -236,7 +241,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	hash := sha256.Sum256([]byte(verifier))
 	q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(hash[:]))
 	q.Set("code_challenge_method", "S256")
-	if r.URL.Query().Get("switch_account") == "1" {
+	if productLinkReturn != "" || r.URL.Query().Get("switch_account") == "1" {
 		q.Set("prompt", "login")
 	}
 	u.RawQuery = q.Encode()
@@ -250,8 +255,8 @@ func (s *Server) callbackRequest(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400)
 		return
 	}
-	var nonce, pkce string
-	err = s.pool.QueryRow(r.Context(), `DELETE FROM browser_login_transactions WHERE state_hash=$1 AND binding_hash=$2 AND expires_at>now() RETURNING nonce,pkce_verifier`, digest(state), digest(binding.Value)).Scan(&nonce, &pkce)
+	var nonce, pkce, productLinkReturn string
+	err = s.pool.QueryRow(r.Context(), `DELETE FROM browser_login_transactions WHERE state_hash=$1 AND binding_hash=$2 AND expires_at>now() RETURNING nonce,pkce_verifier,product_link_return`, digest(state), digest(binding.Value)).Scan(&nonce, &pkce, &productLinkReturn)
 	if err != nil {
 		failure(w, 400)
 		return
@@ -385,7 +390,31 @@ func (s *Server) callbackRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cookie(w, "unihub_session", id, expiry)
+	if validProductLinkReturn(productLinkReturn) {
+		http.Redirect(w, r, productLinkReturn, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/", 302)
+}
+
+func validProductLinkReturn(raw string) bool {
+	if len(raw) > 2048 || strings.ContainsAny(raw, "\\#\r\n\t") {
+		return false
+	}
+	u, err := url.ParseRequestURI(raw)
+	if err != nil || u.IsAbs() || u.Host != "" || u.EscapedPath() != "/auth/product/link" {
+		return false
+	}
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil || len(q) != 5 || q.Get("reauth") != "1" {
+		return false
+	}
+	for _, key := range []string{"client_id", "redirect_uri", "state", "link", "reauth"} {
+		if len(q[key]) != 1 || q.Get(key) == "" {
+			return false
+		}
+	}
+	return true
 }
 func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 	c, err := r.Cookie("unihub_session")
@@ -394,7 +423,7 @@ func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 	}
 	var claims auth.Claims
 	var csrf string
-	err = s.pool.QueryRow(r.Context(), `SELECT b.issuer,b.subject,b.name,b.email,b.csrf_token,extract(epoch from b.expires_at)::bigint,extract(epoch from b.created_at)::bigint FROM browser_sessions b JOIN identities i ON i.issuer=b.issuer AND i.subject=b.subject JOIN users u ON u.id=i.user_id WHERE b.id_hash=$1 AND b.expires_at>now() AND u.active AND b.created_at>=u.session_not_before AND NOT EXISTS(SELECT 1 FROM product_browser_session_origins o LEFT JOIN product_auth_subjects p ON p.binding_id=o.binding_id LEFT JOIN product_runtime_bindings pb ON pb.id=p.binding_id LEFT JOIN users pu ON pu.id=pb.user_id LEFT JOIN product_user_access a ON a.user_id=pb.user_id AND a.product_id=pb.product_id AND a.instance_id=pb.instance_id WHERE o.session_id_hash=b.id_hash AND (p.binding_id IS NULL OR p.deleted OR p.auth_version<>o.auth_version OR NOT pu.active OR NOT a.active))`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt, &claims.IssuedAt)
+	err = s.pool.QueryRow(r.Context(), `SELECT b.issuer,b.subject,b.name,b.email,b.csrf_token,extract(epoch from b.expires_at)::bigint,extract(epoch from b.created_at)::bigint FROM browser_sessions b JOIN identities i ON i.issuer=b.issuer AND i.subject=b.subject JOIN users u ON u.id=i.user_id WHERE b.id_hash=$1 AND b.expires_at>now() AND u.active AND b.created_at>=u.session_not_before AND NOT EXISTS(SELECT 1 FROM product_browser_session_origins o LEFT JOIN product_auth_subjects p ON p.binding_id=o.binding_id LEFT JOIN product_runtime_bindings pb ON pb.id=p.binding_id LEFT JOIN users pu ON pu.id=pb.user_id LEFT JOIN product_user_access a ON a.user_id=pb.user_id AND a.product_id=pb.product_id AND a.instance_id=pb.instance_id WHERE o.session_id_hash=b.id_hash AND (p.binding_id IS NULL OR p.deleted OR p.native_locked OR p.auth_version<>o.auth_version OR NOT pu.active OR NOT a.active))`, digest(c.Value)).Scan(&claims.Issuer, &claims.Subject, &claims.Name, &claims.Email, &csrf, &claims.ExpiresAt, &claims.IssuedAt)
 	return claims, csrf, err == nil
 }
 func (s *Server) csrf(r *http.Request, expected string) bool {

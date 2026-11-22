@@ -48,22 +48,32 @@ func (s *Store) RuntimeUser(ctx context.Context, userID string) (u accounts.User
 	return
 }
 func (s *Store) EnsureRuntimeBinding(ctx context.Context, product, instance, localID, bindingKey string, identity accounts.Identity, u accounts.User) (RuntimeBinding, error) {
+	tx, e := s.pool.Begin(ctx)
+	if e != nil {
+		return RuntimeBinding{}, e
+	}
+	defer database.Rollback(tx)
+	binding, e := s.EnsureRuntimeBindingOn(ctx, tx, product, instance, localID, bindingKey, identity, u)
+	if e != nil {
+		return RuntimeBinding{}, e
+	}
+	return binding, tx.Commit(ctx)
+}
+
+// EnsureRuntimeBindingOn composes an already proven product binding with the
+// caller's identity, grant and audit transaction.
+func (s *Store) EnsureRuntimeBindingOn(ctx context.Context, tx pgx.Tx, product, instance, localID, bindingKey string, identity accounts.Identity, u accounts.User) (RuntimeBinding, error) {
 	instance = Instance(instance)
 	for _, v := range []string{product, instance, localID, bindingKey, identity.Issuer, identity.Subject, u.ID} {
 		if strings.TrimSpace(v) != v || v == "" || len(v) > 512 {
 			return RuntimeBinding{}, accounts.ErrInvalid
 		}
 	}
-	tx, e := s.pool.Begin(ctx)
-	if e != nil {
-		return RuntimeBinding{}, e
-	}
-	defer database.Rollback(tx)
-	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "runtime-binding:"+product+"/"+instance); e != nil {
+	if _, e := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "runtime-binding:"+product+"/"+instance); e != nil {
 		return RuntimeBinding{}, e
 	}
 	var proven bool
-	if e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM identities WHERE issuer=$1 AND subject=$2 AND user_id=$3)`, identity.Issuer, identity.Subject, u.ID).Scan(&proven); e != nil {
+	if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM identities WHERE issuer=$1 AND subject=$2 AND user_id=$3)`, identity.Issuer, identity.Subject, u.ID).Scan(&proven); e != nil {
 		return RuntimeBinding{}, e
 	}
 	if !proven {
@@ -74,7 +84,7 @@ func (s *Store) EnsureRuntimeBinding(ctx context.Context, product, instance, loc
 		if old.UserID != u.ID {
 			return RuntimeBinding{}, accounts.ErrConflict
 		}
-		return old, tx.Commit(ctx)
+		return old, nil
 	}
 	if !errors.Is(e, accounts.ErrNotFound) {
 		return RuntimeBinding{}, e
@@ -92,7 +102,7 @@ func (s *Store) EnsureRuntimeBinding(ctx context.Context, product, instance, loc
 	if e != nil {
 		return RuntimeBinding{}, e
 	}
-	return b, tx.Commit(ctx)
+	return b, nil
 }
 
 type RuntimeAccess struct {

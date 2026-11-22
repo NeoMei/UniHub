@@ -132,7 +132,7 @@ func (s *Service) FinishBrowserHandoff(ctx context.Context, id, state, browser s
 	defer database.Rollback(tx)
 	var client, user, binding string
 	var version int64
-	e = tx.QueryRow(ctx, `UPDATE product_browser_handoffs h SET consumed=true FROM product_auth_subjects p,product_runtime_bindings b,product_user_access a,users u WHERE h.id_hash=$1 AND h.state_hash=$2 AND h.browser_hash=$3 AND h.expires_at>now() AND NOT h.consumed AND h.approved_user_id IS NOT NULL AND h.approved_user_id=b.user_id AND p.binding_id=h.source_binding_id AND p.auth_version=h.source_auth_version AND NOT p.deleted AND b.id=p.binding_id AND a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id AND a.active AND u.id=b.user_id AND u.active RETURNING h.client_id,h.approved_user_id,h.source_binding_id,h.source_auth_version`, digest(id), digest(state), digest(browser)).Scan(&client, &user, &binding, &version)
+	e = tx.QueryRow(ctx, `UPDATE product_browser_handoffs h SET consumed=true FROM product_auth_subjects p,product_runtime_bindings b,product_user_access a,users u WHERE h.id_hash=$1 AND h.state_hash=$2 AND h.browser_hash=$3 AND h.expires_at>now() AND NOT h.consumed AND h.approved_user_id IS NOT NULL AND h.approved_user_id=b.user_id AND p.binding_id=h.source_binding_id AND p.auth_version=h.source_auth_version AND NOT p.deleted AND NOT p.native_locked AND b.id=p.binding_id AND a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id AND a.active AND u.id=b.user_id AND u.active RETURNING h.client_id,h.approved_user_id,h.source_binding_id,h.source_auth_version`, digest(id), digest(state), digest(browser)).Scan(&client, &user, &binding, &version)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return BrowserCompletion{}, accounts.ErrForbidden
 	}
@@ -157,9 +157,15 @@ func (s *Service) FinishBrowserHandoff(ctx context.Context, id, state, browser s
 	return BrowserCompletion{u, claims, binding, version, browserRedirect(c.RedirectURIs[0], url.Values{"handoff_done": {"1"}, "state": {state}})}, nil
 }
 func (s *Service) BrowserSessionAllowed(ctx context.Context, sessionHash string) bool {
+	return s.browserSessionSourceAllowedOn(ctx, s.pool, sessionHash)
+}
+
+func (s *Service) browserSessionSourceAllowedOn(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, sessionHash string) bool {
 	var source bool
 	var allowed bool
-	e := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM product_browser_session_origins WHERE session_id_hash=$1),EXISTS(SELECT 1 FROM product_browser_session_origins o JOIN product_auth_subjects p ON p.binding_id=o.binding_id JOIN product_runtime_bindings b ON b.id=p.binding_id JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id JOIN users u ON u.id=b.user_id WHERE o.session_id_hash=$1 AND o.auth_version=p.auth_version AND NOT p.deleted AND a.active AND u.active)`, sessionHash).Scan(&source, &allowed)
+	e := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM product_browser_session_origins WHERE session_id_hash=$1),EXISTS(SELECT 1 FROM product_browser_session_origins o JOIN product_auth_subjects p ON p.binding_id=o.binding_id JOIN product_runtime_bindings b ON b.id=p.binding_id JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id JOIN users u ON u.id=b.user_id WHERE o.session_id_hash=$1 AND o.auth_version=p.auth_version AND NOT p.deleted AND NOT p.native_locked AND a.active AND u.active)`, sessionHash).Scan(&source, &allowed)
 	return e == nil && (!source || allowed)
 }
 
@@ -208,7 +214,7 @@ func (s *Service) VerifyBrowserSourceProof(ctx context.Context, raw, product, in
 		    JOIN product_runtime_bindings b ON b.id=p.binding_id
 		    JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id
 		    JOIN users source_user ON source_user.id=b.user_id
-		    WHERE p.binding_id=f.source_binding_id AND p.auth_version=f.source_auth_version AND NOT p.deleted
+		    WHERE p.binding_id=f.source_binding_id AND p.auth_version=f.source_auth_version AND NOT p.deleted AND NOT p.native_locked
 		      AND source_user.active AND a.active AND b.user_id=f.user_id))`, browserSessionDigest(raw), product, instance, centralUserID).Scan(&storedClient, &storedUser, &binding, &version)
 	if err != nil {
 		return accounts.ErrForbidden
@@ -358,7 +364,7 @@ func (s *Service) VerifyBrowserProof(ctx context.Context, raw, product, instance
 	return u, claims, e
 }
 func (s *Service) ConsumeBrowserProof(ctx context.Context, raw string) error {
-	row, e := s.pool.Exec(ctx, `UPDATE product_browser_proofs f SET consumed=true WHERE token_hash=$1 AND NOT consumed AND expires_at>now() AND (source_binding_id IS NULL OR EXISTS(SELECT 1 FROM product_auth_subjects p JOIN product_runtime_bindings b ON b.id=p.binding_id JOIN users u ON u.id=b.user_id JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id WHERE p.binding_id=f.source_binding_id AND p.auth_version=f.source_auth_version AND NOT p.deleted AND u.active AND a.active))`, digest(raw))
+	row, e := s.pool.Exec(ctx, `UPDATE product_browser_proofs f SET consumed=true WHERE token_hash=$1 AND NOT consumed AND expires_at>now() AND (source_binding_id IS NULL OR EXISTS(SELECT 1 FROM product_auth_subjects p JOIN product_runtime_bindings b ON b.id=p.binding_id JOIN users u ON u.id=b.user_id JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id WHERE p.binding_id=f.source_binding_id AND p.auth_version=f.source_auth_version AND NOT p.deleted AND NOT p.native_locked AND u.active AND a.active))`, digest(raw))
 	if e != nil {
 		return e
 	}

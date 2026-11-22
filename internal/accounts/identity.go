@@ -3,6 +3,9 @@ package accounts
 import (
 	"context"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+
 	"unihub/internal/database"
 )
 
@@ -17,14 +20,31 @@ func (s *Store) EnsureIdentity(ctx context.Context, identity Identity) (User, er
 		return User{}, err
 	}
 	defer database.Rollback(tx)
-	// Serialize creation for this exact identity before checking for existence.
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('identity:' || length($1::text)::text || ':' || $1 || $2,0))`, identity.Issuer, identity.Subject); err != nil {
+	user, err := s.EnsureIdentityOn(ctx, tx, identity)
+	if err != nil {
+		return User{}, err
+	}
+	return user, tx.Commit(ctx)
+}
+
+// LockIdentity serializes writers for an exact issuer and subject until tx ends.
+func LockIdentity(ctx context.Context, tx pgx.Tx, issuer, subject string) error {
+	if strings.TrimSpace(issuer) == "" || strings.TrimSpace(subject) == "" {
+		return ErrInvalid
+	}
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('identity:' || length($1::text)::text || ':' || $1 || $2,0))`, issuer, subject)
+	return err
+}
+
+// EnsureIdentityOn creates or resolves an identity and its personal account in tx.
+func (s *Store) EnsureIdentityOn(ctx context.Context, tx pgx.Tx, identity Identity) (User, error) {
+	if err := LockIdentity(ctx, tx, identity.Issuer, identity.Subject); err != nil {
 		return User{}, err
 	}
 	var user User
-	err = tx.QueryRow(ctx, `SELECT u.id,u.name,u.email FROM users u JOIN identities i ON i.user_id=u.id WHERE i.issuer=$1 AND i.subject=$2`, identity.Issuer, identity.Subject).Scan(&user.ID, &user.Name, &user.Email)
+	err := tx.QueryRow(ctx, `SELECT u.id,u.name,u.email FROM users u JOIN identities i ON i.user_id=u.id WHERE i.issuer=$1 AND i.subject=$2`, identity.Issuer, identity.Subject).Scan(&user.ID, &user.Name, &user.Email)
 	if err == nil {
-		return user, tx.Commit(ctx)
+		return user, nil
 	}
 	if domainError(err) != ErrNotFound {
 		return User{}, err
@@ -47,5 +67,5 @@ func (s *Store) EnsureIdentity(ctx context.Context, identity Identity) (User, er
 	if _, err = tx.Exec(ctx, `INSERT INTO account_members(account_id,user_id,role) VALUES($1,$2,'owner')`, accountID, user.ID); err != nil {
 		return User{}, domainError(err)
 	}
-	return user, tx.Commit(ctx)
+	return user, nil
 }

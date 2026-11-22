@@ -9,12 +9,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"unihub/internal/accounts"
 	"unihub/internal/database"
 	"unihub/internal/products"
@@ -101,29 +103,38 @@ func validateAuthentication(in Authentication, now time.Time) error {
 	}
 	return nil
 }
-func (s *Service) Lookup(ctx context.Context, product, instance, local string) (out Identity, e error) {
+func (s *Service) Lookup(ctx context.Context, product, instance, local string) (Identity, error) {
 	if !localSubject.MatchString(local) || !s.users.Managed(product, instance) {
-		return out, accounts.ErrInvalid
+		return Identity{}, accounts.ErrInvalid
 	}
-	access, e := s.users.ResolveRuntime(ctx, product, instance, local)
+	binding, err := s.users.RuntimeBinding(ctx, product, instance, local)
+	if err != nil {
+		return Identity{}, err
+	}
+	return s.lookupBindingOn(ctx, s.pool, binding)
+}
+
+func (s *Service) lookupBindingOn(ctx context.Context, q accounts.Querier, binding productusers.RuntimeBinding) (out Identity, e error) {
+	u, e := runtimeUserOn(ctx, q, binding.UserID)
+	if e != nil {
+		return out, e
+	}
+	product, instance := binding.ProductID, binding.InstanceID
+	access, e := s.users.ResolveOn(ctx, q, u, product, instance)
 	if e != nil {
 		if !errors.Is(e, accounts.ErrForbidden) {
 			return out, e
 		}
-		binding, lookupError := s.users.RuntimeBinding(ctx, product, instance, local)
-		if lookupError != nil {
-			return out, lookupError
-		}
 		out.Binding = binding
-		out.Access = productusers.Access{Issuer: s.issuer, Subject: binding.UserID, ProductID: product, InstanceID: productusers.Instance(instance), User: productusers.User{ID: binding.UserID}, Active: false, ExpiresAt: time.Now().Add(time.Minute).Unix()}
+		out.Access = productusers.Access{Issuer: s.issuer, Subject: binding.UserID, ProductID: product, InstanceID: instance, User: productusers.User{ID: binding.UserID}, Active: false, ExpiresAt: time.Now().Add(time.Minute).Unix()}
 		var version, statusVersion int64
 		var rawRoles []byte
-		e = s.pool.QueryRow(ctx, `SELECT a.product_role,a.version,u.status_version,a.roles FROM product_user_access a JOIN users u ON u.id=a.user_id WHERE a.user_id=$1 AND a.product_id=$2 AND a.instance_id=$3`, binding.UserID, product, productusers.Instance(instance)).Scan(&out.ProductRole, &version, &statusVersion, &rawRoles)
+		e = q.QueryRow(ctx, `SELECT a.product_role,a.version,u.status_version,a.roles FROM product_user_access a JOIN users u ON u.id=a.user_id WHERE a.user_id=$1 AND a.product_id=$2 AND a.instance_id=$3`, binding.UserID, product, instance).Scan(&out.ProductRole, &version, &statusVersion, &rawRoles)
 		if e != nil {
 			return out, e
 		}
 		for _, m := range s.users.Products() {
-			if m.ProductID == product && m.InstanceID == productusers.Instance(instance) {
+			if m.ProductID == product && m.InstanceID == instance {
 				out.Access.Version = m.Version + version + statusVersion - 1
 				var roles []string
 				if e = json.Unmarshal(rawRoles, &roles); e != nil {
@@ -133,90 +144,159 @@ func (s *Service) Lookup(ctx context.Context, product, instance, local string) (
 			}
 		}
 		out.Access.ProductRole = out.ProductRole
-		if e = s.pool.QueryRow(ctx, `SELECT auth_version FROM product_auth_subjects WHERE binding_id=$1`, binding.ID).Scan(&out.AuthVersion); e != nil {
+		if e = q.QueryRow(ctx, `SELECT auth_version FROM product_auth_subjects WHERE binding_id=$1`, binding.ID).Scan(&out.AuthVersion); e != nil {
 			return out, e
 		}
 		return out, nil
 	}
-	out.Binding = access.Binding
-	out.Access = access.Access
-	out.ProductRole = access.Access.ProductRole
-	var deleted bool
-	e = s.pool.QueryRow(ctx, `SELECT auth_version,deleted FROM product_auth_subjects WHERE binding_id=$1`, out.Binding.ID).Scan(&out.AuthVersion, &deleted)
+	out.Binding = binding
+	out.Access = access
+	out.Access.ExpiresAt = time.Now().Add(time.Minute).Unix()
+	out.ProductRole = access.ProductRole
+	var deleted, nativeLocked bool
+	e = q.QueryRow(ctx, `SELECT auth_version,deleted,native_locked FROM product_auth_subjects WHERE binding_id=$1`, binding.ID).Scan(&out.AuthVersion, &deleted, &nativeLocked)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return out, accounts.ErrNotFound
 	}
-	if e == nil && deleted {
+	if e == nil && (deleted || nativeLocked) {
 		return out, accounts.ErrForbidden
 	}
 	return
 }
-func (s *Service) Register(ctx context.Context, product, instance string, in Registration) (Identity, error) {
-	if !localSubject.MatchString(in.LocalUserID) || !operation.MatchString(in.OperationID) || in.AuthVersion < 1 || len(in.Username) > 128 || len(in.DisplayName) > 256 || len(in.Email) > 320 || !s.users.Managed(product, instance) {
-		return Identity{}, accounts.ErrInvalid
+
+func runtimeUserOn(ctx context.Context, q accounts.Querier, id string) (u accounts.User, err error) {
+	err = q.QueryRow(ctx, `SELECT id,name,email FROM users WHERE id=$1`, id).Scan(&u.ID, &u.Name, &u.Email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = accounts.ErrNotFound
 	}
-	// Exact product subject, never an email or a caller-selected central subject.
-	identity := accounts.Identity{Issuer: s.issuer + "/product-auth/" + product + "/" + productusers.Instance(instance), Subject: in.LocalUserID, Name: in.DisplayName, Email: in.Email}
+	return
+}
+
+func (s *Service) registrationManifest(product, instance string, in Registration) (productusers.Manifest, error) {
+	if !localSubject.MatchString(in.LocalUserID) || !operation.MatchString(in.OperationID) || in.AuthVersion < 1 || len(in.Username) > 128 || len(in.DisplayName) > 256 || len(in.Email) > 320 {
+		return productusers.Manifest{}, accounts.ErrInvalid
+	}
+	for _, m := range s.users.Products() {
+		if m.ProductID == product && m.InstanceID == productusers.Instance(instance) {
+			return m, nil
+		}
+	}
+	return productusers.Manifest{}, accounts.ErrInvalid
+}
+
+func (s *Service) nativeBindingOn(ctx context.Context, tx pgx.Tx, m productusers.Manifest, in Registration, central string) (productusers.RuntimeBinding, error) {
+	identity := accounts.Identity{Issuer: s.issuer + "/product-auth/" + m.ProductID + "/" + m.InstanceID, Subject: in.LocalUserID, Name: in.DisplayName, Email: in.Email}
 	if identity.Name == "" {
 		identity.Name = in.Username
 	}
-	existing, e := s.users.RuntimeBinding(ctx, product, instance, in.LocalUserID)
-	if e == nil {
-		var key, request string
-		e = s.pool.QueryRow(ctx, `SELECT registration_key,registration_digest FROM product_auth_subjects WHERE binding_id=$1`, existing.ID).Scan(&key, &request)
-		if e == nil {
-			if key != in.OperationID || request != digest(in) {
-				return Identity{}, accounts.ErrConflict
-			}
-			return s.Lookup(ctx, product, instance, in.LocalUserID)
+	// Match the link flow: lock the identity before acquiring the runtime binding lock.
+	var u accounts.User
+	var err error
+	if central == "" {
+		u, err = s.accounts.EnsureIdentityOn(ctx, tx, identity)
+	} else {
+		if err = accounts.LockIdentity(ctx, tx, identity.Issuer, identity.Subject); err != nil {
+			return productusers.RuntimeBinding{}, err
 		}
-		if !errors.Is(e, pgx.ErrNoRows) {
-			return Identity{}, e
+		u, err = runtimeUserOn(ctx, tx, central)
+		if err != nil {
+			return productusers.RuntimeBinding{}, err
 		}
-		if existing.Issuer != identity.Issuer || existing.Subject != identity.Subject {
-			return Identity{}, accounts.ErrConflict
-		}
-	}
-	if e != nil && !errors.Is(e, accounts.ErrNotFound) && !errors.Is(e, pgx.ErrNoRows) {
-		return Identity{}, e
-	}
-	u, e := s.accounts.EnsureIdentity(ctx, identity)
-	if e != nil {
-		return Identity{}, e
-	}
-	binding, e := s.users.EnsureRuntimeBinding(ctx, product, instance, in.LocalUserID, in.OperationID, identity, u)
-	if e != nil {
-		return Identity{}, e
-	}
-	m := productusers.Manifest{}
-	for _, v := range s.users.Products() {
-		if v.ProductID == product && v.InstanceID == productusers.Instance(instance) {
-			m = v
+		var matched string
+		err = tx.QueryRow(ctx, `SELECT user_id FROM identities WHERE issuer=$1 AND subject=$2`, identity.Issuer, identity.Subject).Scan(&matched)
+		if errors.Is(err, pgx.ErrNoRows) {
+			_, err = tx.Exec(ctx, `INSERT INTO identities(issuer,subject,user_id) VALUES($1,$2,$3)`, identity.Issuer, identity.Subject, central)
+		} else if err == nil && matched != central {
+			return productusers.RuntimeBinding{}, accounts.ErrConflict
 		}
 	}
-	roles, _ := json.Marshal(m.DefaultRoles)
-	tx, e := s.pool.Begin(ctx)
-	if e != nil {
-		return Identity{}, e
+	if err != nil {
+		return productusers.RuntimeBinding{}, err
 	}
-	defer database.Rollback(tx)
-	if _, e = tx.Exec(ctx, `INSERT INTO product_auth_subjects(binding_id,auth_version,registration_key,registration_digest) VALUES($1,$2,$3,$4) ON CONFLICT(binding_id) DO NOTHING`, binding.ID, in.AuthVersion, in.OperationID, digest(in)); e != nil {
-		return Identity{}, e
+	binding, err := s.users.EnsureRuntimeBindingOn(ctx, tx, m.ProductID, m.InstanceID, in.LocalUserID, in.OperationID, identity, u)
+	if err != nil {
+		return productusers.RuntimeBinding{}, err
+	}
+	if binding.Issuer != identity.Issuer || binding.Subject != identity.Subject {
+		return productusers.RuntimeBinding{}, accounts.ErrConflict
+	}
+	return binding, nil
+}
+
+type nativeRegistration struct {
+	exists      bool
+	authVersion int64
+	deleted     bool
+	batch       string
+	snapshot    string
+}
+
+func readNativeRegistration(ctx context.Context, tx pgx.Tx, binding productusers.RuntimeBinding, in Registration) (state nativeRegistration, err error) {
+	// Mutate takes the same lock before locking access and subject rows.
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "product-auth:"+binding.ProductID+"/"+binding.InstanceID); err != nil {
+		return state, err
 	}
 	var key, request string
-	if e = tx.QueryRow(ctx, `SELECT registration_key,registration_digest FROM product_auth_subjects WHERE binding_id=$1 FOR UPDATE`, binding.ID).Scan(&key, &request); e != nil {
-		return Identity{}, e
+	err = tx.QueryRow(ctx, `SELECT registration_key,registration_digest,auth_version,deleted,imported_batch,snapshot_digest
+		FROM product_auth_subjects WHERE binding_id=$1 FOR UPDATE`, binding.ID).Scan(&key, &request, &state.authVersion, &state.deleted, &state.batch, &state.snapshot)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return state, nil
 	}
+	if err != nil {
+		return state, err
+	}
+	state.exists = true
 	if key != in.OperationID || request != digest(in) {
-		return Identity{}, accounts.ErrConflict
+		return state, accounts.ErrConflict
 	}
-	if _, e = tx.Exec(ctx, `INSERT INTO product_user_access(user_id,product_id,instance_id,roles,active,version,product_role) VALUES($1,$2,$3,$4,true,1,1) ON CONFLICT DO NOTHING`, u.ID, product, productusers.Instance(instance), roles); e != nil {
-		return Identity{}, e
+	return state, nil
+}
+
+func (s *Service) finishNativeIdentity(ctx context.Context, tx pgx.Tx, binding productusers.RuntimeBinding) (Identity, error) {
+	out, err := s.lookupBindingOn(ctx, tx, binding)
+	if err != nil {
+		return out, err
 	}
-	if e = tx.Commit(ctx); e != nil {
-		return Identity{}, e
+	if err = tx.Commit(ctx); err != nil {
+		return Identity{}, err
 	}
-	return s.Lookup(ctx, product, instance, in.LocalUserID)
+	return out, nil
+}
+
+func (s *Service) Register(ctx context.Context, product, instance string, in Registration) (Identity, error) {
+	m, err := s.registrationManifest(product, instance, in)
+	if err != nil {
+		return Identity{}, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Identity{}, err
+	}
+	defer database.Rollback(tx)
+	binding, err := s.nativeBindingOn(ctx, tx, m, in, "")
+	if err != nil {
+		return Identity{}, err
+	}
+	state, err := readNativeRegistration(ctx, tx, binding, in)
+	if err != nil {
+		return Identity{}, err
+	}
+	if !state.exists {
+		result, err := tx.Exec(ctx, `INSERT INTO product_auth_subjects(binding_id,auth_version,registration_key,registration_digest)
+			VALUES($1,$2,$3,$4) ON CONFLICT(binding_id) DO NOTHING`, binding.ID, in.AuthVersion, in.OperationID, digest(in))
+		if err != nil {
+			return Identity{}, err
+		}
+		if result.RowsAffected() != 1 {
+			return Identity{}, accounts.ErrConflict
+		}
+		roles, _ := json.Marshal(m.DefaultRoles)
+		if _, err = tx.Exec(ctx, `INSERT INTO product_user_access(user_id,product_id,instance_id,roles,active,version,product_role)
+			VALUES($1,$2,$3,$4,true,1,1) ON CONFLICT DO NOTHING`, binding.UserID, m.ProductID, m.InstanceID, roles); err != nil {
+			return Identity{}, err
+		}
+	}
+	return s.finishNativeIdentity(ctx, tx, binding)
 }
 func (s *Service) Authenticate(ctx context.Context, product, instance string, in Authentication) (Identity, error) {
 	if e := validateAuthentication(in, time.Now()); e != nil {
@@ -304,7 +384,7 @@ func (s *Service) Mutate(ctx context.Context, product, instance, actor, local st
 		return Identity{}, e
 	}
 	defer database.Rollback(tx)
-	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "product-auth:"+product+"/"+instance); e != nil {
+	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "product-auth:"+product+"/"+productusers.Instance(instance)); e != nil {
 		return Identity{}, e
 	}
 	// Lock actor and target rows before comparing authority or updating it.
@@ -468,96 +548,90 @@ func (s *Service) Import(ctx context.Context, product, instance string, in Impor
 	if !operation.MatchString(in.ReviewedBatchID) || len(in.SnapshotDigest) != 64 || (in.ProductRole != 1 && in.ProductRole != 10 && in.ProductRole != 100) {
 		return Identity{}, accounts.ErrInvalid
 	}
-	if _, e := hex.DecodeString(in.SnapshotDigest); e != nil {
+	if _, err := hex.DecodeString(in.SnapshotDigest); err != nil {
 		return Identity{}, accounts.ErrInvalid
 	}
-	if in.CentralUserID != "" {
-		if _, e := s.users.RuntimeUser(ctx, in.CentralUserID); e != nil {
-			return Identity{}, e
-		}
-		issuer := s.issuer + "/product-auth/" + product + "/" + productusers.Instance(instance)
-		tx, e := s.pool.Begin(ctx)
-		if e != nil {
-			return Identity{}, e
-		}
-		defer database.Rollback(tx)
-		if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "product-auth-import:"+issuer+"/"+in.LocalUserID); e != nil {
-			return Identity{}, e
-		}
-		if _, e = tx.Exec(ctx, `INSERT INTO identities(issuer,subject,user_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING`, issuer, in.LocalUserID, in.CentralUserID); e != nil {
-			return Identity{}, e
-		}
-		var matched string
-		if e = tx.QueryRow(ctx, `SELECT user_id FROM identities WHERE issuer=$1 AND subject=$2`, issuer, in.LocalUserID).Scan(&matched); e != nil {
-			return Identity{}, e
-		}
-		if matched != in.CentralUserID {
-			return Identity{}, accounts.ErrConflict
-		}
-		if e = tx.Commit(ctx); e != nil {
-			return Identity{}, e
-		}
+	m, err := s.registrationManifest(product, instance, in.Registration)
+	if err != nil {
+		return Identity{}, err
 	}
-	out, e := s.Register(ctx, product, instance, in.Registration)
-	if e != nil {
-		return Identity{}, e
+	if _, err = productusers.EffectivePermissions(m, m.DefaultRoles, in.PermissionOverrides, in.ProductRole); err != nil {
+		return Identity{}, accounts.ErrInvalid
 	}
-	known := map[string]bool{}
-	for _, m := range s.users.Products() {
-		if m.ProductID == product && m.InstanceID == productusers.Instance(instance) {
-			for _, r := range m.Roles {
-				for _, p := range r.Permissions {
-					known[p] = true
-				}
-			}
-		}
-	}
-	for resource, actions := range in.PermissionOverrides {
-		for action := range actions {
-			if !known[resource+":"+action] {
-				return Identity{}, accounts.ErrInvalid
-			}
-		}
-	}
-	tx, e := s.pool.Begin(ctx)
-	if e != nil {
-		return Identity{}, e
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Identity{}, err
 	}
 	defer database.Rollback(tx)
-	var batch, snapshot string
-	if e = tx.QueryRow(ctx, `SELECT imported_batch,snapshot_digest FROM product_auth_subjects WHERE binding_id=$1 FOR UPDATE`, out.Binding.ID).Scan(&batch, &snapshot); e != nil {
-		return Identity{}, e
+	binding, err := s.nativeBindingOn(ctx, tx, m, in.Registration, in.CentralUserID)
+	if err != nil {
+		return Identity{}, err
 	}
-	if batch != "" {
-		if batch != in.ReviewedBatchID || snapshot != digest(in) {
+	state, err := readNativeRegistration(ctx, tx, binding, in.Registration)
+	if err != nil {
+		return Identity{}, err
+	}
+	request := digest(in)
+	if state.batch != "" {
+		if state.batch != in.ReviewedBatchID || state.snapshot != request {
 			return Identity{}, accounts.ErrConflict
 		}
-		if e = tx.Commit(ctx); e != nil {
-			return Identity{}, e
+		return s.finishNativeIdentity(ctx, tx, binding)
+	}
+	if state.exists && (state.deleted || state.authVersion != in.AuthVersion) {
+		return Identity{}, accounts.ErrConflict
+	}
+
+	// Central access writers lock the user before reading the assignment.
+	if _, err = tx.Exec(ctx, `SELECT id FROM users WHERE id=$1 FOR NO KEY UPDATE`, binding.UserID); err != nil {
+		return Identity{}, err
+	}
+	roles, _ := json.Marshal(m.DefaultRoles)
+	overrides := in.PermissionOverrides
+	if overrides == nil {
+		overrides = map[string]map[string]bool{}
+	}
+	rawOverrides, _ := json.Marshal(overrides)
+	// The old import followed Register, so its assignment revision started at 2.
+	// Only an unchanged registration baseline can be replaced on a legacy retry.
+	result, err := tx.Exec(ctx, `INSERT INTO product_user_access AS a
+		(user_id,product_id,instance_id,roles,active,version,product_role,permission_overrides)
+		VALUES($1,$2,$3,$4,$5,2,$6,$7)
+		ON CONFLICT (user_id,product_id,instance_id) DO UPDATE SET
+			active=excluded.active,version=excluded.version,product_role=excluded.product_role,permission_overrides=excluded.permission_overrides
+		WHERE $8 AND a.version=1 AND a.roles=excluded.roles AND a.active AND a.product_role=1
+			AND a.permission_overrides='{}' AND NOT EXISTS (
+				SELECT 1 FROM product_user_audit
+				WHERE target_id=a.user_id AND product_id=a.product_id AND instance_id=a.instance_id AND action='access'
+			)`,
+		binding.UserID, m.ProductID, m.InstanceID, roles, in.Active, in.ProductRole, rawOverrides, state.exists)
+	if err != nil {
+		return Identity{}, err
+	}
+	if result.RowsAffected() != 1 {
+		return Identity{}, accounts.ErrConflict
+	}
+
+	if state.exists {
+		_, err = tx.Exec(ctx, `UPDATE product_auth_subjects SET imported_batch=$2,snapshot_digest=$3 WHERE binding_id=$1`, binding.ID, in.ReviewedBatchID, request)
+	} else {
+		result, err = tx.Exec(ctx, `INSERT INTO product_auth_subjects(binding_id,auth_version,registration_key,registration_digest,imported_batch,snapshot_digest)
+			VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(binding_id) DO NOTHING`,
+			binding.ID, in.AuthVersion, in.OperationID, digest(in.Registration), in.ReviewedBatchID, request)
+		if err == nil && result.RowsAffected() != 1 {
+			return Identity{}, accounts.ErrConflict
 		}
-		return s.Lookup(ctx, product, instance, in.LocalUserID)
 	}
-	overrides, _ := json.Marshal(in.PermissionOverrides)
-	if string(overrides) == "null" {
-		overrides = []byte("{}")
-	}
-	if _, e = tx.Exec(ctx, `UPDATE product_user_access SET product_role=$4,active=$5,permission_overrides=$6,version=version+1 WHERE user_id=$1 AND product_id=$2 AND instance_id=$3`, out.Binding.UserID, product, productusers.Instance(instance), in.ProductRole, in.Active, overrides); e != nil {
-		return Identity{}, e
-	}
-	if _, e = tx.Exec(ctx, `UPDATE product_auth_subjects SET imported_batch=$2,snapshot_digest=$3 WHERE binding_id=$1`, out.Binding.ID, in.ReviewedBatchID, digest(in)); e != nil {
-		return Identity{}, e
+	if err != nil {
+		return Identity{}, err
 	}
 	event, _ := json.Marshal(in)
-	if _, e = tx.Exec(ctx, `INSERT INTO product_auth_events(binding_id,operation_id,request_digest,actor_id,event,snapshot) VALUES($1,$2,$3,$4,'import',$5)`, out.Binding.ID, in.ReviewedBatchID, digest(in), out.Binding.UserID, event); e != nil {
-		return Identity{}, e
+	if _, err = tx.Exec(ctx, `INSERT INTO product_auth_events(binding_id,operation_id,request_digest,actor_id,event,snapshot)
+		VALUES($1,$2,$3,$4,'import',$5)`, binding.ID, in.ReviewedBatchID, request, binding.UserID, event); err != nil {
+		return Identity{}, err
 	}
-	if e = tx.Commit(ctx); e != nil {
-		return Identity{}, e
-	}
-	if !in.Active {
-		return s.Lookup(ctx, product, instance, in.LocalUserID)
-	}
-	return s.Lookup(ctx, product, instance, in.LocalUserID)
+	return s.finishNativeIdentity(ctx, tx, binding)
 }
 
 // AdoptBinding records the authentication version for an already proven OIDC

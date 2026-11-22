@@ -26,6 +26,9 @@ type Client struct {
 	Scopes             []string `json:"scopes,omitempty"`
 	BillingProducts    []string `json:"billing_products,omitempty"`
 	BrowserSSO         bool     `json:"browser_sso,omitempty"`
+	IdentityLinkRole   string   `json:"identity_link_role,omitempty"`
+	NativeLoginURL     string   `json:"native_login_url,omitempty"`
+	NativeLoginLabel   string   `json:"native_login_label,omitempty"`
 	PasswordLogin      bool     `json:"password_login,omitempty"`
 	Registration       bool     `json:"registration,omitempty"`
 	RefreshTokens      bool     `json:"refresh_tokens,omitempty"`
@@ -80,6 +83,21 @@ func Parse(raw []byte) (map[string]Client, error) {
 		}
 		if !productID.MatchString(c.InstanceID) {
 			return nil, errors.New("invalid instance ID")
+		}
+		if c.IdentityLinkRole != "" && (!c.BrowserSSO || len(c.RedirectURIs) != 1 || !productID.MatchString(c.IdentityLinkRole)) {
+			return nil, errors.New("identity linking requires one registered browser redirect and an explicit role")
+		}
+		if c.NativeLoginURL != "" {
+			if c.IdentityLinkRole == "" || !validURL(c.NativeLoginURL, false) || c.NativeLoginLabel == "" ||
+				len(c.NativeLoginLabel) > 100 || strings.ContainsAny(c.NativeLoginLabel, "\r\n\t") {
+				return nil, errors.New("invalid native product login entry")
+			}
+			u, _ := url.Parse(c.NativeLoginURL)
+			if !c.AllowsOrigin(u.Scheme + "://" + u.Host) {
+				return nil, errors.New("native product login URL must use an exact product origin")
+			}
+		} else if c.NativeLoginLabel != "" {
+			return nil, errors.New("native product login label requires a login URL")
 		}
 		for _, s := range c.Scopes {
 			if !supportedScopes[s] || (s == "usage:all-products" && c.ProductID != "llmrouter") {

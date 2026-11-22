@@ -21,6 +21,7 @@ func (s *api) productAuthRoutes(m *http.ServeMux) {
 			return next(w, r, service)
 		}))
 	}
+	s.addProductIdentityRoutes(add)
 	add("POST /internal/v1/product-runtime/identity/register", "identity:register", func(w http.ResponseWriter, r *http.Request, c RuntimeService) error {
 		var in productauth.Registration
 		if e := decode(w, r, &in); e != nil {
