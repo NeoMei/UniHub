@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 	"unihub/internal/accounts"
@@ -226,9 +227,10 @@ func (s *api) capabilities(w http.ResponseWriter, r *http.Request, u accounts.Us
 			}
 		}
 	}
+	paymentProviders = publicPaymentProviders(s.options.Sandbox, paymentProviders)
 	productWallet := productWalletRequested(r) && nativeCredits.Ready &&
 		nativeCredits.CreditScope == billing.ProductCreditScopeV1 && s.hasProductModelRuntime(originProduct(r), instance)
-	return respond(w, 200, map[string]any{"finance_write": financeWrite, "kind": kind, "product_id": originProduct(r), "instance_id": instance, "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": len(paymentProviders) > 0, "payment_providers": paymentProviders, "alipay_checkout_qr": s.options.Billing != nil, "native_credits": nativeCredits, "product_credit_wallet": productWallet, "unified_wallet_recharge": s.options.Sandbox && s.wallet.CanSandboxRecharge(u.ID) && originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox && s.wallet.CanSandboxRecharge(u.ID), "manual_recharge": s.wallet.CanSandboxRecharge(u.ID) && originProduct(r) == "", "refresh_token": refreshToken, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
+	return respond(w, 200, map[string]any{"finance_write": financeWrite, "kind": kind, "product_id": originProduct(r), "instance_id": instance, "client_id": clientID, "scopes": scopes, "sandbox": s.options.Sandbox, "real_payments_configured": len(paymentProviders) > 0, "payment_providers": paymentProviders, "alipay_checkout_qr": slices.Contains(paymentProviders, "alipay"), "native_credits": nativeCredits, "product_credit_wallet": productWallet, "unified_wallet_recharge": s.options.Sandbox && s.wallet.CanSandboxRecharge(u.ID) && originProduct(r) == "", "product_wallet_recharge": s.options.Sandbox && s.wallet.CanSandboxRecharge(u.ID), "manual_recharge": s.wallet.CanSandboxRecharge(u.ID) && originProduct(r) == "", "refresh_token": refreshToken, "server_logout": false, "model_pool": "llmrouter", "amount_encoding": "decimal_integer_string"})
 }
 
 // Keep verified expiry in request context rather than accepting any client field.

@@ -20,14 +20,15 @@ import (
 )
 
 type fakeProvider struct {
-	id         string
-	merchant   string
-	createErr  error
-	closeCalls int
-	queryErr   error
-	requests   map[string]payments.Request
-	sessions   map[string]payments.Session
-	paid       map[string]payments.Result
+	id          string
+	merchant    string
+	sessionKind string
+	createErr   error
+	closeCalls  int
+	queryErr    error
+	requests    map[string]payments.Request
+	sessions    map[string]payments.Session
+	paid        map[string]payments.Result
 }
 
 func newFakeProvider(id string) *fakeProvider {
@@ -40,7 +41,11 @@ func (p *fakeProvider) Create(_ context.Context, r payments.Request) (payments.S
 	if p.createErr != nil {
 		return payments.Session{}, p.createErr
 	}
-	s := payments.Session{Kind: "redirect", URL: "https://pay.example/" + r.OrderID, ExpiresAt: r.ExpiresAt}
+	kind := p.sessionKind
+	if kind == "" {
+		kind = "redirect"
+	}
+	s := payments.Session{Kind: kind, URL: "https://pay.example/" + r.OrderID, ExpiresAt: r.ExpiresAt}
 	p.sessions[r.OrderID] = s
 	return s, nil
 }
@@ -401,4 +406,24 @@ func TestExpiredAlipayCashRedirectChecksMerchantBeforeClosing(t *testing.T) {
 	assert.Equal(t, "CLOSED", closed.PaymentStatus)
 	assert.Nil(t, closed.Session)
 	assert.Zero(t, f.ledger.balance[wallet.Address(f.account.ID, "")])
+}
+
+func TestExpiredAlipayCashQRClosesAfterVerifiedNotFound(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	alipay := newFakeProvider("alipay")
+	alipay.sessionKind = "qr"
+	f.svc.ConfigureProviders([]payments.Provider{alipay})
+	now := time.Now().UTC()
+	f.svc.now = func() time.Time { return now }
+	order, err := f.svc.Create(ctx, f.user.ID, f.account.ID, Request{
+		Provider: "alipay", ProductID: "llmrouter", Amount: "20000000", Key: "expired-alipay-qr", UnifiedWallet: true,
+	})
+	require.NoError(t, err)
+	alipay.paid[order.ID] = payments.Result{OrderID: order.ID, Status: "NOT_FOUND"}
+	now = order.ExpiresAt.Add(time.Minute)
+	closed, err := f.svc.Close(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "CLOSED", closed.PaymentStatus)
+	assert.Zero(t, alipay.closeCalls)
 }

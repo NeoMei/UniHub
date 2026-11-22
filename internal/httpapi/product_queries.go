@@ -134,7 +134,15 @@ func (s *api) productQueryRoutes(add func(string, action)) {
 		if e != nil {
 			return e
 		}
-		out := map[string]any{"account_id": account, "product_id": originProduct(r), "subscriptions": filterProducts(r, subs, func(x billing.Subscription) string { return x.ProductID }), "payments": map[string]any{"mode": map[bool]string{true: "sandbox", false: "unconfigured"}[s.options.Sandbox], "real_payments_configured": false}}
+		paymentProviders := []string{}
+		if s.options.Billing != nil {
+			paymentProviders, e = s.options.Billing.PaymentProvidersContext(r.Context())
+			if e != nil {
+				return e
+			}
+		}
+		paymentMode, realPaymentsConfigured := publicPaymentState(s.options.Sandbox, paymentProviders)
+		out := map[string]any{"account_id": account, "product_id": originProduct(r), "subscriptions": filterProducts(r, subs, func(x billing.Subscription) string { return x.ProductID }), "payments": map[string]any{"mode": paymentMode, "real_payments_configured": realPaymentsConfigured}}
 		if origin := originProduct(r); origin != "" {
 			profile, e := s.options.Billing.Profile(r.Context(), origin)
 			if e != nil {

@@ -8,6 +8,7 @@ import (
 	"unihub/internal/auth"
 	"unihub/internal/billing"
 	"unihub/internal/database"
+	"unihub/internal/payments"
 	"unihub/internal/products"
 	"unihub/internal/testutil"
 	"unihub/internal/wallet"
@@ -54,6 +55,17 @@ func TestProductBillingProfilesReadScopeAndOperatorWrite(t *testing.T) {
 	}
 	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &resource) != nil || resource.BillingProfile.Usage.DefaultFundingMode != "prepaid_cash" {
 		t.Fatalf("resources %d %s", w.Code, w.Body)
+	}
+	b.ConfigurePayments([]payments.Provider{&checkoutHTTPProvider{}})
+	w = call(h, "GET", "/v1/accounts/"+as[0].ID+"/resources", "product-alice", "", "")
+	var paymentsState struct {
+		Payments struct {
+			Mode                   string `json:"mode"`
+			RealPaymentsConfigured bool   `json:"real_payments_configured"`
+		} `json:"payments"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &paymentsState) != nil || paymentsState.Payments.Mode != "direct" || !paymentsState.Payments.RealPaymentsConfigured {
+		t.Fatalf("resources payment state %d %s", w.Code, w.Body)
 	}
 }
 

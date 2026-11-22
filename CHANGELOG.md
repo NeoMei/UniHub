@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.67 - 2026-11-22
+
+- Close expired Alipay QR cash checkouts after a verified merchant `NOT_FOUND` response, so an expired payment attempt cannot block creation of a replacement QR code.
+- Advertise only production payment providers that are actually configured and expose the native-credit product profile consistently through product capability queries.
+
 ## 0.4.64 - 2026-11-18
 
 - SuperWagie clients can opt in to in-panel Alipay QR checkout. Existing clients can still read the order and payment status.

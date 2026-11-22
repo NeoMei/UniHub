@@ -3,16 +3,61 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/auth"
+	"unihub/internal/billing"
 	"unihub/internal/database"
+	"unihub/internal/payments"
 	"unihub/internal/products"
 	"unihub/internal/productusers"
 	"unihub/internal/testutil"
 	"unihub/internal/wallet"
 )
+
+func TestCapabilitiesAdvertiseOnlyConfiguredPaymentProviders(t *testing.T) {
+	b := billing.New(nil, nil, nil)
+	wechat := &checkoutHTTPProvider{}
+	b.ConfigurePayments([]payments.Provider{wechat})
+	s := &api{wallet: wallet.New(nil, nil, noLedger{}), options: Options{Billing: b}}
+
+	w := httptest.NewRecorder()
+	if err := s.capabilities(w, httptest.NewRequest("GET", "/v1/capabilities", nil), accounts.User{ID: "account"}); err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Providers []string `json:"payment_providers"`
+		AlipayQR  bool     `json:"alipay_checkout_qr"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Providers) != 1 || response.Providers[0] != "wechat" || response.AlipayQR {
+		t.Fatalf("capabilities advertised unavailable payment channel: %s", w.Body)
+	}
+	b.ConfigurePayments([]payments.Provider{wechat, &alipayQRHTTPProvider{}})
+	w = httptest.NewRecorder()
+	if err := s.capabilities(w, httptest.NewRequest("GET", "/v1/capabilities", nil), accounts.User{ID: "account"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Providers) != 2 || !response.AlipayQR {
+		t.Fatalf("capabilities hid configured payment channels: %s", w.Body)
+	}
+	s.options.Sandbox = true
+	w = httptest.NewRecorder()
+	if err := s.capabilities(w, httptest.NewRequest("GET", "/v1/capabilities", nil), accounts.User{ID: "account"}); err != nil {
+		t.Fatal(err)
+	}
+	if string(w.Body.Bytes()) == "" || !strings.Contains(w.Body.String(), `"payment_providers":[]`) {
+		t.Fatalf("sandbox capabilities returned an invalid provider shape: %s", w.Body)
+	}
+}
 
 func TestProductUserAPIRevocationAndAdministrationBoundary(t *testing.T) {
 	ctx := context.Background()

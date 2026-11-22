@@ -212,6 +212,18 @@ func (s *Service) Close(ctx context.Context, actor, account, id string) (Checkou
 	if err != nil {
 		return Checkout{}, err
 	}
+	if rec.Session != nil && rec.Session.Kind == "qr" && !s.now().Before(rec.ExpiresAt) {
+		result, queryErr := p.Query(ctx, rec.ID)
+		if queryErr != nil {
+			return Checkout{}, queryErr
+		}
+		if result.Status == "NOT_FOUND" {
+			return s.recordClosed(ctx, account, id)
+		}
+		if result.Status == "PAID" {
+			return s.Reconcile(ctx, actor, account, id)
+		}
+	}
 	if err = p.Close(ctx, rec.ID); err != nil {
 		return Checkout{}, err
 	}
