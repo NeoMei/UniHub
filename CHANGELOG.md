@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.68 - 2026-11-23
+
+- Add opt-in AgentWiki identity enrollment, verified account links, and browser session handoff.
+- Scope revocation to the original session and bind pending native handoffs to the configured rollout generation.
+- Keep existing application registrations and commercial account data intact. AgentWiki entry is enabled per deployment after pilot validation.
+
 ## 0.4.67 - 2026-11-22
 
 - Close expired Alipay QR cash checkouts after a verified merchant `NOT_FOUND` response, so an expired payment attempt cannot block creation of a replacement QR code.
