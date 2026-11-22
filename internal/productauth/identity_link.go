@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -39,7 +40,14 @@ type CompleteIdentityLink struct {
 	RedirectURI    string         `json:"redirect_uri"`
 	Nonce          string         `json:"nonce"`
 	Verifier       string         `json:"code_verifier"`
+	CentralUserID  string         `json:"central_user_id,omitempty"`
 	Authentication Authentication `json:"authentication"`
+}
+
+type IdentityLinkPreview struct {
+	CentralUserID string `json:"central_user_id"`
+	DisplayName   string `json:"display_name"`
+	MaskedEmail   string `json:"masked_email"`
 }
 
 func (s *Service) identityLinkClient(id, redirect string) (products.Client, error) {
@@ -153,57 +161,137 @@ func (s *Service) handleIdentityLink(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, browserRedirect(redirect, response), http.StatusSeeOther)
 }
 
-func (s *Service) CompleteIdentityLink(ctx context.Context, product, instance string, in CompleteIdentityLink) (Identity, error) {
+func (s *Service) identityLinkExchangeClient(product, instance string, in CompleteIdentityLink) (products.Client, error) {
 	instance = productusers.Instance(instance)
 	client, err := s.identityLinkClient(in.ClientID, in.RedirectURI)
 	if err != nil || client.ProductID != product || productusers.Instance(client.InstanceID) != instance || in.RedirectURI == "" {
-		return Identity{}, accounts.ErrForbidden
+		return products.Client{}, accounts.ErrForbidden
 	}
 	if len(in.LinkID) != 43 || len(in.Code) != 43 || len(in.Verifier) < 43 || len(in.Verifier) > 128 ||
 		!validBrowserState(in.Nonce) || validateAuthentication(in.Authentication, time.Now()) != nil {
-		return Identity{}, accounts.ErrInvalid
+		return products.Client{}, accounts.ErrInvalid
 	}
+	return client, nil
+}
+
+type identityLinkProof struct {
+	central, session string
+	completed        *string
+}
+
+func readIdentityLinkProof(ctx context.Context, q accounts.Querier, client products.Client, in CompleteIdentityLink, lock bool) (proof identityLinkProof, err error) {
 	challenge := sha256.Sum256([]byte(in.Verifier))
+	query := `SELECT central_user_id,source_session_hash,completed_digest FROM product_identity_links
+		WHERE id_hash=$1 AND client_id=$2 AND product_id=$3 AND instance_id=$4 AND local_user_id=$5
+		AND auth_version=$6 AND code_hash=$7 AND nonce_hash=$8 AND pkce_challenge=$9 AND expires_at>now()`
+	if lock {
+		query += " FOR UPDATE"
+	}
+	err = q.QueryRow(ctx, query, digest(in.LinkID), client.ClientID, client.ProductID, productusers.Instance(client.InstanceID),
+		in.Authentication.LocalUserID, in.Authentication.AuthVersion, digest(in.Code), digest(in.Nonce),
+		base64.RawURLEncoding.EncodeToString(challenge[:])).Scan(&proof.central, &proof.session, &proof.completed)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return proof, accounts.ErrForbidden
+	}
+	return proof, err
+}
+
+func (s *Service) PreviewIdentityLink(ctx context.Context, product, instance string, in CompleteIdentityLink) (IdentityLinkPreview, error) {
+	client, err := s.identityLinkExchangeClient(product, instance, in)
+	if err != nil {
+		return IdentityLinkPreview{}, err
+	}
+	proof, err := readIdentityLinkProof(ctx, s.pool, client, in, false)
+	if err != nil {
+		return IdentityLinkPreview{}, err
+	}
+	if _, err = currentBrowserSourceSession(ctx, s.pool, proof.session, proof.central); err != nil ||
+		!s.BrowserSessionAllowed(ctx, proof.session) {
+		return IdentityLinkPreview{}, accounts.ErrForbidden
+	}
+	user, err := s.users.RuntimeUser(ctx, proof.central)
+	if err != nil {
+		return IdentityLinkPreview{}, err
+	}
+	maskedEmail := ""
+	if local, domain, ok := strings.Cut(user.Email, "@"); ok && local != "" && domain != "" {
+		maskedEmail = string([]rune(local)[0]) + "***@" + domain
+	}
+	return IdentityLinkPreview{CentralUserID: user.ID, DisplayName: user.Name, MaskedEmail: maskedEmail}, nil
+}
+
+func (s *Service) CompleteIdentityLink(ctx context.Context, product, instance string, in CompleteIdentityLink) (Identity, error) {
+	client, err := s.identityLinkExchangeClient(product, instance, in)
+	if err != nil || in.CentralUserID == "" {
+		return Identity{}, accounts.ErrForbidden
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Identity{}, err
 	}
 	defer database.Rollback(tx)
-	var central, session string
-	var completed *string
-	err = tx.QueryRow(ctx, `SELECT central_user_id,source_session_hash,completed_digest FROM product_identity_links
-		WHERE id_hash=$1 AND client_id=$2 AND product_id=$3 AND instance_id=$4 AND local_user_id=$5
-		AND auth_version=$6 AND code_hash=$7 AND nonce_hash=$8 AND pkce_challenge=$9 AND expires_at>now() FOR UPDATE`,
-		digest(in.LinkID), client.ClientID, product, instance, in.Authentication.LocalUserID, in.Authentication.AuthVersion,
-		digest(in.Code), digest(in.Nonce), base64.RawURLEncoding.EncodeToString(challenge[:])).Scan(&central, &session, &completed)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Identity{}, accounts.ErrForbidden
-	}
+	proof, err := readIdentityLinkProof(ctx, tx, client, in, true)
 	if err != nil {
 		return Identity{}, err
 	}
+	if proof.central != in.CentralUserID {
+		return Identity{}, accounts.ErrForbidden
+	}
 	requestDigest := digest(in)
-	if completed != nil && *completed != requestDigest {
+	if proof.completed != nil && *proof.completed != requestDigest {
 		return Identity{}, accounts.ErrConflict
 	}
-	if _, err = currentBrowserSourceSession(ctx, tx, session, central); err != nil {
-		return Identity{}, accounts.ErrForbidden
-	}
-	if !s.browserSessionSourceAllowedOn(ctx, tx, session) {
-		return Identity{}, accounts.ErrForbidden
-	}
-	if completed == nil {
-		if err = s.bindLinkedIdentity(ctx, tx, client, central, in.Authentication, digest(in.LinkID), requestDigest); err != nil {
+	if proof.completed == nil {
+		if err = s.bindLinkedIdentity(ctx, tx, client, proof.central, in.Authentication, digest(in.LinkID), requestDigest); err != nil {
 			return Identity{}, err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE product_identity_links SET completed_digest=$2 WHERE id_hash=$1`, digest(in.LinkID), requestDigest); err != nil {
 			return Identity{}, err
 		}
 	}
+	// Recheck after waiting for identity and binding locks. Taking shared row
+	// locks serializes the final result with logout, lock and disable updates.
+	if err = s.lockIdentityLinkSource(ctx, tx, proof); err != nil {
+		return Identity{}, err
+	}
 	if err = tx.Commit(ctx); err != nil {
 		return Identity{}, err
 	}
-	return s.IdentityLinkByCanonicalUser(ctx, product, instance, central)
+	return s.IdentityLinkByCanonicalUser(ctx, product, instance, proof.central)
+}
+
+func (s *Service) lockIdentityLinkSource(ctx context.Context, tx pgx.Tx, proof identityLinkProof) error {
+	var row int
+	err := tx.QueryRow(ctx, `SELECT 1 FROM browser_sessions b JOIN identities i ON i.issuer=b.issuer AND i.subject=b.subject
+		JOIN users u ON u.id=i.user_id
+		WHERE b.id_hash=$1 AND u.id=$2 AND b.expires_at>now() AND u.active AND b.created_at>=u.session_not_before
+		AND NOT EXISTS (SELECT 1 FROM identity_revocations r WHERE r.issuer=b.issuer AND r.subject=b.subject AND r.pending)
+		FOR SHARE OF b,u`, proof.session, proof.central).Scan(&row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return accounts.ErrForbidden
+	}
+	if err != nil {
+		return err
+	}
+	var origin string
+	err = tx.QueryRow(ctx, `SELECT binding_id FROM product_browser_session_origins WHERE session_id_hash=$1`, proof.session).Scan(&origin)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	err = tx.QueryRow(ctx, `SELECT 1 FROM product_browser_session_origins o
+		JOIN product_auth_subjects p ON p.binding_id=o.binding_id
+		JOIN product_runtime_bindings b ON b.id=p.binding_id
+		JOIN product_user_access a ON a.user_id=b.user_id AND a.product_id=b.product_id AND a.instance_id=b.instance_id
+		WHERE o.session_id_hash=$1 AND b.user_id=$2 AND b.id=$3 AND p.auth_version=o.auth_version
+		AND NOT p.deleted AND NOT p.native_locked AND a.active FOR SHARE OF p,a`,
+		proof.session, proof.central, origin).Scan(&row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return accounts.ErrForbidden
+	}
+	return err
 }
 
 func (s *Service) bindLinkedIdentity(ctx context.Context, tx pgx.Tx, client products.Client, central string, proof Authentication, operationID, requestDigest string) error {

@@ -200,6 +200,120 @@ func TestReviewedImportDoesNotReplaceExistingProductAuthority(t *testing.T) {
 	}
 }
 
+func TestReviewedImportPreservesMatchingExplicitAssignment(t *testing.T) {
+	ctx := context.Background()
+	s, request := reviewedImportFixture(t)
+	request.CentralUserID = importCanonicalUser(t, s).ID
+	if _, err := s.pool.Exec(ctx, `INSERT INTO product_user_access
+		(user_id,product_id,instance_id,roles,active,version,product_role,permission_overrides,updated_at)
+		VALUES($1,$2,$3,'["member"]',true,7,10,'{"user":{"write":false}}','2026-01-01T00:00:00Z')`,
+		request.CentralUserID, importProduct, importInstance); err != nil {
+		t.Fatal(err)
+	}
+	before := readImportEffects(t, s)
+	if _, err := s.pool.Exec(ctx, `ALTER TABLE product_auth_events ADD CONSTRAINT reject_matching_import CHECK(event<>'import')`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Import(ctx, importProduct, importInstance, request)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.ConstraintName != "reject_matching_import" {
+		t.Fatalf("matching assignment should reach the import event: %v", err)
+	}
+	if got := readImportEffects(t, s); got != before {
+		t.Fatalf("failed import changed database state: got %+v, want %+v", got, before)
+	}
+	if _, err := s.pool.Exec(ctx, `ALTER TABLE product_auth_events DROP CONSTRAINT reject_matching_import`); err != nil {
+		t.Fatal(err)
+	}
+
+	imported, err := s.Import(ctx, importProduct, importInstance, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported.Binding.UserID != request.CentralUserID || imported.Binding.LocalUserID != request.LocalUserID ||
+		imported.AuthVersion != request.AuthVersion || imported.ProductRole != 10 || !imported.Access.Active ||
+		imported.Access.Version != 8 || !slices.Equal(imported.Access.Permissions, []string{"product:use", "user:read"}) {
+		t.Fatalf("import lost the established assignment or native identity: %+v", imported)
+	}
+	replay, err := s.Import(ctx, importProduct, importInstance, request)
+	if err != nil || replay.Binding != imported.Binding || replay.Access.Version != imported.Access.Version {
+		t.Fatalf("import replay changed identity: %+v, %v", replay, err)
+	}
+	var untouched bool
+	if err = s.pool.QueryRow(ctx, `SELECT roles='["member"]' AND active AND version=7 AND product_role=10
+		AND permission_overrides='{"user":{"write":false}}' AND updated_at='2026-01-01T00:00:00Z'
+		FROM product_user_access WHERE user_id=$1 AND product_id=$2 AND instance_id=$3`,
+		request.CentralUserID, importProduct, importInstance).Scan(&untouched); err != nil || !untouched {
+		t.Fatalf("established assignment was changed: %v", err)
+	}
+	want := before
+	want.identities++
+	want.bindings++
+	want.subjects++
+	want.events++
+	if got := readImportEffects(t, s); got != want {
+		t.Fatalf("unexpected binding effects: got %+v, want %+v", got, want)
+	}
+}
+
+func TestReviewedImportRequiresExactExplicitAssignment(t *testing.T) {
+	for _, tt := range []struct {
+		name, roles, overrides string
+		active                 bool
+		role                   int
+	}{
+		{"roles differ", `[]`, `{"user":{"write":false}}`, true, 10},
+		{"active differs", `["member"]`, `{"user":{"write":false}}`, false, 10},
+		{"product role differs", `["member"]`, `{"user":{"write":false}}`, true, 1},
+		{"overrides differ", `["member"]`, `{}`, true, 10},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, request := reviewedImportFixture(t)
+			request.CentralUserID = importCanonicalUser(t, s).ID
+			if _, err := s.pool.Exec(ctx, `INSERT INTO product_user_access
+				(user_id,product_id,instance_id,roles,active,version,product_role,permission_overrides)
+				VALUES($1,$2,$3,$4,$5,7,$6,$7)`, request.CentralUserID, importProduct, importInstance,
+				tt.roles, tt.active, tt.role, tt.overrides); err != nil {
+				t.Fatal(err)
+			}
+			before := readImportEffects(t, s)
+			if _, err := s.Import(ctx, importProduct, importInstance, request); !errors.Is(err, accounts.ErrConflict) {
+				t.Fatalf("distinct assignment returned %v", err)
+			}
+			if got := readImportEffects(t, s); got != before {
+				t.Fatalf("conflicting import changed database state: got %+v, want %+v", got, before)
+			}
+		})
+	}
+}
+
+func TestReviewedImportDoesNotAdoptExistingBindingWithoutRegistration(t *testing.T) {
+	ctx := context.Background()
+	s, request := reviewedImportFixture(t)
+	u := importCanonicalUser(t, s)
+	request.CentralUserID = u.ID
+	identity := accounts.Identity{Issuer: "https://hub.test/product-auth/llmrouter/import-atomic", Subject: request.LocalUserID}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO identities(issuer,subject,user_id) VALUES($1,$2,$3)`, identity.Issuer, identity.Subject, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.users.EnsureRuntimeBinding(ctx, importProduct, importInstance, request.LocalUserID, "existing-binding", identity, u); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.pool.Exec(ctx, `INSERT INTO product_user_access
+		(user_id,product_id,instance_id,roles,active,version,product_role,permission_overrides)
+		VALUES($1,$2,$3,'["member"]',true,7,10,'{"user":{"write":false}}')`, u.ID, importProduct, importInstance); err != nil {
+		t.Fatal(err)
+	}
+	before := readImportEffects(t, s)
+	if _, err := s.Import(ctx, importProduct, importInstance, request); !errors.Is(err, accounts.ErrConflict) {
+		t.Fatalf("import over an existing unregistered binding returned %v", err)
+	}
+	if got := readImportEffects(t, s); got != before {
+		t.Fatalf("conflicting import changed database state: got %+v, want %+v", got, before)
+	}
+}
+
 func TestReviewedImportPreservesCentrallyAssignedDefaultRole(t *testing.T) {
 	ctx := context.Background()
 	s, request := reviewedImportFixture(t)

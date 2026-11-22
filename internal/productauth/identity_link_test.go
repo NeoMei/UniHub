@@ -74,6 +74,17 @@ func TestIdentityLinkPreservesCanonicalUserAndExplicitAdmission(t *testing.T) {
 		ClientID: "wiki", LinkID: hint.LinkID, Code: callback.Query().Get("code"), RedirectURI: client.RedirectURIs[0], Nonce: begin.Nonce, Verifier: verifier,
 		Authentication: Authentication{LocalUserID: "original-wiki-user", AuthenticationID: "verified-local-session", Method: "session", AuthenticatedAt: time.Now().Unix(), AuthVersion: 4},
 	}
+	preview, err := s.PreviewIdentityLink(ctx, "agentwiki", "default", complete)
+	if err != nil || preview.CentralUserID != canonical.ID || preview.MaskedEmail != "s***@example.test" {
+		t.Fatalf("wrong account preview: %+v, %v", preview, err)
+	}
+	if _, err = s.IdentityLinkByCanonicalUser(ctx, "agentwiki", "default", canonical.ID); !errors.Is(err, accounts.ErrNotFound) {
+		t.Fatalf("preview created a binding: %v", err)
+	}
+	if _, err = s.CompleteIdentityLink(ctx, "agentwiki", "default", complete); err == nil {
+		t.Fatal("binding without account confirmation was accepted")
+	}
+	complete.CentralUserID = canonical.ID
 	wrong := complete
 	wrong.Authentication.LocalUserID = "another-wiki-user"
 	if _, err = s.CompleteIdentityLink(ctx, "agentwiki", "default", wrong); err == nil {
@@ -81,6 +92,11 @@ func TestIdentityLinkPreservesCanonicalUserAndExplicitAdmission(t *testing.T) {
 	}
 	if _, err = s.CompleteIdentityLink(ctx, "agentwiki", "other", complete); err == nil {
 		t.Fatal("cross-instance link accepted")
+	}
+	wrong = complete
+	wrong.CentralUserID = "different-confirmed-account"
+	if _, err = s.CompleteIdentityLink(ctx, "agentwiki", "default", wrong); err == nil {
+		t.Fatal("confirmation from another account accepted")
 	}
 	got, err := s.CompleteIdentityLink(ctx, "agentwiki", "default", complete)
 	if err != nil || got.Binding.LocalUserID != "original-wiki-user" || got.Binding.UserID != canonical.ID || got.AuthVersion != 4 || strings.Join(got.Access.Permissions, ",") != "product:use" {
@@ -94,4 +110,73 @@ func TestIdentityLinkPreservesCanonicalUserAndExplicitAdmission(t *testing.T) {
 	if err != nil || out.Binding.ID != got.Binding.ID {
 		t.Fatalf("reverse lookup failed: %+v, %v", out, err)
 	}
+
+	t.Run("source logout while completion waits for the original identity", func(t *testing.T) {
+		claims.Subject = "revoked-central-account"
+		other, err := store.EnsureIdentity(ctx, claims)
+		if err != nil {
+			t.Fatal(err)
+		}
+		session := browserSessionDigest(browserSecret())
+		if _, err = pool.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at)
+			VALUES($1,$2,$3,'Other fixture','','csrf',now()+interval '10 minutes')`, session, claims.Issuer, claims.Subject); err != nil {
+			t.Fatal(err)
+		}
+		begin.Authentication.LocalUserID = "concurrent-old-user"
+		begin.Authentication.AuthenticationID = "concurrent-native-auth"
+		hint, err := s.BeginIdentityLink(ctx, "agentwiki", "default", begin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		destination, err := s.AuthorizeIdentityLink(ctx, "wiki", client.RedirectURIs[0], begin.State, hint.LinkID, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		callback, err := url.Parse(destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		complete.CentralUserID = other.ID
+		complete.Authentication.LocalUserID = begin.Authentication.LocalUserID
+		complete.LinkID, complete.Code = hint.LinkID, callback.Query().Get("code")
+
+		lock, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer database.Rollback(lock)
+		if err = accounts.LockIdentity(ctx, lock, "https://hub.test/product-auth/agentwiki/default", complete.Authentication.LocalUserID); err != nil {
+			t.Fatal(err)
+		}
+		bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		finished := make(chan error, 1)
+		go func() {
+			_, e := s.CompleteIdentityLink(bounded, "agentwiki", "default", complete)
+			finished <- e
+		}()
+		for {
+			var waiting bool
+			if err = pool.QueryRow(bounded, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+				WHERE datname=current_database() AND wait_event='advisory' AND query LIKE 'SELECT pg_advisory_xact_lock%')`).Scan(&waiting); err != nil {
+				t.Fatal(err)
+			}
+			if waiting {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if _, err = pool.Exec(ctx, `DELETE FROM browser_sessions WHERE id_hash=$1`, session); err != nil {
+			t.Fatal(err)
+		}
+		if err = lock.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err = <-finished; !errors.Is(err, accounts.ErrForbidden) {
+			t.Fatalf("revoked link was committed: %v", err)
+		}
+		if _, err = s.IdentityLinkByCanonicalUser(ctx, "agentwiki", "default", other.ID); !errors.Is(err, accounts.ErrNotFound) {
+			t.Fatalf("revoked link left a binding: %v", err)
+		}
+	})
 }

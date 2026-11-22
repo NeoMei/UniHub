@@ -37,6 +37,7 @@ func setupBrowserHandoffUI(t *testing.T) (*Service, http.Handler, map[string]pro
 	clients, err := products.Parse([]byte(`[
 		{"client_id":"wiki","product_id":"agentwiki","browser_sso":true,"identity_link_role":"member","redirect_uris":["https://wiki.test/return"],"origins":["https://wiki.test"],"native_login_url":"https://wiki.test/login?source=hub","native_login_label":"AgentWiki & Co"},
 		{"client_id":"wiki-secondary","product_id":"agentwiki","browser_sso":true,"identity_link_role":"member","redirect_uris":["https://wiki-secondary.test/return"],"origins":["https://wiki-secondary.test"],"native_login_url":"https://wiki-secondary.test/login","native_login_label":"AgentWiki Secondary"},
+		{"client_id":"wiki-no-picker","product_id":"agentwiki","browser_sso":true,"identity_link_role":"member","redirect_uris":["https://wiki.test/return"]},
 		{"client_id":"router","product_id":"llmrouter","browser_sso":true,"redirect_uris":["https://router.test/return"]}
 	]`))
 	if err != nil {
@@ -259,6 +260,21 @@ func TestBrowserHandoffProtectsCentralAccount(t *testing.T) {
 		if err := s.pool.QueryRow(ctx, `SELECT consumed FROM product_browser_handoffs WHERE id_hash=$1`, digest(form.Get("handoff"))).Scan(&consumed); err != nil || consumed {
 			t.Fatalf("cancel consumed handoff: %v (%v)", consumed, err)
 		}
+	})
+
+	t.Run("identity link opt-in protects the account without a picker entry", func(t *testing.T) {
+		old := makeSession(central)
+		path, binding := begin(clients["wiki-no-picker"], native)
+		prompt := handoffUIRequest(t, h, http.StatusOK, http.MethodGet, path, nil, old, binding)
+		if len(prompt.Result().Cookies()) != 0 {
+			t.Fatal("prompt changed the browser cookies")
+		}
+		checkSession(old, canonical.ID)
+		form := handoffUIForm(t, prompt)
+		form.Set("action", "confirm")
+		done := handoffUIRequest(t, h, http.StatusSeeOther, http.MethodPost, browserHandoffFinishPath, form, old, binding)
+		checkSession(handoffUICookie(t, done, "unihub_session"), native.Binding.UserID)
+		checkSession(old, "")
 	})
 
 	t.Run("a different identity for the same canonical account proceeds", func(t *testing.T) {

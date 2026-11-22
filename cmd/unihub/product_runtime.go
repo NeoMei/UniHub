@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"unihub/internal/httpapi"
 	"unihub/internal/products"
@@ -15,6 +16,9 @@ func parseRuntimeServices(raw string, registry productusers.Registry, legacyToke
 }
 
 func parseRuntimeServicesWithClients(raw string, registry productusers.Registry, legacyToken string, clients map[string]products.Client) (map[string]httpapi.RuntimeService, error) {
+	if err := validateIdentityLinkClients(registry, clients); err != nil {
+		return nil, err
+	}
 	out := map[string]httpapi.RuntimeService{}
 	if raw == "" {
 		return out, nil
@@ -87,6 +91,27 @@ func parseRuntimeServicesWithClients(raw string, registry productusers.Registry,
 		out[id] = c
 	}
 	return out, nil
+}
+
+func validateIdentityLinkClients(registry productusers.Registry, clients map[string]products.Client) error {
+	for _, client := range clients {
+		if client.IdentityLinkRole == "" {
+			continue
+		}
+		manifest, ok := registry.Get(client.ProductID, client.InstanceID)
+		if !ok || !slices.ContainsFunc(manifest.Roles, func(role productusers.Role) bool {
+			return role.ID == client.IdentityLinkRole && !role.Privileged && !role.NativeBaseline &&
+				(role.ProductRole == 0 || role.ProductRole == 1) &&
+				len(role.Permissions) == 1 && role.Permissions[0] == "product:use"
+		}) {
+			return errors.New("identity_link_role requires a nonprivileged product instance role with only product:use")
+		}
+		defaultPermissions, err := productusers.EffectivePermissions(manifest, manifest.DefaultRoles, nil, 1)
+		if err != nil || slices.Contains(defaultPermissions, "product:use") {
+			return errors.New("identity linking requires valid default roles without product:use")
+		}
+	}
+	return nil
 }
 
 var financeRouteScopes = []string{"accounts:read", "identity:read", "catalog:read", "subscriptions:read", "orders:read", "wallets:read", "recharges:read", "recharges:write", "operations:read", "model-credentials:write", "usage:read", "settings:write"}

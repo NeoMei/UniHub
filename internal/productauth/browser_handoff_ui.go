@@ -163,7 +163,8 @@ func (s *Service) browserHandoffFinish(w http.ResponseWriter, r *http.Request, h
 	}
 	old, _ := r.Cookie("unihub_session")
 	preserve := false
-	if client.NativeLoginURL != "" {
+	protectAccount := client.IdentityLinkRole != ""
+	if protectAccount {
 		var current accounts.User
 		if old != nil {
 			claims, userID, err := s.browserSessionIdentity(ctx, old.Value)
@@ -211,7 +212,7 @@ func (s *Service) browserHandoffFinish(w http.ResponseWriter, r *http.Request, h
 	}
 
 	completion, err := s.FinishBrowserHandoff(ctx, handoff, state, binding.Value)
-	if err != nil || (client.NativeLoginURL != "" && completion.User.ID != incoming.ID) {
+	if err != nil || (protectAccount && completion.User.ID != incoming.ID) {
 		http.Error(w, "Invalid Handoff", http.StatusUnauthorized)
 		return
 	}

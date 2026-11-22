@@ -184,7 +184,7 @@ func (s *Service) registrationManifest(product, instance string, in Registration
 	return productusers.Manifest{}, accounts.ErrInvalid
 }
 
-func (s *Service) nativeBindingOn(ctx context.Context, tx pgx.Tx, m productusers.Manifest, in Registration, central string) (productusers.RuntimeBinding, error) {
+func (s *Service) nativeBindingOn(ctx context.Context, tx pgx.Tx, m productusers.Manifest, in Registration, central string) (productusers.RuntimeBinding, bool, error) {
 	identity := accounts.Identity{Issuer: s.issuer + "/product-auth/" + m.ProductID + "/" + m.InstanceID, Subject: in.LocalUserID, Name: in.DisplayName, Email: in.Email}
 	if identity.Name == "" {
 		identity.Name = in.Username
@@ -196,31 +196,43 @@ func (s *Service) nativeBindingOn(ctx context.Context, tx pgx.Tx, m productusers
 		u, err = s.accounts.EnsureIdentityOn(ctx, tx, identity)
 	} else {
 		if err = accounts.LockIdentity(ctx, tx, identity.Issuer, identity.Subject); err != nil {
-			return productusers.RuntimeBinding{}, err
+			return productusers.RuntimeBinding{}, false, err
 		}
 		u, err = runtimeUserOn(ctx, tx, central)
 		if err != nil {
-			return productusers.RuntimeBinding{}, err
+			return productusers.RuntimeBinding{}, false, err
 		}
 		var matched string
 		err = tx.QueryRow(ctx, `SELECT user_id FROM identities WHERE issuer=$1 AND subject=$2`, identity.Issuer, identity.Subject).Scan(&matched)
 		if errors.Is(err, pgx.ErrNoRows) {
 			_, err = tx.Exec(ctx, `INSERT INTO identities(issuer,subject,user_id) VALUES($1,$2,$3)`, identity.Issuer, identity.Subject, central)
 		} else if err == nil && matched != central {
-			return productusers.RuntimeBinding{}, accounts.ErrConflict
+			return productusers.RuntimeBinding{}, false, accounts.ErrConflict
 		}
 	}
 	if err != nil {
-		return productusers.RuntimeBinding{}, err
+		return productusers.RuntimeBinding{}, false, err
+	}
+	var newExplicitBinding bool
+	if central != "" {
+		// Check for an earlier binding under the lock used by EnsureRuntimeBindingOn.
+		if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "runtime-binding:"+m.ProductID+"/"+m.InstanceID); err != nil {
+			return productusers.RuntimeBinding{}, false, err
+		}
+		if err = tx.QueryRow(ctx, `SELECT NOT EXISTS (
+			SELECT 1 FROM product_runtime_bindings WHERE product_id=$1 AND instance_id=$2 AND local_user_id=$3
+		)`, m.ProductID, m.InstanceID, in.LocalUserID).Scan(&newExplicitBinding); err != nil {
+			return productusers.RuntimeBinding{}, false, err
+		}
 	}
 	binding, err := s.users.EnsureRuntimeBindingOn(ctx, tx, m.ProductID, m.InstanceID, in.LocalUserID, in.OperationID, identity, u)
 	if err != nil {
-		return productusers.RuntimeBinding{}, err
+		return productusers.RuntimeBinding{}, false, err
 	}
 	if binding.Issuer != identity.Issuer || binding.Subject != identity.Subject {
-		return productusers.RuntimeBinding{}, accounts.ErrConflict
+		return productusers.RuntimeBinding{}, false, accounts.ErrConflict
 	}
-	return binding, nil
+	return binding, newExplicitBinding, nil
 }
 
 type nativeRegistration struct {
@@ -273,7 +285,7 @@ func (s *Service) Register(ctx context.Context, product, instance string, in Reg
 		return Identity{}, err
 	}
 	defer database.Rollback(tx)
-	binding, err := s.nativeBindingOn(ctx, tx, m, in, "")
+	binding, _, err := s.nativeBindingOn(ctx, tx, m, in, "")
 	if err != nil {
 		return Identity{}, err
 	}
@@ -564,7 +576,7 @@ func (s *Service) Import(ctx context.Context, product, instance string, in Impor
 		return Identity{}, err
 	}
 	defer database.Rollback(tx)
-	binding, err := s.nativeBindingOn(ctx, tx, m, in.Registration, in.CentralUserID)
+	binding, newExplicitBinding, err := s.nativeBindingOn(ctx, tx, m, in.Registration, in.CentralUserID)
 	if err != nil {
 		return Identity{}, err
 	}
@@ -610,7 +622,20 @@ func (s *Service) Import(ctx context.Context, product, instance string, in Impor
 		return Identity{}, err
 	}
 	if result.RowsAffected() != 1 {
-		return Identity{}, accounts.ErrConflict
+		if !newExplicitBinding {
+			return Identity{}, accounts.ErrConflict
+		}
+		// The upsert locked the existing assignment. Keep it intact when the
+		// reviewed import agrees with all of its authority fields.
+		var matches bool
+		if err = tx.QueryRow(ctx, `SELECT roles=$4 AND active=$5 AND product_role=$6 AND permission_overrides=$7
+			FROM product_user_access WHERE user_id=$1 AND product_id=$2 AND instance_id=$3`,
+			binding.UserID, m.ProductID, m.InstanceID, roles, in.Active, in.ProductRole, rawOverrides).Scan(&matches); err != nil {
+			return Identity{}, err
+		}
+		if !matches {
+			return Identity{}, accounts.ErrConflict
+		}
 	}
 
 	if state.exists {

@@ -89,3 +89,80 @@ func TestRuntimeServiceConfigAllowsExplicitCashCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeBootstrapValidatesIdentityLinkRole(t *testing.T) {
+	clients, err := products.Parse([]byte(`[{"product_id":"agentwiki","instance_id":"wiki","client_id":"aw","browser_sso":true,"redirect_uris":["https://wiki.test/return"],"identity_link_role":"member"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const runtime = `{"aw":{"token":"test-runtime-credential-over-thirty-two-bytes","product_id":"agentwiki","instance_id":"wiki","identity_client_id":"aw","allowed_ops":["identity:link"]}}`
+	for _, tt := range []struct {
+		name, instance, role string
+		wantError            bool
+	}{
+		{"least privilege", "wiki", `"id":"member","permissions":["product:use"]`, false},
+		{"missing exact instance", "other", `"id":"member","permissions":["product:use"]`, true},
+		{"missing exact role", "wiki", `"id":"other","permissions":["product:use"]`, true},
+		{"privileged role", "wiki", `"id":"member","privileged":true,"permissions":["product:use"]`, true},
+		{"elevated role", "wiki", `"id":"member","product_role":10,"permissions":["product:use"]`, true},
+		{"native baseline", "wiki", `"id":"member","product_role":10,"native_baseline":true,"permissions":["product:use"]`, true},
+		{"missing product use", "wiki", `"id":"member","permissions":["user:read"]`, true},
+		{"extra permissions", "wiki", `"id":"member","permissions":["product:use","user:read"]`, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			registry, err := productusers.Parse([]byte(`[{"product_id":"agentwiki","instance_id":"` + tt.instance + `","name":"AgentWiki","entry_url":"https://wiki.test","version":1,"roles":[{"name":"Candidate",` + tt.role + `}]}]`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, raw := range []string{"", runtime} {
+				if _, err := parseRuntimeServicesWithClients(raw, registry, "", clients); (err != nil) != tt.wantError {
+					t.Errorf("runtime configured=%t: error = %v, want error = %t", raw != "", err, tt.wantError)
+				}
+			}
+		})
+	}
+}
+
+func TestRuntimeBootstrapRejectsDefaultProductUseForOptedInInstance(t *testing.T) {
+	const client = `[{"product_id":"agentwiki","client_id":"aw","browser_sso":true,"redirect_uris":["https://wiki.test/return"]`
+	optedIn, err := products.Parse([]byte(client + `,"identity_link_role":"member"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := products.Parse([]byte(client + `}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const unrelatedRuntime = `{"aw":{"token":"test-runtime-credential-over-thirty-two-bytes","product_id":"agentwiki","allowed_ops":["access:read"]}}`
+	for _, tt := range []struct {
+		defaultRole string
+		wantError   bool
+	}{
+		{"member", true},
+		{"other-member", true},
+		{"reader", false},
+	} {
+		t.Run(tt.defaultRole, func(t *testing.T) {
+			registry, err := productusers.Parse([]byte(`[{
+				"product_id":"agentwiki","name":"AgentWiki","entry_url":"https://wiki.test","version":1,
+				"default_roles":["` + tt.defaultRole + `"],
+				"roles":[
+					{"id":"member","name":"Member","permissions":["product:use"]},
+					{"id":"other-member","name":"Other Member","permissions":["product:use","user:read"]},
+					{"id":"reader","name":"Reader","permissions":["user:read"]}
+				]
+			}]`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, raw := range []string{"", unrelatedRuntime} {
+				if _, err := parseRuntimeServicesWithClients(raw, registry, "", optedIn); (err != nil) != tt.wantError {
+					t.Errorf("runtime configured=%t: error = %v, want error = %t", raw != "", err, tt.wantError)
+				}
+				if _, err := parseRuntimeServicesWithClients(raw, registry, "", legacy); err != nil {
+					t.Errorf("client without opt-in rejected: %v", err)
+				}
+			}
+		})
+	}
+}
