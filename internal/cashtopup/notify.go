@@ -174,15 +174,20 @@ func (s *Service) refreshCheckout(ctx context.Context, rec record, closeExpired 
 	case "PAID":
 		return s.accept(ctx, p, rec, result)
 	case "NOT_FOUND":
-		// An issued Alipay page URL has the signed absolute checkout deadline.
-		// Once that URL has expired, a verified absence for the original order
-		// is sufficient to close it. Other sessions still need merchant closure.
-		if rec.Provider != "alipay" || rec.Session == nil || rec.Session.Kind != "redirect" ||
-			!rec.Session.ExpiresAt.Equal(rec.ExpiresAt) || !closeExpired || s.now().Before(rec.ExpiresAt) {
+		// A verified absence is terminal only after the original Alipay code
+		// or signed page URL reaches its absolute checkout deadline.
+		now := s.now()
+		if rec.Provider == "alipay" && rec.Session != nil && (closeExpired || rec.CloseRequested) &&
+			!now.Before(rec.ExpiresAt) && !now.Before(rec.Session.ExpiresAt) &&
+			(rec.Session.Kind == "qr" || rec.Session.Kind == "redirect" && rec.Session.ExpiresAt.Equal(rec.ExpiresAt)) {
+			break
+		}
+		if !rec.CloseRequested {
 			return nil
 		}
+		fallthrough
 	case "CREATED", "PENDING":
-		if !closeExpired || s.now().Before(rec.ExpiresAt) {
+		if !rec.CloseRequested && (!closeExpired || s.now().Before(rec.ExpiresAt)) {
 			return nil
 		}
 		if err := p.Close(ctx, rec.ID); err != nil {
@@ -204,6 +209,9 @@ func (s *Service) Close(ctx context.Context, actor, account, id string) (Checkou
 	rec, err := loadByID(ctx, s.pool, account, id)
 	if err != nil {
 		return Checkout{}, err
+	}
+	if rec.CloseRequested || rec.Provider == "alipay" && rec.Session != nil && rec.Session.Kind == "qr" {
+		return s.requestQRClose(ctx, rec)
 	}
 	if rec.PaymentStatus == "PAID" || rec.Receipt != nil {
 		return Checkout{}, fmt.Errorf("cannot close a paid checkout")
@@ -228,6 +236,38 @@ func (s *Service) Close(ctx context.Context, actor, account, id string) (Checkou
 		return Checkout{}, err
 	}
 	return s.recordClosed(ctx, account, id)
+}
+
+func (s *Service) requestQRClose(ctx context.Context, original record) (Checkout, error) {
+	var rec record
+	err := s.locked(ctx, original.AccountID, func(c *pgxpool.Conn) error {
+		current, err := loadByID(ctx, c, original.AccountID, original.ID)
+		if err != nil {
+			return err
+		}
+		rec = current
+		if rec.PaymentStatus != "CREATED" || rec.Receipt != nil || rec.CloseRequested {
+			return nil
+		}
+		rec.CloseRequested = true
+		_, err = c.Exec(ctx, "UPDATE cash_checkouts SET snapshot=$2 WHERE id=$1", rec.ID, encode(rec))
+		return err
+	})
+	if err != nil {
+		return Checkout{}, err
+	}
+	if rec.PaymentStatus == "CREATED" && rec.Receipt == nil {
+		// A saved request is acknowledged even if the merchant is unavailable.
+		// The recovery worker can continue using the original merchant order ID.
+		attempt, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_ = s.refreshCheckout(attempt, rec, false)
+		cancel()
+		rec, err = loadByID(ctx, s.pool, rec.AccountID, rec.ID)
+		if err != nil {
+			return Checkout{}, err
+		}
+	}
+	return checkoutView(ctx, s.pool, rec)
 }
 
 // A verified receipt can arrive while the close or query request is in

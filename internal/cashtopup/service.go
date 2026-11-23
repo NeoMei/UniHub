@@ -56,6 +56,7 @@ type Checkout struct {
 	Amount        string            `json:"amount"`
 	Currency      string            `json:"currency"`
 	PaymentStatus string            `json:"payment_status"`
+	ClosePending  bool              `json:"close_pending,omitempty"`
 	ExpiresAt     time.Time         `json:"expires_at"`
 	CreatedAt     time.Time         `json:"created_at"`
 	Session       *payments.Session `json:"session,omitempty"`
@@ -72,6 +73,7 @@ type record struct {
 	MerchantVersion string           `json:"merchant_version"`
 	RequestDigest   string           `json:"request_digest"`
 	Receipt         *payments.Result `json:"receipt,omitempty"`
+	CloseRequested  bool             `json:"close_requested,omitempty"`
 }
 
 type Service struct {
@@ -291,7 +293,16 @@ func (s *Service) Create(ctx context.Context, actor, account string, r Request) 
 }
 
 func (r record) needsSession(now time.Time) bool {
-	return r.PaymentStatus == "CREATED" && r.Receipt == nil && r.Session == nil && now.Before(r.ExpiresAt)
+	return r.PaymentStatus == "CREATED" && !r.CloseRequested && r.Receipt == nil && r.Session == nil && now.Before(r.ExpiresAt)
+}
+
+func (r record) paymentView() Checkout {
+	view := r.Checkout
+	if r.CloseRequested && r.PaymentStatus == "CREATED" && r.Receipt == nil {
+		view.ClosePending = true
+		view.Session = nil
+	}
+	return view
 }
 
 func (s *Service) Get(ctx context.Context, actor, account, id string) (Checkout, error) {
@@ -314,7 +325,7 @@ func checkoutView(ctx context.Context, q accounts.Querier, rec record) (Checkout
 			return Checkout{}, dbErr(err)
 		}
 	}
-	return rec.Checkout, nil
+	return rec.paymentView(), nil
 }
 
 func (s *Service) List(ctx context.Context, actor, account string, products ...string) ([]Checkout, error) {
@@ -340,7 +351,7 @@ func (s *Service) List(ctx context.Context, actor, account string, products ...s
 		if e = json.Unmarshal(b, &rec); e != nil {
 			return nil, e
 		}
-		c := rec.Checkout
+		c := rec.paymentView()
 		c.Session = nil
 		c.CreditStatus = creditStatus
 		out = append(out, c)
