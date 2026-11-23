@@ -200,7 +200,8 @@ func callQueryArgs(scope QueryScope, f CallFilter) []any {
 
 const callAssetSQL = `COALESCE(NULLIF(c.snapshot->>'charge_asset',''),'CREDIT/6')`
 
-const callBaseWhere = `c.account_id=$1 AND ($2='' OR c.snapshot->>'origin_product_id'=$2) AND ($3='' OR c.snapshot->>'actor_id'=$3) AND ($6='' OR c.snapshot#>>'{rate,model}'=$6) AND ($7='' OR ` + callAssetSQL + `=$7) AND ($8='' OR COALESCE(NULLIF(c.snapshot->>'instance_id',''),'default')=$8) AND ($9='' OR c.snapshot->>'source'=$9)`
+const callScopeWhere = `c.account_id=$1 AND ($2='' OR c.snapshot->>'origin_product_id'=$2) AND ($3='' OR c.snapshot->>'actor_id'=$3) AND ($6='' OR c.snapshot#>>'{rate,model}'=$6) AND ($7='' OR ` + callAssetSQL + `=$7) AND ($8='' OR COALESCE(NULLIF(c.snapshot->>'instance_id',''),'default')=$8)`
+const callBaseWhere = callScopeWhere + ` AND ($9='' OR c.snapshot->>'source'=$9)`
 const callTimeWhere = ` AND ($4::timestamptz IS NULL OR c.created_at >= $4) AND ($5::timestamptz IS NULL OR c.created_at < $5)`
 
 func cursorBinding(actor string, scope QueryScope, f CallFilter) string {
@@ -482,11 +483,46 @@ const nativeUsageSQL = `(c.snapshot#>>'{rate,semantics}'='metered_v2' AND c.snap
 // central metered tariff. The native scan below applies validateNativeUsage
 // to every selected observation, keeping malformed stored evidence an error.
 const nativeCreditUsageSQL = `(c.snapshot#>>'{native_pricing,pricing_version}'='` + NativeCreditPricingVersion + `' AND c.snapshot#>>'{rate,semantics}'='llmrouter_native' AND c.snapshot#>>'{usage,metered,version}'='metered_v2' AND c.snapshot#>>'{usage,metered,state}'='confirmed')`
-const validUsageSQL = `(` + validLegacyUsageSQL + ` OR ` + nativeUsageSQL + ` OR ` + nativeCreditUsageSQL + `)`
 const nativeUsageSelectSQL = `(` + nativeUsageSQL + ` OR ` + nativeCreditUsageSQL + `)`
 
+const usageSummaryWhere = callScopeWhere + ` AND ($9='' OR c.report_source=$9)`
+
+// Materialize only the scalar fields used by the counters. This evaluates
+// effective settlement and the usage checks once per call instead of expanding
+// them into each aggregate over the same rows.
+const usageCounterRows = `WITH usage_rows AS MATERIALIZED (
+ SELECT c.report_status,
+   c.snapshot#>>'{usage,input}' AS tokens_input,
+   c.snapshot#>>'{usage,output}' AS tokens_output,
+   c.snapshot#>>'{usage,cache_read}' AS tokens_cache_read,
+   c.snapshot#>>'{usage,cache_write}' AS tokens_cache_write,
+   c.snapshot#>>'{usage,reasoning}' AS tokens_reasoning,
+   COALESCE(` + validLegacyUsageSQL + `,false) AS legacy_usage,
+   COALESCE(` + nativeUsageSelectSQL + `,false) AS native_usage,
+   c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AS has_usage,
+   COALESCE(c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$',false) AS valid_charge,
+   ` + callAssetSQL + ` AS asset, c.snapshot->>'status' AS stored_status,
+   c.snapshot->>'charged' AS charged, c.refunded
+ FROM ` + usageSummaryTable + ` WHERE ` + usageSummaryWhere + callTimeWhere + `
+), amounts_by_asset AS (
+ -- Confirmed gross charges survive a later UNKNOWN command.
+ SELECT asset,
+   COALESCE(sum(CASE WHEN stored_status='SETTLED' AND valid_charge THEN charged::numeric ELSE 0 END),0)::text AS charged,
+   COALESCE(sum(CASE WHEN refunded ~ '^(0|[1-9][0-9]*)$' THEN refunded::numeric ELSE 0 END),0)::text AS refunded
+ FROM usage_rows GROUP BY asset
+), counts_by_status AS (
+ SELECT report_status,count(*)::text AS count FROM usage_rows GROUP BY report_status
+) `
+
+// Only managed calls can supply the typed native observations we aggregate.
+// Apply the report's effective settlement and legacy masking directly to the
+// stored rows, without constructing the customer-facing detail projection.
+const nativeUsageQuery = `SELECT c.snapshot FROM billing_calls c WHERE ` + callScopeWhere + callTimeWhere + `
+ AND ($9='' OR $9='managed_model') AND c.snapshot->>'status'='SETTLED'
+ AND ` + nativeUsageSelectSQL + ` AND NOT ` + managedReportHidesUsage + ` AND NOT ` + managedReportUnresolved
+
 func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, f CallFilter) (UsageSummary, error) {
-	out := UsageSummary{Asset: CreditAsset, ByStatus: map[string]string{}, UsageCoverage: UsageCoverage{LegacyTokenCalls: "0", NativeMeteredCalls: "0"}}
+	out := UsageSummary{Asset: CreditAsset, UsageCoverage: UsageCoverage{LegacyTokenCalls: "0", NativeMeteredCalls: "0"}}
 	f, err := normalizeCallFilter(f)
 	if err != nil {
 		return out, err
@@ -504,11 +540,19 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	args := callQueryArgs(out.Scope, f)
 	selects := []string{`count(*)::text`, `count(*) FILTER(WHERE ` + callReportStatus + `='SETTLED')::text`, `count(*) FILTER(WHERE ` + callReportStatus + ` IN ('PENDING','RESERVED'))::text`, `count(*) FILTER(WHERE ` + callReportStatus + `='MISSING_USAGE')::text`, `count(*) FILTER(WHERE ` + callReportStatus + `='UNKNOWN')::text`, `count(*) FILTER(WHERE ` + callReportStatus + ` IN ('REJECTED','CANCELED'))::text`, `count(*) FILTER(WHERE ` + callReportStatus + `='RELEASED')::text`}
 	for _, name := range []string{"input", "output", "cache_read", "cache_write", "reasoning"} {
-		selects = append(selects, `COALESCE(sum(CASE WHEN `+callReportStatus+`='SETTLED' AND `+validLegacyUsageSQL+` THEN (c.snapshot#>>'{usage,`+name+`}')::numeric ELSE 0 END),0)::text`)
+		selects = append(selects, `COALESCE(sum(CASE WHEN `+callReportStatus+`='SETTLED' AND c.legacy_usage THEN c.tokens_`+name+`::numeric ELSE 0 END),0)::text`)
 	}
-	selects = append(selects, `count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND `+validLegacyUsageSQL+`)::text`, `COALESCE(bool_and(`+callReportStatus+` IN ('SETTLED','RELEASED','REJECTED','CANCELED') AND (`+callReportStatus+`<>'SETTLED' OR COALESCE(`+validUsageSQL+`,false))),true)`, `count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND (NOT COALESCE(c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$',false) OR (c.snapshot->'usage' IS NOT NULL AND c.snapshot->'usage'<>'null'::jsonb AND NOT COALESCE(`+validUsageSQL+`,false))))`)
+	selects = append(selects,
+		`count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND c.legacy_usage)::text`,
+		`COALESCE(bool_and(`+callReportStatus+` IN ('SETTLED','RELEASED','REJECTED','CANCELED') AND (`+callReportStatus+`<>'SETTLED' OR c.legacy_usage OR c.native_usage)),true)`,
+		`count(*) FILTER(WHERE `+callReportStatus+`='SETTLED' AND (NOT c.valid_charge OR (c.has_usage AND NOT (c.legacy_usage OR c.native_usage))))`)
+	selects = append(selects,
+		`(SELECT COALESCE(jsonb_object_agg(asset,charged),'{}'::jsonb) FROM amounts_by_asset)`,
+		`(SELECT COALESCE(jsonb_object_agg(asset,refunded),'{}'::jsonb) FROM amounts_by_asset)`,
+		`(SELECT COALESCE(jsonb_object_agg(report_status,count),'{}'::jsonb) FROM counts_by_status)`)
 	var invalid int64
-	err = tx.QueryRow(ctx, `SELECT `+strings.Join(selects, ",")+` FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere, args...).Scan(&out.CallsTotal, &out.SettledCalls, &out.PendingCalls, &out.MissingUsageCalls, &out.UnknownCalls, &out.RejectedCalls, &out.ReleasedCalls, &out.Usage.Input, &out.Usage.Output, &out.Usage.CacheRead, &out.Usage.CacheWrite, &out.Usage.Reasoning, &out.UsageCoverage.LegacyTokenCalls, &out.UsageComplete, &invalid)
+	var amounts, refunds map[string]string
+	err = tx.QueryRow(ctx, usageCounterRows+`SELECT `+strings.Join(selects, ",")+` FROM usage_rows c`, args...).Scan(&out.CallsTotal, &out.SettledCalls, &out.PendingCalls, &out.MissingUsageCalls, &out.UnknownCalls, &out.RejectedCalls, &out.ReleasedCalls, &out.Usage.Input, &out.Usage.Output, &out.Usage.CacheRead, &out.Usage.CacheWrite, &out.Usage.Reasoning, &out.UsageCoverage.LegacyTokenCalls, &out.UsageComplete, &invalid, &amounts, &refunds, &out.ByStatus)
 	if err != nil {
 		return out, err
 	}
@@ -516,7 +560,7 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 		return out, fmt.Errorf("billing: invalid stored call counters")
 	}
 	// Aggregate native quantities independently of money and legacy counters.
-	nativeRows, nativeErr := tx.Query(ctx, `SELECT c.snapshot FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere+` AND `+callReportStatus+`='SETTLED' AND `+nativeUsageSelectSQL, args...)
+	nativeRows, nativeErr := tx.Query(ctx, nativeUsageQuery, args...)
 	if nativeErr != nil {
 		return out, nativeErr
 	}
@@ -595,31 +639,10 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 		out.NativeUsage[index].Measurements = append(out.NativeUsage[index].Measurements, metering.Measurement{Key: d.key, Unit: d.unit, ProviderUnit: d.provider, Quantity: metering.Quantity{Value: n.String(), Scale: scale}})
 	}
 
-	// Keep confirmed gross charges even when a later command is UNKNOWN.
-	// Pending effects never replace confirmed refunds, and assets stay separate.
-	assetRows, e := tx.Query(ctx, `SELECT `+callAssetSQL+`,COALESCE(sum(CASE WHEN c.snapshot->>'status'='SETTLED' AND c.snapshot->>'charged' ~ '^(0|[1-9][0-9]*)$' THEN (c.snapshot->>'charged')::numeric ELSE 0 END),0)::text,COALESCE(sum(CASE WHEN c.snapshot->>'refunded' ~ '^(0|[1-9][0-9]*)$' THEN (c.snapshot->>'refunded')::numeric ELSE 0 END),0)::text FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere+` GROUP BY `+callAssetSQL, args...)
-	if e != nil {
-		return out, e
-	}
-	amounts := map[string]string{}
-	refunds := map[string]string{}
-	for assetRows.Next() {
-		var asset, amount, refunded string
-		if e = assetRows.Scan(&asset, &amount, &refunded); e != nil {
-			assetRows.Close()
-			return out, e
-		}
+	for asset := range amounts {
 		if asset != CreditAsset && asset != CashAsset && asset != RuntimeAsset {
-			assetRows.Close()
 			return out, ErrInvalid
 		}
-		amounts[asset] = amount
-		refunds[asset] = refunded
-	}
-	e = assetRows.Err()
-	assetRows.Close()
-	if e != nil {
-		return out, e
 	}
 	if len(amounts) == 0 {
 		asset := f.Asset
@@ -644,24 +667,7 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 		out.ChargesByAsset = amounts
 		out.RefundsByAsset = refunds
 	}
-	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM `+callReportTable+` WHERE `+callBaseWhere+` AND $4::timestamptz IS NOT DISTINCT FROM $4 AND $5::timestamptz IS NOT DISTINCT FROM $5 AND c.created_at IS NULL`, args...).Scan(&out.UnknownTime); err != nil {
-		return out, err
-	}
-	rows, err := tx.Query(ctx, `SELECT `+callReportStatus+`,count(*)::text FROM `+callReportTable+` WHERE `+callBaseWhere+callTimeWhere+` GROUP BY `+callReportStatus, args...)
-	if err != nil {
-		return out, err
-	}
-	for rows.Next() {
-		var status, count string
-		if err = rows.Scan(&status, &count); err != nil {
-			rows.Close()
-			return out, err
-		}
-		out.ByStatus[status] = count
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM `+usageSummaryTable+` WHERE `+usageSummaryWhere+` AND $4::timestamptz IS NOT DISTINCT FROM $4 AND $5::timestamptz IS NOT DISTINCT FROM $5 AND c.created_at IS NULL`, args...).Scan(&out.UnknownTime); err != nil {
 		return out, err
 	}
 	out.AsOf = time.Now().UTC()
