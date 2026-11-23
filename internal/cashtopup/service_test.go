@@ -20,15 +20,17 @@ import (
 )
 
 type fakeProvider struct {
-	id          string
-	merchant    string
-	sessionKind string
-	createErr   error
-	closeCalls  int
-	queryErr    error
-	requests    map[string]payments.Request
-	sessions    map[string]payments.Session
-	paid        map[string]payments.Result
+	id            string
+	merchant      string
+	sessionKind   string
+	sessionOffset time.Duration
+	createErr     error
+	closeCalls    int
+	closeErr      error
+	queryErr      error
+	requests      map[string]payments.Request
+	sessions      map[string]payments.Session
+	paid          map[string]payments.Result
 }
 
 func newFakeProvider(id string) *fakeProvider {
@@ -45,7 +47,7 @@ func (p *fakeProvider) Create(_ context.Context, r payments.Request) (payments.S
 	if kind == "" {
 		kind = "redirect"
 	}
-	s := payments.Session{Kind: kind, URL: "https://pay.example/" + r.OrderID, ExpiresAt: r.ExpiresAt}
+	s := payments.Session{Kind: kind, URL: "https://pay.example/" + r.OrderID, ExpiresAt: r.ExpiresAt.Add(p.sessionOffset)}
 	p.sessions[r.OrderID] = s
 	return s, nil
 }
@@ -60,7 +62,7 @@ func (p *fakeProvider) Query(_ context.Context, id string) (payments.Result, err
 }
 func (p *fakeProvider) Close(context.Context, string) error {
 	p.closeCalls++
-	return nil
+	return p.closeErr
 }
 func (p *fakeProvider) VerifyNotification(_ http.Header, body []byte) (payments.Result, error) {
 	var r payments.Result
@@ -426,4 +428,79 @@ func TestExpiredAlipayCashQRClosesAfterVerifiedNotFound(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "CLOSED", closed.PaymentStatus)
 	assert.Zero(t, alipay.closeCalls)
+}
+
+func TestAlipayCashQRCloseRemainsPendingUntilMerchantEvidence(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	alipay := newFakeProvider("alipay")
+	alipay.sessionKind = "qr"
+	alipay.sessionOffset = -30 * time.Second
+	alipay.closeErr = payments.ErrUnavailable
+	f.svc.ConfigureProviders([]payments.Provider{alipay})
+	now := time.Now().UTC()
+	f.svc.now = func() time.Time { return now }
+	request := Request{Provider: "alipay", ProductID: "superwagie", UnifiedWallet: true,
+		Amount: "1000000", Key: "cancel-alipay-cash-qr"}
+	order, err := f.svc.Create(ctx, f.user.ID, f.account.ID, request)
+	require.NoError(t, err)
+	require.NotNil(t, order.Session)
+	alipay.paid[order.ID] = payments.Result{OrderID: order.ID, Status: "NOT_FOUND"}
+
+	pending, err := f.svc.Close(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	assert.True(t, pending.ClosePending)
+	assert.Equal(t, "CREATED", pending.PaymentStatus)
+	assert.Nil(t, pending.Session)
+	assert.Equal(t, 1, alipay.closeCalls)
+	listed, err := f.svc.List(ctx, f.user.ID, f.account.ID, "superwagie")
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	assert.True(t, listed[0].ClosePending)
+	replayed, err := f.svc.Create(ctx, f.user.ID, f.account.ID, request)
+	require.NoError(t, err)
+	assert.Equal(t, order.ID, replayed.ID)
+	assert.True(t, replayed.ClosePending)
+	assert.Nil(t, replayed.Session)
+
+	now = order.ExpiresAt.Add(time.Second)
+	require.NoError(t, f.svc.Recover(ctx))
+	closed, err := f.svc.Get(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "CLOSED", closed.PaymentStatus)
+	assert.False(t, closed.ClosePending)
+	assert.Nil(t, closed.Session)
+	assert.Equal(t, 1, alipay.closeCalls)
+	assert.Zero(t, f.ledger.balance[wallet.Address(f.account.ID, "")])
+}
+
+func TestAlipayCashQRClosePreservesPaymentConfirmedDuringCancellation(t *testing.T) {
+	f := setup(t)
+	ctx := context.Background()
+	alipay := newFakeProvider("alipay")
+	alipay.sessionKind = "qr"
+	alipay.closeErr = payments.ErrUnavailable
+	f.svc.ConfigureProviders([]payments.Provider{alipay})
+	order, err := f.svc.Create(ctx, f.user.ID, f.account.ID, Request{
+		Provider: "alipay", ProductID: "superwagie", UnifiedWallet: true, Amount: "1000000", Key: "paid-during-close",
+	})
+	require.NoError(t, err)
+	pending, err := f.svc.Close(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	require.True(t, pending.ClosePending)
+
+	alipay.paid[order.ID] = payments.Result{OrderID: order.ID, TransactionID: "alipay-original", Amount: order.Amount,
+		Currency: "CNY", Status: "PAID", PaidAt: order.CreatedAt.Add(time.Second)}
+	paid, err := f.svc.Reconcile(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "PAID", paid.PaymentStatus)
+	assert.False(t, paid.ClosePending)
+	assert.Nil(t, paid.Session)
+	require.NotEmpty(t, paid.OperationID)
+	require.NoError(t, f.wallet.Process(ctx, paid.OperationID))
+	paid, err = f.svc.Close(ctx, f.user.ID, f.account.ID, order.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "PAID", paid.PaymentStatus)
+	require.NoError(t, f.wallet.Process(ctx, paid.OperationID))
+	assert.EqualValues(t, 1_000_000, f.ledger.balance[wallet.Address(f.account.ID, "")])
 }
