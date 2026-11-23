@@ -246,8 +246,13 @@ func TestAlipayCloseRequiresVerifiedTerminalEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, err := f.s.CloseCheckout(ctx, f.actor, f.account, x.ID)
-			if err != nil || got.PaymentStatus != tc.want || (got.Session != nil) != (tc.want == "UNKNOWN") {
-				t.Fatalf("merchant close = %s with session=%t, error %v; want %s", got.PaymentStatus, got.Session != nil, err, tc.want)
+			wantPending := tc.want == "UNKNOWN"
+			if err != nil || got.PaymentStatus != tc.want || got.Session != nil || got.ClosePending != wantPending {
+				t.Fatalf("merchant close = %s with session=%t, close pending=%t, error %v; want %s", got.PaymentStatus, got.Session != nil, got.ClosePending, err, tc.want)
+			}
+			listed, err := f.s.ListCheckouts(ctx, f.actor, f.account)
+			if err != nil || len(listed) != 1 || listed[0].ClosePending != wantPending || listed[0].Session != nil {
+				t.Fatalf("close state after reloading: %+v, %v", listed, err)
 			}
 			if queries != 2 || closes != 1 {
 				t.Fatalf("unexpected merchant reads and closes: %d, %d", queries, closes)
@@ -259,6 +264,16 @@ func TestAlipayCloseRequiresVerifiedTerminalEvidence(t *testing.T) {
 			hold := f.s.locked(ctx, f.account, func(c *pgxpool.Conn) error { return f.s.commercialClear(ctx, c, f.account) })
 			if (tc.want == "UNKNOWN" && !errors.Is(hold, ErrPending)) || (tc.want != "UNKNOWN" && hold != nil) {
 				t.Fatalf("unexpected commercial hold for %s: %v", tc.want, hold)
+			}
+			if tc.name == "merchant did not confirm close" {
+				now = x.ExpiresAt
+				if err := f.s.RecoverCheckouts(ctx); err != nil {
+					t.Fatal(err)
+				}
+				closed, err := f.s.GetCheckout(ctx, f.actor, f.account, x.ID)
+				if err != nil || closed.PaymentStatus != "CLOSED" || closed.ClosePending || closed.Session != nil {
+					t.Fatalf("recovery after the checkout expires: %+v, %v", closed, err)
+				}
 			}
 		})
 	}

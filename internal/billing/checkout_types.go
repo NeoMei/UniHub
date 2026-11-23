@@ -32,6 +32,7 @@ type Checkout struct {
 	Amount               string                `json:"amount"`
 	Currency             string                `json:"currency"`
 	PaymentStatus        string                `json:"payment_status"`
+	ClosePending         bool                  `json:"close_pending,omitempty"`
 	FulfillmentStatus    string                `json:"fulfillment_status"`
 	RefundStatus         string                `json:"refund_status,omitempty"`
 	ExpiresAt            time.Time             `json:"expires_at"`
@@ -68,10 +69,18 @@ func (x *checkoutRecord) setPaymentSession(session *payments.Session) {
 	}
 }
 
-func (x checkoutRecord) withPaymentSession() Checkout {
+func (x checkoutRecord) paymentView() Checkout {
 	view := x.Checkout
 	if x.AlipayQRSession != nil {
 		view.Session = x.AlipayQRSession
+	}
+	if x.CloseRequested && view.Provider == "alipay" && view.Session != nil && view.Session.Kind == "qr" {
+		switch view.PaymentStatus {
+		case "CREATED", "PENDING", "UNKNOWN":
+			// Stop offering the original code while recovery checks the merchant order.
+			view.Session = nil
+			view.ClosePending = true
+		}
 	}
 	return view
 }
@@ -184,7 +193,7 @@ func (s *Service) ListCheckouts(ctx context.Context, actor, account string) ([]C
 	}
 	out := make([]Checkout, 0, len(xs))
 	for _, x := range xs {
-		v := x.Checkout.withPaymentSession()
+		v := x.Checkout.paymentView()
 		if x.Order != nil {
 			v = checkoutOrderView(v, *x.Order)
 		}
@@ -194,7 +203,7 @@ func (s *Service) ListCheckouts(ctx context.Context, actor, account string) ([]C
 }
 
 func (s *Service) checkoutView(ctx context.Context, x checkoutRecord) (Checkout, error) {
-	v := x.withPaymentSession()
+	v := x.paymentView()
 	if v.OrderID == "" {
 		return v, nil
 	}
