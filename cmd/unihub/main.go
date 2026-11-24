@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 	"time"
 	publicapi "unihub/api"
 	"unihub/internal/accounts"
+	"unihub/internal/appintegrations"
 	"unihub/internal/auth"
 	"unihub/internal/billing"
 	"unihub/internal/cashtopup"
@@ -36,6 +38,32 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+func newApplicationIntegrationStore(pool *pgxpool.Pool, admin *platformadmin.Store, c config) *appintegrations.Store {
+	runtimeInstances := make(map[string]bool, len(c.ProductRuntime))
+	for _, service := range c.ProductRuntime {
+		runtimeInstances[service.ProductID+"/"+productusers.Instance(service.InstanceID)] = true
+	}
+	// This inventory includes legacy OIDC clients without changing their runtime policy.
+	clients := make(map[string]products.Client, len(c.ProductAccess)+len(c.ProductClients))
+	maps.Copy(clients, c.ProductAccess)
+	explicitDefaults := make(map[string]bool, len(c.ProductAccess))
+	for _, client := range c.ProductAccess {
+		if productusers.Instance(client.InstanceID) == "default" {
+			explicitDefaults[client.ProductID] = true
+		}
+	}
+	reservedClients := []string{c.Audience, c.OperatorAudience, c.IdentityManagementClientID}
+	for product, audience := range c.ProductClients {
+		reservedClients = append(reservedClients, audience)
+		if !explicitDefaults[product] {
+			clients[audience] = products.Client{ClientID: audience, ProductID: product, InstanceID: "default"}
+		}
+	}
+	return appintegrations.New(pool, admin, c.PublicURL, !c.Production,
+		c.ProductUserManifests, clients, runtimeInstances, reservedClients)
+}
+
 func run() error {
 	mode := "serve"
 	if len(os.Args) > 1 {
@@ -194,12 +222,20 @@ func run() error {
 	if identity.ProfileEnabled() {
 		profileService = identity
 	}
+	var integrations *appintegrations.Store
+	if c.PublicURL != "" {
+		integrations = newApplicationIntegrationStore(pool, platformAdmin, c)
+		productUsers.ConfigureRegistryOverlay(integrations)
+	}
 	var productAuth *productauth.Service
-	if len(c.ProductRuntime) > 0 {
+	if len(c.ProductRuntime) > 0 || integrations != nil {
 		productAuth = productauth.New(pool, a, productUsers, c.PublicURL)
 		productAuth.ConfigureBrowserClients(c.ProductAccess)
+		if integrations != nil {
+			productAuth.ConfigureBrowserRegistryOverlay(integrations)
+		}
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentConfiguration: paymentConfiguration, PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, ProductModelSigningKey: c.ProductModelSigningKey, Billing: b, CashTopup: ct, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentConfiguration: paymentConfiguration, PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, ProductModelSigningKey: c.ProductModelSigningKey, Billing: b, CashTopup: ct, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth, ApplicationIntegrations: integrations})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir, ProductUsers: productUsers})
 		if err != nil {

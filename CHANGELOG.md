@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.75 - 2026-11-25
+
+- Add super-administrator application integration management and an in-console onboarding guide with AgentWiki as the example.
+- Manage credentials, pilots, bidirectional login verification, publication and pause while preserving existing application registrations and user permissions.
+- Use one desktop console layout, including in narrow desktop windows.
+- Reduce the data transferred by native usage summaries to keep large reports within their request deadline.
+
 ## 0.4.74 - 2026-11-24
 
 - Add optional groups below team accounts and let each team member join multiple groups.

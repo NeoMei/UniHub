@@ -1,0 +1,110 @@
+.application-integrations .admin-actions {
+  gap: 8px 12px;
+}
+
+.application-editor .application-form-grid,
+.application-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 24px;
+  min-width: 0;
+}
+
+.application-editor .application-form-grid {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.application-form-note,
+.application-url {
+  grid-column: 1 / -1;
+}
+
+.application-integrations p.application-form-note,
+.application-integrations p.application-hint {
+  margin: 0;
+}
+
+.application-integrations .admin-form button[type=submit] {
+  margin-top: 0;
+}
+
+.application-instance {
+  display: block;
+  margin-top: 4px;
+  color: var(--admin-muted);
+}
+
+.application-detail h2,
+.application-integrations code {
+  overflow-wrap: anywhere;
+}
+
+.application-detail h3 {
+  margin: 4px 0 10px;
+}
+
+.application-detail-header .application-hint .status {
+  margin-inline-start: 6px;
+}
+
+.application-detail .application-info {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+}
+
+.application-detail .application-info dt {
+  color: var(--admin-muted);
+}
+
+.application-detail .application-info code {
+  font-size: 12px;
+}
+
+.application-state-actions {
+  margin-top: 12px;
+}
+
+.application-steps {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--admin-line);
+}
+
+.application-steps ol {
+  margin: 0;
+  padding-inline-start: 22px;
+  color: var(--admin-ink);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.application-steps li + li {
+  margin-top: 6px;
+}
+
+.application-scope {
+  font-size: 13px;
+}
+
+.application-scope summary {
+  cursor: pointer;
+  color: var(--admin-teal);
+}
+
+.application-scope ul {
+  margin: 8px 0 0;
+  padding-inline-start: 20px;
+}
+
+.application-config { max-width: 100%; overflow: auto; padding: 12px; background: #edf2f3; }
+
+.application-guide ul { padding-inline-start: 20px; }
+.application-guide li + li { margin-top: 8px; }
+.application-guide .application-guide-steps { display: grid; gap: 18px; padding-inline-start: 24px; }
+.application-guide-steps li { padding-inline-start: 6px; }
+.application-guide-steps h3 { margin: 0 0 8px; }
+.application-guide-steps dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+.application-guide-steps dt { font-weight: 600; }
+.application-guide-steps dd { margin: 0; overflow-wrap: anywhere; }

@@ -55,6 +55,11 @@ func TestProductIdentityCannotBecomeFinanceOrOtherProduct(t *testing.T) {
 	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &grant) != nil || grant.OriginProductID != "superwagie" || grant.AccountID != account {
 		t.Fatalf("own product grant: %d", w.Code)
 	}
+	w = call(h, "POST", "/v1/accounts/"+account+"/api-keys", "product-alice", `{"name":"Legacy product key","models":["x"]}`, "")
+	var key modelaccess.APIKey
+	if w.Code != 201 || json.Unmarshal(w.Body.Bytes(), &key) != nil || key.OriginProductID != "superwagie" || key.InstanceID != "default" {
+		t.Fatalf("legacy product key: %d %s", w.Code, w.Body)
+	}
 	for _, path := range []string{"/v1/me", "/v1/accounts/" + account + "/subscriptions", "/v1/accounts/" + account + "/credits"} {
 		if w = call(h, "GET", path, "product-alice", "", ""); w.Code != 200 {
 			t.Fatalf("read %s: %d", path, w.Code)

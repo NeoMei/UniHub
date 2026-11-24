@@ -16,12 +16,14 @@ import (
 
 // Claims contains the verified identity used by the account service.
 type Claims struct {
-	Issuer    string
-	Subject   string
-	Name      string
-	Email     string
-	ExpiresAt int64
-	IssuedAt  int64
+	Issuer         string
+	Subject        string
+	Name           string
+	Email          string
+	ExpiresAt      int64
+	IssuedAt       int64
+	ProductSession bool
+	CentralSession bool
 }
 
 // Verifier verifies a raw bearer access token before exposing an identity.

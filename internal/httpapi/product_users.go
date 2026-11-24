@@ -56,6 +56,9 @@ func (s *api) productUserRoutes(add func(string, action)) {
 		return respond(w, 200, apps)
 	})
 	add("GET /v1/user-management", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		if auth.ProductBrowserSession(r.Context()) {
+			return respond(w, 200, map[string]bool{"enabled": false, "can_manage": false})
+		}
 		if originProduct(r) != "" {
 			return accounts.ErrForbidden
 		}
@@ -76,7 +79,7 @@ func (s *api) productUserRoutes(add func(string, action)) {
 	})
 	admin := func(pattern string, f action) {
 		add(pattern, func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-			if originProduct(r) != "" {
+			if originProduct(r) != "" || auth.ProductBrowserSession(r.Context()) {
 				return accounts.ErrForbidden
 			}
 			if s.options.PlatformAdmin != nil {
@@ -90,7 +93,11 @@ func (s *api) productUserRoutes(add func(string, action)) {
 		})
 	}
 	admin("GET /v1/user-management/products", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
-		return respond(w, 200, s.options.ProductUsers.Products())
+		products, err := s.options.ProductUsers.ProductsContext(r.Context())
+		if err != nil {
+			return err
+		}
+		return respond(w, 200, products)
 	})
 	admin("GET /v1/user-management/users", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		limit := 50

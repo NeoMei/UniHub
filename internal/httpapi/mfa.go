@@ -39,14 +39,14 @@ func (s *api) mfaRoutes(add func(string, action)) {
 		}
 		return respond(w, 200, status)
 	})
-	add("POST /v1/me/mfa/enroll", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+	add("POST /v1/me/mfa/enroll", s.centralCredentialMutation(func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		setup, status, err := s.options.Identity.MfaEnroll(r.Context(), u.ID)
 		if err != nil {
 			return mfaError(w, err)
 		}
 		return respond(w, 200, map[string]any{"secret": setup.Secret, "otpauth_url": setup.URL, "recovery_code": setup.RecoveryCodes[0], "enabled": status.Enabled})
-	})
-	add("POST /v1/me/mfa/confirm", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+	}))
+	add("POST /v1/me/mfa/confirm", s.centralCredentialMutation(func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body identityapi.MfaEnrollRequest
 		if err := decode(w, r, &body); err != nil {
 			return err
@@ -56,8 +56,8 @@ func (s *api) mfaRoutes(add func(string, action)) {
 			return mfaError(w, err)
 		}
 		return respond(w, 200, status)
-	})
-	add("POST /v1/me/mfa/disable", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+	}))
+	add("POST /v1/me/mfa/disable", s.centralCredentialMutation(func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body identityapi.MfaDisableRequest
 		if err := decode(w, r, &body); err != nil {
 			return err
@@ -67,5 +67,5 @@ func (s *api) mfaRoutes(add func(string, action)) {
 			return mfaError(w, err)
 		}
 		return respond(w, 200, status)
-	})
+	}))
 }

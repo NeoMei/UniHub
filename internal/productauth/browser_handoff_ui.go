@@ -16,6 +16,7 @@ import (
 
 	"unihub/internal/accounts"
 	"unihub/internal/database"
+	"unihub/internal/products"
 )
 
 const (
@@ -79,8 +80,17 @@ func (s *Service) showBrowserLoginPicker(w http.ResponseWriter, r *http.Request)
 	}
 	type loginMethod struct{ URL, Label string }
 	var methods []loginMethod
-	for _, id := range slices.Sorted(maps.Keys(s.browserClients)) {
-		client := s.browserClients[id]
+	clients := make(map[string]products.Client, len(s.browserClients))
+	maps.Copy(clients, s.browserClients)
+	if s.browserOverlay != nil {
+		for id, client := range s.browserOverlay.PublicBrowserClients(r.Context()) {
+			if _, static := clients[id]; !static {
+				clients[id] = client
+			}
+		}
+	}
+	for _, id := range slices.Sorted(maps.Keys(clients)) {
+		client := clients[id]
 		if client.NativeLoginURL != "" && client.NativeHandoffGeneration != "disabled" {
 			methods = append(methods, loginMethod{URL: client.NativeLoginURL, Label: client.NativeLoginLabel})
 		}
@@ -259,6 +269,10 @@ func (s *Service) writeBrowserHandoffSession(w http.ResponseWriter, r *http.Requ
 		return false
 	}
 	defer database.Rollback(tx)
+	if err = s.acceptBrowserWork(ctx, tx, completion.ClientID, completion.PilotStartedAt, RecordInbound); err != nil {
+		http.Error(w, "Handoff unavailable", http.StatusForbidden)
+		return false
+	}
 	if err = s.lockBrowserHandoffSource(ctx, tx, completion); err != nil {
 		if errors.Is(err, accounts.ErrForbidden) {
 			http.Error(w, "Invalid Handoff", http.StatusUnauthorized)

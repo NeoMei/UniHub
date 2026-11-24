@@ -38,7 +38,16 @@ func apiKeyScope(r *http.Request, product, instance string) (string, string, err
 func (s *api) apiKeyRoutes(add func(string, action)) {
 	a := s.options.ModelAccess
 	b := s.options.Billing
-	add("POST /v1/accounts/{account}/api-keys", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+	mutate := func(pattern string, next action) {
+		add(pattern, func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+			financeWrite, _ := r.Context().Value(productFinanceWriteKey{}).(bool)
+			if !hasOIDCAuthentication(r.Context()) && !financeWrite {
+				return accounts.ErrForbidden
+			}
+			return next(w, r, u)
+		})
+	}
+	mutate("POST /v1/accounts/{account}/api-keys", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body modelaccess.APIKeyRequest
 		if e := decode(w, r, &body); e != nil {
 			return e
@@ -74,7 +83,7 @@ func (s *api) apiKeyRoutes(add func(string, action)) {
 		}
 		return respond(w, http.StatusOK, out)
 	})
-	add("POST /v1/accounts/{account}/api-keys/{key}/scope", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+	mutate("POST /v1/accounts/{account}/api-keys/{key}/scope", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body modelaccess.APIKeyScopeRequest
 		if e := decode(w, r, &body); e != nil {
 			return e
@@ -90,7 +99,7 @@ func (s *api) apiKeyRoutes(add func(string, action)) {
 		}
 		return respond(w, http.StatusOK, out)
 	})
-	add("POST /v1/accounts/{account}/api-keys/{key}/models", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+	mutate("POST /v1/accounts/{account}/api-keys/{key}/models", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body modelaccess.APIKeyModelsRequest
 		if e := decode(w, r, &body); e != nil {
 			return e
@@ -106,7 +115,7 @@ func (s *api) apiKeyRoutes(add func(string, action)) {
 		}
 		return respond(w, http.StatusOK, out)
 	})
-	add("DELETE /v1/accounts/{account}/api-keys/{key}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+	mutate("DELETE /v1/accounts/{account}/api-keys/{key}", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		product, instance, e := apiKeyScope(r, r.URL.Query().Get("product_id"), r.URL.Query().Get("instance_id"))
 		if e != nil {
 			return e

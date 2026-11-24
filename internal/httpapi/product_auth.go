@@ -83,6 +83,9 @@ func (s *api) productAuthRoutes(m *http.ServeMux) {
 		return respond(w, 200, out)
 	})
 	add("POST /internal/v1/product-runtime/identity/browser/exchange", "identity:browser", func(w http.ResponseWriter, r *http.Request, c RuntimeService) error {
+		if c.ManagedIntegration {
+			return accounts.ErrForbidden
+		}
 		var in productauth.BrowserExchange
 		if e := decode(w, r, &in); e != nil {
 			return e

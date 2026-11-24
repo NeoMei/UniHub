@@ -15,3 +15,10 @@ func BrowserClaims(ctx context.Context) (Claims, bool) {
 	claims, ok := ctx.Value(browserClaimsKey{}).(Claims)
 	return claims, ok
 }
+
+// ProductBrowserSession identifies a session authenticated by a product instead
+// of the central identity provider. Product sign-in cannot confer platform authority.
+func ProductBrowserSession(ctx context.Context) bool {
+	claims, ok := BrowserClaims(ctx)
+	return ok && claims.ProductSession
+}

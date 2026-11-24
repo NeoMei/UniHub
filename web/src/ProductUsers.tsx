@@ -72,7 +72,7 @@ export function ProductApplications() {
   return (
     <section>
       <h1>我的应用</h1>
-      <p>使用统一身份进入产品，权限由归一管理员管理。</p>
+      <p>使用归一身份进入已获访问权限的应用。对于原账号接入的应用，应用内角色和资源权限仍由原产品管理。</p>
       <ResourceState resource={applications} empty="暂无可用应用">
         {(items) => (
           <div className="product-user-grid">

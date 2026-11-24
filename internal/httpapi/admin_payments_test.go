@@ -133,8 +133,13 @@ func TestMerchantAdministrationComposedConsoleCSRF(t *testing.T) {
 	if e := database.Migrate(ctx, pool); e != nil {
 		t.Fatal(e)
 	}
+	var issuer *httptest.Server
+	issuer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]string{"issuer": issuer.URL, "authorization_endpoint": issuer.URL + "/authorize", "token_endpoint": issuer.URL + "/token", "jwks_uri": issuer.URL + "/jwks"})
+	}))
+	defer issuer.Close()
 	a := accounts.New(pool)
-	u, e := a.EnsureIdentity(ctx, accounts.Identity{Issuer: "https://test", Subject: "bob"})
+	u, e := a.EnsureIdentity(ctx, accounts.Identity{Issuer: issuer.URL, Subject: "bob"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -149,11 +154,6 @@ func TestMerchantAdministrationComposedConsoleCSRF(t *testing.T) {
 		t.Fatal(e)
 	}
 	api := New(verifier{}, a, wallet.New(pool, a, noLedger{}), Options{PlatformAdmin: admin, PaymentConfiguration: manager})
-	var issuer *httptest.Server
-	issuer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"issuer": issuer.URL, "authorization_endpoint": issuer.URL + "/authorize", "token_endpoint": issuer.URL + "/token", "jwks_uri": issuer.URL + "/jwks"})
-	}))
-	defer issuer.Close()
 	browser, e := console.New(ctx, pool, verifier{}, console.Options{Issuer: issuer.URL, ClientID: "fixture", ClientSecret: "fixture", PublicURL: "https://hub.example"})
 	if e != nil {
 		t.Fatal(e)
@@ -162,7 +162,7 @@ func TestMerchantAdministrationComposedConsoleCSRF(t *testing.T) {
 	cookie := strings.Repeat("s", 43)
 	csrf := strings.Repeat("c", 43)
 	hash := sha256.Sum256([]byte(cookie))
-	if _, e = pool.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at) VALUES($1,'https://test','bob','','',$2,now()+interval '1 hour')`, hex.EncodeToString(hash[:]), csrf); e != nil {
+	if _, e = pool.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at) VALUES($1,$2,'bob','','',$3,now()+interval '1 hour')`, hex.EncodeToString(hash[:]), issuer.URL, csrf); e != nil {
 		t.Fatal(e)
 	}
 	for _, tc := range []struct {

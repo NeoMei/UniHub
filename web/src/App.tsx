@@ -1433,15 +1433,17 @@ function ProfileSettings({
   const [mfaBusy, setMfaBusy] = useState(false);
   const [mfaMessage, setMfaMessage] = useState("");
   const [mfaError, setMfaError] = useState("");
+  const productCredentials = current?.credential_source === "product";
+  const canManageCentralCredentials = !!current && !productCredentials && session.can_manage_central_credentials === true;
 
   useEffect(() => {
     setCurrent(profile);
     setDisplayName(profile?.display_name || "");
   }, [profile]);
   useEffect(() => {
-    if (!current || productCredentials) return;
+    if (!canManageCentralCredentials) return;
     request<MfaStatus>("/v1/me/mfa").then(setMfa).catch(() => setMfa(undefined));
-  }, [current?.credential_source, profile?.version]);
+  }, [canManageCentralCredentials, current?.version]);
   useEffect(() => {
     if (!mfaEnroll) return;
     QRCode.toDataURL(mfaEnroll.otpauth_url, { margin: 1, width: 180 }).then(setMfaQr).catch(() => setMfaQr(""));
@@ -1522,7 +1524,6 @@ function ProfileSettings({
     }
   }
 
-  const productCredentials = current?.credential_source === "product";
   async function startMfaEnroll() {
     setMfaError(""); setMfaMessage(""); setMfaBusy(true);
     try {
@@ -1577,7 +1578,12 @@ function ProfileSettings({
           </Panel>
           <Panel title="登录与安全">
             <div className="security-summary"><ShieldCheck size={20} /><div><strong>UniHub 统一身份</strong><p>{productCredentials ? "密码、二次验证及通行密钥由原产品管理，继续使用原有登录方式。" : "认证由 Casdoor 管理，资料变更会同步到所有产品。"}</p></div></div>
-            {productCredentials ? <div className="stack-form">{current?.credential_management?.map((manager) => manager.url ? <a key={`${manager.product_id}/${manager.instance_id}`} href={manager.url}>前往 {manager.product_id} 管理密码与二次验证</a> : <p key={`${manager.product_id}/${manager.instance_id}`}>请在 {manager.product_id} 管理登录安全。</p>)}</div> : <form className="stack-form" onSubmit={changePassword}>
+            {productCredentials && <div className="stack-form">{current?.credential_management?.map((manager) => manager.url ? <a key={`${manager.product_id}/${manager.instance_id}`} href={manager.url}>前往 {manager.product_id} 管理密码与二次验证</a> : <p key={`${manager.product_id}/${manager.instance_id}`}>请在 {manager.product_id} 管理登录安全。</p>)}</div>}
+            {current && !productCredentials && !canManageCentralCredentials && <div className="stack-form">
+              <p>请使用已关联的 UniHub 账号登录，再修改密码或管理两步验证。</p>
+              <a className="button" href="/auth/login?method=central&switch_account=1">使用 UniHub 账号登录</a>
+            </div>}
+            {canManageCentralCredentials && <form className="stack-form" onSubmit={changePassword}>
               <h3>修改密码</h3>
               <p>新密码至少 8 个字符，UTF-8 编码最多 72 字节，不含控制字符；还须符合当前组织密码策略。更新后需要重新登录。</p>
               <label>当前密码<input type="password" autoComplete="current-password" value={passwords.current} onChange={(event) => setPasswords({ ...passwords, current: event.target.value })} /></label>
@@ -1586,7 +1592,7 @@ function ProfileSettings({
               {passwordError && <Notice kind="error">{passwordError}</Notice>}
               <button type="submit" disabled={savingPassword || !passwords.current || !passwords.next || !passwords.confirm}>更新密码</button>
             </form>}
-            {!productCredentials && <div className="stack-form">
+            {canManageCentralCredentials && <div className="stack-form">
               <h3>两步验证（TOTP）</h3>
               <p>{mfa ? (mfa.enabled ? "已开启：登录时需要输入验证器中的一次码。" : "未开启：使用验证器 App 生成的一次码保护登录。") : "状态不可用。"}</p>
               {mfaMessage && <Notice>{mfaMessage}</Notice>}

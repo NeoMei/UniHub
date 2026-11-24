@@ -29,6 +29,7 @@ type Service struct {
 	users          *productusers.Store
 	issuer         string
 	browserClients map[string]products.Client
+	browserOverlay BrowserRegistryOverlay
 }
 
 func New(pool *pgxpool.Pool, a *accounts.Store, u *productusers.Store, issuer string) *Service {
@@ -133,15 +134,17 @@ func (s *Service) lookupBindingOn(ctx context.Context, q accounts.Querier, bindi
 		if e != nil {
 			return out, e
 		}
-		for _, m := range s.users.Products() {
-			if m.ProductID == product && m.InstanceID == instance {
-				out.Access.Version = m.Version + version + statusVersion - 1
-				var roles []string
-				if e = json.Unmarshal(rawRoles, &roles); e != nil {
-					return out, e
-				}
-				out.ProductRole = productusers.EffectiveProductRole(m, roles, out.ProductRole)
+		m, found, err := s.users.FindManifestOn(ctx, q, product, instance)
+		if err != nil {
+			return out, err
+		}
+		if found {
+			out.Access.Version = m.Version + version + statusVersion - 1
+			var roles []string
+			if e = json.Unmarshal(rawRoles, &roles); e != nil {
+				return out, e
 			}
+			out.ProductRole = productusers.EffectiveProductRole(m, roles, out.ProductRole)
 		}
 		out.Access.ProductRole = out.ProductRole
 		if e = q.QueryRow(ctx, `SELECT auth_version FROM product_auth_subjects WHERE binding_id=$1`, binding.ID).Scan(&out.AuthVersion); e != nil {
@@ -325,16 +328,22 @@ func (s *Service) Authenticate(ctx context.Context, product, instance string, in
 	expires := time.Now().Add(120 * time.Second)
 	// Unique authentication IDs prevent successful-event replay. A lost response
 	// requires fresh local session authentication; the original secret is unrecoverable.
-	_, e = s.pool.Exec(ctx, `INSERT INTO product_auth_assertions(token_hash,binding_id,authentication_id,authentication_digest,auth_version,expires_at) VALUES($1,$2,$3,$4,$5,$6)`, digest(token), out.Binding.ID, in.AuthenticationID, digest(in), in.AuthVersion, expires)
+	tx, e := s.beginRuntimeMutation(ctx, pgx.TxOptions{})
 	if e != nil {
-		var found bool
-		if q := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM product_auth_assertions WHERE binding_id=$1 AND authentication_id=$2)`, out.Binding.ID, in.AuthenticationID).Scan(&found); q == nil && found {
-			return Identity{}, accounts.ErrConflict
-		}
 		return Identity{}, e
 	}
-	// Re-check after publication so a concurrent central disable cannot issue authority.
-	fresh, checkError := s.Lookup(ctx, product, instance, in.LocalUserID)
+	defer database.Rollback(tx)
+
+	result, e := tx.Exec(ctx, `INSERT INTO product_auth_assertions(token_hash,binding_id,authentication_id,authentication_digest,auth_version,expires_at)
+		VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (binding_id,authentication_id) DO NOTHING`, digest(token), out.Binding.ID, in.AuthenticationID, digest(in), in.AuthVersion, expires)
+	if e != nil {
+		return Identity{}, e
+	}
+	if result.RowsAffected() != 1 {
+		return Identity{}, accounts.ErrConflict
+	}
+	// Recheck the binding before publishing the assertion.
+	fresh, checkError := s.lookupBindingOn(ctx, tx, out.Binding)
 	if checkError != nil {
 		return Identity{}, checkError
 	}
@@ -342,6 +351,10 @@ func (s *Service) Authenticate(ctx context.Context, product, instance string, in
 		return Identity{}, accounts.ErrForbidden
 	}
 	out = fresh
+	if e = tx.Commit(ctx); e != nil {
+		return Identity{}, e
+	}
+
 	out.ActorToken = token
 	out.ActorExpiresAt = expires.Unix()
 	return out, nil
@@ -693,7 +706,7 @@ func (s *Service) SyncLifecycle(ctx context.Context, product, instance string, i
 	if e != nil {
 		return LifecycleReceipt{}, e
 	}
-	tx, e := s.pool.Begin(ctx)
+	tx, e := s.beginRuntimeMutation(ctx, pgx.TxOptions{})
 	if e != nil {
 		return LifecycleReceipt{}, e
 	}

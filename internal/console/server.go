@@ -455,6 +455,8 @@ func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 		s.opts.ProductUsers.RequirePermissionOn(ctx, s.pool, user, *product, *instance, "product:use") != nil) {
 		return auth.Claims{}, "", false
 	}
+	claims.ProductSession = product != nil
+	claims.CentralSession = product == nil && claims.Issuer == s.opts.Issuer
 	return claims, csrf, true
 }
 func (s *Server) csrf(r *http.Request, expected string) bool {
@@ -463,7 +465,9 @@ func (s *Server) csrf(r *http.Request, expected string) bool {
 func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 	claims, csrf, ok := s.identity(r)
 	if !ok {
-		jsonResponse(w, 200, map[string]any{"authenticated": false, "sandbox": s.opts.Sandbox})
+		jsonResponse(w, 200, map[string]any{
+			"authenticated": false, "can_manage_central_credentials": false, "sandbox": s.opts.Sandbox,
+		})
 		return
 	}
 	user, err := accounts.New(s.pool).EnsureIdentity(r.Context(), accounts.Identity{Issuer: claims.Issuer, Subject: claims.Subject, Name: claims.Name, Email: claims.Email})
@@ -471,7 +475,10 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) {
 		failure(w, 503)
 		return
 	}
-	jsonResponse(w, 200, map[string]any{"authenticated": true, "user": user, "csrf_token": csrf, "sandbox": s.opts.Sandbox})
+	jsonResponse(w, 200, map[string]any{
+		"authenticated": true, "user": user, "csrf_token": csrf, "sandbox": s.opts.Sandbox,
+		"can_manage_central_credentials": claims.CentralSession,
+	})
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	_, csrf, ok := s.identity(r)

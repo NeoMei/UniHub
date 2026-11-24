@@ -63,6 +63,14 @@ func lockAuthority(ctx context.Context, tx pgx.Tx) error {
 	return e
 }
 
+// RequireApplicationChange serializes changes against platform administrator revocation.
+func (s *Store) RequireApplicationChange(ctx context.Context, tx pgx.Tx, actor string) error {
+	if err := lockAuthority(ctx, tx); err != nil {
+		return err
+	}
+	return s.requireOn(ctx, tx, actor, "applications:manage")
+}
+
 func (s *Store) SetLegacyAccess(ctx context.Context, actor, target, product, instance string, roles []string, active bool, expected int64) (productusers.Assignment, error) {
 	return s.SetProductAccess(ctx, actor, target, product, instance, roles, active, expected, "legacy user-management request")
 }

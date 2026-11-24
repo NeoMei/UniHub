@@ -54,7 +54,7 @@ func (s *Service) RevokeNativeBrowserSession(ctx context.Context, product, insta
 		return err
 	}
 
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginRuntimeMutation(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}

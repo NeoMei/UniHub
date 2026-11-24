@@ -3,6 +3,7 @@ export type MfaStatus = { enabled: boolean };
 export type MfaEnroll = { secret: string; otpauth_url: string; recovery_code: string; enabled: false };
 export type Session = {
   authenticated: boolean;
+  can_manage_central_credentials?: boolean;
   user?: { id: string; name: string; email: string };
   csrf_token?: string;
   sandbox: boolean;

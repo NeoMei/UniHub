@@ -50,7 +50,7 @@ func (s *Service) SyncSourceLifecycle(ctx context.Context, product, instance str
 	if err != nil {
 		return LifecycleReceipt{}, err
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginRuntimeMutation(ctx, pgx.TxOptions{})
 	if err != nil {
 		return LifecycleReceipt{}, err
 	}
@@ -121,7 +121,7 @@ func (s *Service) VerifyProductBrowserSource(ctx context.Context, raw, product, 
 		return accounts.ErrForbidden
 	}
 	instance = productusers.Instance(instance)
-	client, err := s.identityLinkClient(expectedClientID, "")
+	client, err := s.identityLinkClientForSession(expectedClientID, "", true)
 	if err != nil || client.ClientID != expectedClientID || client.ProductID != product ||
 		productusers.Instance(client.InstanceID) != instance {
 		return accounts.ErrForbidden
@@ -133,7 +133,7 @@ func (s *Service) VerifyProductBrowserSource(ctx context.Context, raw, product, 
 	}
 	defer database.Rollback(tx)
 
-	if _, err = s.verifyIdentityBrowserSourceOn(ctx, tx, raw, product, instance, expectedClientID, centralUserID); err != nil {
+	if _, err = s.verifyIdentityBrowserSourceOn(ctx, tx, raw, product, instance, expectedClientID, centralUserID, false); err != nil {
 		return err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -142,9 +142,9 @@ func (s *Service) VerifyProductBrowserSource(ctx context.Context, raw, product, 
 	return nil
 }
 
-func (s *Service) verifyIdentityBrowserSourceOn(ctx context.Context, tx pgx.Tx, raw, product, instance, clientID, centralUserID string) (string, error) {
+func (s *Service) verifyIdentityBrowserSourceOn(ctx context.Context, tx pgx.Tx, raw, product, instance, clientID, centralUserID string, publishing bool) (string, error) {
 	var sourceProduct, sourceInstance, destinationLocalUser string
-	err := tx.QueryRow(ctx, `SELECT COALESCE(b.product_id,''),COALESCE(b.instance_id,''),db.local_user_id
+	query := `SELECT COALESCE(b.product_id,''),COALESCE(b.instance_id,''),db.local_user_id
 		FROM product_browser_source_proofs f
 		JOIN browser_sessions s ON s.id_hash=f.source_session_hash
 		JOIN identities i ON i.issuer=s.issuer AND i.subject=s.subject AND i.user_id=f.user_id
@@ -167,8 +167,12 @@ func (s *Service) verifyIdentityBrowserSourceOn(ctx context.Context, tx pgx.Tx, 
 		  AND f.source_binding_id IS NOT DISTINCT FROM o.binding_id
 		  AND f.source_auth_version IS NOT DISTINCT FROM o.auth_version
 		  AND (o.binding_id IS NULL OR (
-		    p.auth_version=o.auth_version AND NOT p.deleted AND NOT p.native_locked AND a.active AND b.user_id=f.user_id))`,
-		identityBrowserSourceProofDigest(raw), product, instance, clientID, centralUserID).Scan(&sourceProduct, &sourceInstance, &destinationLocalUser)
+		    p.auth_version=o.auth_version AND NOT p.deleted AND NOT p.native_locked AND a.active AND b.user_id=f.user_id))`
+	if publishing {
+		// Pin the destination and its browser session until the new proof commits.
+		query += ` FOR SHARE OF s,u,db,dp,da`
+	}
+	err := tx.QueryRow(ctx, query, identityBrowserSourceProofDigest(raw), product, instance, clientID, centralUserID).Scan(&sourceProduct, &sourceInstance, &destinationLocalUser)
 	if err != nil {
 		return "", accounts.ErrForbidden
 	}

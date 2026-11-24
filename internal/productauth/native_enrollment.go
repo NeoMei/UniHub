@@ -35,11 +35,15 @@ func (s *Service) EnrollNativeIdentity(ctx context.Context, product, instance st
 	}
 
 	issuer := s.issuer + "/product-auth/" + product + "/" + instance
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	tx, err := s.beginRuntimeMutation(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return Identity{}, err
 	}
 	defer database.Rollback(tx)
+	if err = s.acceptBrowserWork(ctx, tx, client.ClientID, client.PilotStartedAt, CheckBrowserWork); err != nil {
+		return Identity{}, err
+	}
+
 	if err = accounts.LockIdentity(ctx, tx, issuer, in.Authentication.LocalUserID); err != nil {
 		return Identity{}, err
 	}

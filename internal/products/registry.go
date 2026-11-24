@@ -12,27 +12,29 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 type Client struct {
-	AccountSettingsURL      string   `json:"account_settings_url,omitempty"`
-	InstanceID              string   `json:"instance_id,omitempty"`
-	ProductID               string   `json:"product_id"`
-	ClientID                string   `json:"client_id"`
-	Application             string   `json:"application,omitempty"`
-	Organization            string   `json:"organization,omitempty"`
-	RedirectURIs            []string `json:"redirect_uris,omitempty"`
-	Origins                 []string `json:"origins,omitempty"`
-	Scopes                  []string `json:"scopes,omitempty"`
-	BillingProducts         []string `json:"billing_products,omitempty"`
-	BrowserSSO              bool     `json:"browser_sso,omitempty"`
-	IdentityLinkRole        string   `json:"identity_link_role,omitempty"`
-	NativeLoginURL          string   `json:"native_login_url,omitempty"`
-	NativeLoginLabel        string   `json:"native_login_label,omitempty"`
-	NativeHandoffGeneration string   `json:"native_handoff_generation,omitempty"`
-	PasswordLogin           bool     `json:"password_login,omitempty"`
-	Registration            bool     `json:"registration,omitempty"`
-	RefreshTokens           bool     `json:"refresh_tokens,omitempty"`
+	PilotStartedAt          *time.Time `json:"-"`
+	AccountSettingsURL      string     `json:"account_settings_url,omitempty"`
+	InstanceID              string     `json:"instance_id,omitempty"`
+	ProductID               string     `json:"product_id"`
+	ClientID                string     `json:"client_id"`
+	Application             string     `json:"application,omitempty"`
+	Organization            string     `json:"organization,omitempty"`
+	RedirectURIs            []string   `json:"redirect_uris,omitempty"`
+	Origins                 []string   `json:"origins,omitempty"`
+	Scopes                  []string   `json:"scopes,omitempty"`
+	BillingProducts         []string   `json:"billing_products,omitempty"`
+	BrowserSSO              bool       `json:"browser_sso,omitempty"`
+	IdentityLinkRole        string     `json:"identity_link_role,omitempty"`
+	NativeLoginURL          string     `json:"native_login_url,omitempty"`
+	NativeLoginLabel        string     `json:"native_login_label,omitempty"`
+	NativeHandoffGeneration string     `json:"native_handoff_generation,omitempty"`
+	PasswordLogin           bool       `json:"password_login,omitempty"`
+	Registration            bool       `json:"registration,omitempty"`
+	RefreshTokens           bool       `json:"refresh_tokens,omitempty"`
 }
 
 var productID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
