@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.74 - 2026-11-24
+
+- Add optional groups below team accounts and let each team member join multiple groups.
+- Manage groups in the team members console while keeping access roles and billing on the team account.
+- Expose group and membership reads through separate approved product scopes and the TypeScript SDK.
+- Add an additive migration so existing teams and members begin without group assignments.
+
 ## 0.4.73 - 2026-11-24
 
 - Restore the desktop split layout in user and product permissions and size role cards to the available content width.

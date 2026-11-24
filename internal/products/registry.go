@@ -41,6 +41,7 @@ var supportedScopes = map[string]bool{
 	"access:read": true, "identity:read": true, "accounts:read": true, "accounts:write": true,
 	"profile:write": true,
 	"members:read":  true, "members:write": true, "catalog:read": true,
+	"groups:read": true, "groups:members:read": true,
 	"subscriptions:read": true, "credits:read": true, "wallets:read": true,
 	"recharges:read": true, "recharges:write": true, "transfers:write": true,
 	"operations:read": true, "orders:read": true, "orders:write": true,

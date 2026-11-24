@@ -98,6 +98,7 @@ func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.
 	s.adminRoutes(add)
 	s.platformInvitationRoutes(add)
 	s.invitationQueryRoutes(add)
+	s.teamGroupRoutes(add)
 	if o.Identity != nil {
 		s.profileRoutes(add)
 	}

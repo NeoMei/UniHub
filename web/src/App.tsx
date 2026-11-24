@@ -35,6 +35,8 @@ import type {
   MfaStatus,
   MfaEnroll,
   Subscription,
+  TeamGroupDirectory,
+  TeamGroupMembership,
   Wallet,
 } from "./types";
 import {
@@ -87,6 +89,7 @@ export type ActionSpec = {
   method?: string;
   onResult?: (data: unknown) => void;
   confirm?: string;
+  accountLabel?: string;
 };
 export type Shared = {
   account: Account;
@@ -717,6 +720,15 @@ function AccountConsole({
     page === "members" ? accountPath(account.id, "members") : undefined,
     version,
   );
+  const teamMembersPage = page === "members" && account.kind === "team";
+  const groupDirectory = useResource<TeamGroupDirectory>(
+    teamMembersPage ? accountPath(account.id, "groups") : undefined,
+    version,
+  );
+  const groupMemberships = useResource<TeamGroupMembership[]>(
+    teamMembersPage ? accountPath(account.id, "groups/memberships") : undefined,
+    version,
+  );
   const incomingInvitations = useResource<Invitation[]>(
     page === "members" ? "/v1/invitations" : undefined,
     version,
@@ -1106,6 +1118,8 @@ function AccountConsole({
         <Members
           {...shared}
           members={members}
+          groupDirectory={groupDirectory}
+          groupMemberships={groupMemberships}
           incomingInvitations={incomingInvitations}
           teamInvitations={teamInvitations}
           canManage={managementRole(account.role)}
@@ -1126,7 +1140,7 @@ function AccountConsole({
         >
           <div className="modal-body">
             <div className="account-lock">
-              付费账户：<strong>{account.name}</strong>
+              {action.accountLabel || "付费账户"}：<strong>{account.name}</strong>
               <small>{account.id}</small>
             </div>
             {action.content}

@@ -176,6 +176,8 @@ it("shows incoming and team pending invitations and accepts an incoming invitati
       act={act}
       account={{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }}
       members={{ data: [], loading: false }}
+      groupDirectory={{ loading: false }}
+      groupMemberships={{ loading: false }}
       incomingInvitations={{ data: [incoming], loading: false }}
       teamInvitations={{ data: [], loading: false }}
       canManage={false}
@@ -201,6 +203,8 @@ it("lets an owner change non-owner roles and revoke a pending team invitation", 
       act={act}
       account={{ id: "team-1", name: "团队", kind: "team", role: "owner" }}
       members={{ data: [{ user_id: "u2", name: "成员", email: "", role: "member" }], loading: false }}
+      groupDirectory={{ data: {groups: [], group_ids: []}, loading: false }}
+      groupMemberships={{ data: [], loading: false }}
       incomingInvitations={{ data: [], loading: false }}
       teamInvitations={{ data: [pending], loading: false }}
       canManage

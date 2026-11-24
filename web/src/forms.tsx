@@ -18,6 +18,8 @@ import type {
   Quote,
   Recharge,
   Subscription,
+  TeamGroupDirectory,
+  TeamGroupMembership,
   Wallet,
   Product,
 } from "./types";
@@ -25,6 +27,7 @@ import { activeSubscription, date, financeRole, fixed, parseCash } from "./money
 import type { Shared, ActionSpec } from "./App";
 import { OperationTable } from "./App";
 import type { Resource } from "./useResource";
+import { TeamGroups } from "./TeamGroups";
 import {
   Detail,
   Empty,
@@ -602,12 +605,16 @@ export function Members({
   session,
   act,
   members,
+  groupDirectory,
+  groupMemberships,
   incomingInvitations,
   teamInvitations,
   canManage,
   onTeamCreated,
 }: Shared & {
   members: Resource<Member[]>;
+  groupDirectory: Resource<TeamGroupDirectory>;
+  groupMemberships: Resource<TeamGroupMembership[]>;
   incomingInvitations: Resource<Invitation[]>;
   teamInvitations: Resource<Invitation[]>;
   canManage: boolean;
@@ -619,6 +626,16 @@ export function Members({
   const [invitation, setInvitation] = useState("");
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
+  const isTeam = account.kind === "team";
+  const groups = new Map(groupDirectory.data?.groups?.map(group => [group.id, group.name]));
+  const groupsByMember = new Map(groupMemberships.data?.map(member => [member.user_id, member.group_ids]));
+
+  function memberGroups(userId: string) {
+    if (groupDirectory.loading || groupMemberships.loading) return "正在加载…";
+    if (groupDirectory.error || groupMemberships.error) return "暂不可用";
+    const groupIds = groupsByMember.get(userId) || [];
+    return groupIds.length ? groupIds.map(id => groups.get(id) || id).join("、") : "未分组";
+  }
   function create() {
     if (!name.trim()) return;
     act({
@@ -678,29 +695,43 @@ export function Members({
   function roleLabel(value: string) {
     return { owner: "所有者", admin: "管理员", billing_admin: "财务管理员", member: "成员" }[value] || value;
   }
+  const incomingPanel = (
+    <Panel title="待处理的团队邀请">
+      <ResourceState resource={incomingInvitations} empty="暂无待处理邀请">
+        {(data) => (
+          <Table headers={["团队账户", "角色", "邀请编号", "操作"]}>
+            {data.map((item) => (
+              <tr key={item.id}>
+                <td className="mono">{item.account_id}</td>
+                <td>{roleLabel(item.role)}</td>
+                <td className="mono selectable">{item.id}</td>
+                <td>
+                  <button className="text-button" aria-label={`接受邀请 ${item.id}`} onClick={() => acceptById(item.id)}>
+                    接受
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </Table>
+        )}
+      </ResourceState>
+    </Panel>
+  );
   return (
     <>
-      <Panel title="待处理的团队邀请">
-        <ResourceState resource={incomingInvitations} empty="暂无待处理邀请">
-          {(data) => (
-            <Table headers={["团队账户", "角色", "邀请编号", "操作"]}>
-              {data.map((item) => (
-                <tr key={item.id}>
-                  <td className="mono">{item.account_id}</td>
-                  <td>{roleLabel(item.role)}</td>
-                  <td className="mono selectable">{item.id}</td>
-                  <td>
-                    <button className="text-button" aria-label={`接受邀请 ${item.id}`} onClick={() => acceptById(item.id)}>
-                      接受
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </Table>
-          )}
-        </ResourceState>
-      </Panel>
-      <Panel title={account.kind === "team" ? "团队成员" : "账户成员"}>
+      {!isTeam && incomingPanel}
+      {isTeam && (
+        <TeamGroups
+          accountId={account.id}
+          directory={groupDirectory}
+          groupMemberships={groupMemberships}
+          groupsByMember={groupsByMember}
+          members={members}
+          canManage={canManage}
+          act={act}
+        />
+      )}
+      <Panel title={isTeam ? "团队成员" : "账户成员"}>
         <ResourceState resource={members} empty="暂无成员">
           {(data) => (
             <Table
@@ -708,18 +739,20 @@ export function Members({
                 "成员",
                 "用户 ID",
                 "角色",
-                ...(canManage && account.kind === "team" ? ["操作"] : []),
+                ...(isTeam ? ["小组"] : []),
+                ...(canManage && isTeam ? ["操作"] : []),
               ]}
             >
               {data.map((m) => (
                 <tr key={m.user_id}>
-                  <td>
+                  <td className={isTeam ? "team-member-identity" : undefined}>
                     <strong>{m.name || "未设置姓名"}</strong>
                     <small>{m.email}</small>
                   </td>
                   <td className="mono">{m.user_id}</td>
                   <td>{m.role}</td>
-                  {canManage && account.kind === "team" && (
+                  {isTeam && <td className="team-member-groups">{memberGroups(m.user_id)}</td>}
+                  {canManage && isTeam && (
                     <td>
                       {m.user_id !== session.user?.id && (
                         <div className="row-actions">
@@ -780,6 +813,7 @@ export function Members({
           )}
         </ResourceState>
       </Panel>
+      {isTeam && incomingPanel}
       {canManage && account.kind === "team" && (
         <Panel title="团队待处理邀请">
           <ResourceState resource={teamInvitations} empty="暂无待处理邀请">

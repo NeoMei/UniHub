@@ -23,4 +23,11 @@ test('generated offline commands run against the actual Python argparse contract
   expect(JSON.stringify(plan)).not.toContain('HEADLESS_MANAGEMENT_CLIENT_SECRET=');
  }finally{rmSync(directory,{recursive:true,force:true});}
 });
+test('prepares explicitly selected team group reads without selecting a billing product',()=>{
+ const scopes=['accounts:read','groups:read','groups:members:read'];
+ const plan=buildOnboardingPlan({...input,scopes});
+ expect(plan.publicClient.scopes).toEqual(scopes);
+ expect(plan.publicClient.billing_products).toEqual([]);
+ expect(plan.commands).toContain("--scope 'groups:read' --scope 'groups:members:read'");
+});
 test.each([{...input,product:'../bad'},{...input,callback:'https://evil.test/%20'},{...input,origin:'https://notes.example.com/'},{...input,issuer:'http://example.com'},{...input,scopes:['cash:payment']},{...input,application:'app-built-in'}])('rejects unsupported or unsafe public client input',value=>{expect(()=>buildOnboardingPlan(value)).toThrow();});

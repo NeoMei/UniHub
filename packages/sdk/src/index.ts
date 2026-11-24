@@ -32,6 +32,9 @@ export interface ManagedUser extends User {active:boolean;version:number}
 export interface Application extends ProductAccess {name:string;entry_url:string}
 export interface Account { id: string; kind: string; name: string; role: string }
 export interface Member { user_id: string; name: string; email: string; role: string }
+export interface TeamGroup { id: string; name: string }
+export interface TeamGroups { groups: TeamGroup[]; group_ids: string[] }
+export interface TeamGroupMembership { user_id: string; group_ids: string[] }
 export interface Invitation { id: string; account_id: string; recipient_id: string; role: string }
 export interface Balance { product_id: string; asset: 'CNY/6'; amount: IntegerString }
 export interface Recharge { id: string; account_id: string; product_id: string; amount: IntegerString; currency: string; merchant: string; operation_id?: string }
@@ -136,6 +139,12 @@ export class UniHubClient {
  capabilities(): Promise<Record<string,unknown>>{return this.request('GET','/v1/capabilities');}
  createTeam(name: string): Promise<Account>{return this.request('POST','/v1/accounts',{body:{name}});}
  members(account: string): Promise<Member[]>{return this.request('GET',this.path(account,'/members'));}
+ teamGroups(account: string): Promise<TeamGroups> {
+  return this.request('GET', this.path(account, '/groups'));
+ }
+ teamGroupMemberships(account: string): Promise<TeamGroupMembership[]> {
+  return this.request('GET', this.path(account, '/groups/memberships'));
+ }
  invitations(account?: string): Promise<Invitation[]>{return this.request('GET',account?this.path(account,'/invitations'):'/v1/invitations');}
  invite(account: string,userId: string,role: string): Promise<Invitation>{return this.request('POST',this.path(account,'/invitations'),{body:{user_id:userId,role}});}
 revokeInvitation(account: string,id: string): Promise<void>{return this.request('DELETE',this.path(account,`/invitations/${segment(id)}`));}

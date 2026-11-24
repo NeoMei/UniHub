@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.73"
+  "version": "0.4.74"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -651,6 +651,109 @@
               "required":
                 - "name"
               "additionalProperties": false
+  "/v1/accounts/{account}/groups":
+    "parameters": [{"$ref": "#/components/parameters/TeamGroupAccountId"}]
+    "get":
+      "operationId": "teamGroups"
+      "summary": "List team groups and the caller's memberships"
+      "description": "Requires current membership in the team. Lists the team's groups and the group IDs of the authenticated caller. Arrays are empty when no groups or memberships exist. Groups inherit the team account's access and do not create another billing account."
+      "security": [{"BearerAuth": []}]
+      "x-product-scopes": ["groups:read"]
+      "responses":
+        "200":
+          "description": "Team group directory and caller's group IDs"
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TeamGroups"}}}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+    "post":
+      "operationId": "createTeamGroup"
+      "summary": "Create a team group"
+      "description": "UniHub console only. Requires a current team owner or admin. A case-insensitively duplicate name in the same team returns 409."
+      "security": [{"BearerAuth": []}]
+      "requestBody":
+        "required": true
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TeamGroupName"}}}
+      "responses":
+        "201":
+          "description": "Created team group"
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TeamGroup"}}}
+        "400": {"$ref": "#/components/responses/Error"}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
+  "/v1/accounts/{account}/groups/memberships":
+    "parameters": [{"$ref": "#/components/parameters/TeamGroupAccountId"}]
+    "get":
+      "operationId": "teamGroupMemberships"
+      "summary": "Read the team group membership roster"
+      "description": "Requires current membership in the team. Returns each current team member's opaque user ID and group IDs. Ungrouped members have an empty group_ids array. Contains no names, email addresses, or account roles. Group names and roster reads are separately scoped."
+      "security": [{"BearerAuth": []}]
+      "x-product-scopes": ["groups:members:read"]
+      "responses":
+        "200":
+          "description": "Team member group memberships"
+          "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/TeamGroupMembership"}}}}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+  "/v1/accounts/{account}/groups/{group}":
+    "parameters":
+      - {"$ref": "#/components/parameters/TeamGroupAccountId"}
+      - {"$ref": "#/components/parameters/TeamGroupId"}
+    "patch":
+      "operationId": "renameTeamGroup"
+      "summary": "Rename a team group"
+      "description": "UniHub console only. Requires a current team owner or admin. A case-insensitively duplicate name in the same team returns 409."
+      "security": [{"BearerAuth": []}]
+      "requestBody":
+        "required": true
+        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TeamGroupName"}}}
+      "responses":
+        "200":
+          "description": "Updated team group"
+          "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TeamGroup"}}}
+        "400": {"$ref": "#/components/responses/Error"}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
+    "delete":
+      "operationId": "deleteTeamGroup"
+      "summary": "Delete a team group"
+      "description": "UniHub console only. Requires a current team owner or admin. Deletes the group and its group memberships."
+      "security": [{"BearerAuth": []}]
+      "responses":
+        "204": {"description": "Group deleted"}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
+  "/v1/accounts/{account}/groups/{group}/members/{member}":
+    "parameters":
+      - {"$ref": "#/components/parameters/TeamGroupAccountId"}
+      - {"$ref": "#/components/parameters/TeamGroupId"}
+      - {"$ref": "#/components/parameters/TeamGroupMemberId"}
+    "put":
+      "operationId": "addTeamGroupMember"
+      "summary": "Add an existing team member to a group"
+      "description": "UniHub console only. Requires a current team owner or admin. Membership is independent of the member's other groups and retains their team role."
+      "security": [{"BearerAuth": []}]
+      "responses":
+        "204": {"description": "Group membership present"}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
+    "delete":
+      "operationId": "removeTeamGroupMember"
+      "summary": "Remove a team member from a group"
+      "description": "UniHub console only. Requires a current team owner or admin. Removes this group assignment while retaining team membership."
+      "security": [{"BearerAuth": []}]
+      "responses":
+        "204": {"description": "Group membership absent"}
+        "401": {"$ref": "#/components/responses/Error"}
+        "403": {"$ref": "#/components/responses/Error"}
+        "404": {"$ref": "#/components/responses/Error"}
+        "409": {"$ref": "#/components/responses/Error"}
   "/v1/accounts/{account}/members":
     "get":
       "operationId": "members"
@@ -3041,6 +3144,24 @@
       "bearerFormat": "Operator OIDC access token"
       "description": "Distinct operator audience verified separately from product/console tokens. A write also requires the configured operator allowlist. Never embed an operator token in a product UI, configuration file or URL."
   "parameters":
+    "TeamGroupAccountId":
+      "name": "account"
+      "in": "path"
+      "required": true
+      "schema": {"type": "string"}
+      "description": "Team account ID discovered through GET /v1/accounts."
+    "TeamGroupId":
+      "name": "group"
+      "in": "path"
+      "required": true
+      "schema": {"type": "string"}
+      "description": "Opaque group ID within this team."
+    "TeamGroupMemberId":
+      "name": "member"
+      "in": "path"
+      "required": true
+      "schema": {"type": "string"}
+      "description": "Existing team member's UniHub user ID."
     "IdempotencyKey":
       "name": "Idempotency-Key"
       "in": "header"
@@ -3326,6 +3447,33 @@
         - "name"
         - "email"
         - "role"
+      "additionalProperties": false
+    "TeamGroup":
+      "type": "object"
+      "properties":
+        "id": {"type": "string"}
+        "name": {"type": "string", "minLength": 1, "maxLength": 80}
+      "required": ["id", "name"]
+      "additionalProperties": false
+    "TeamGroupName":
+      "type": "object"
+      "properties":
+        "name": {"type": "string", "description": "After trimming surrounding whitespace, the name must have 1 to 80 Unicode characters."}
+      "required": ["name"]
+      "additionalProperties": false
+    "TeamGroups":
+      "type": "object"
+      "properties":
+        "groups": {"type": "array", "items": {"$ref": "#/components/schemas/TeamGroup"}}
+        "group_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "description": "Group IDs of the authenticated caller."}
+      "required": ["groups", "group_ids"]
+      "additionalProperties": false
+    "TeamGroupMembership":
+      "type": "object"
+      "properties":
+        "user_id": {"type": "string"}
+        "group_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      "required": ["user_id", "group_ids"]
       "additionalProperties": false
     "Invitation":
       "type": "object"
