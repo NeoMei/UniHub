@@ -7,7 +7,7 @@ import { parseCash } from '../money';
 import { RateEditor } from './RateEditor';
 import { can, encoded, go, text } from './types';
 import type { AdminPrincipal, Row } from './types';
-import type { BillingProfile } from '../types';
+import type { BillingProfile, ManagedModelOperation, ManagedModels } from '../types';
 const productCreditScope = 'product_v1';
 const creditScopeField = {
  key: 'credit_scope', label: '积分范围', options: ['legacy', productCreditScope],
@@ -165,6 +165,37 @@ function OfferEditor({row,csrf,onSaved}:{row?:Row;csrf?:string;onSaved:()=>void}
    };
   }}/>;
 }
+const managedModelFields: { operation: ManagedModelOperation; label: string }[] = [
+ {operation:'chat',label:'对话（首项为默认）'},
+ {operation:'vision',label:'视觉'},
+ {operation:'speech',label:'语音合成'},
+ {operation:'transcription',label:'语音转写'},
+ {operation:'image-generation',label:'图片生成'},
+ {operation:'image-edit',label:'图片编辑'},
+ {operation:'video',label:'视频生成'},
+ {operation:'knowledge-embedding',label:'知识库向量化'},
+ {operation:'knowledge-rerank',label:'知识库重排'},
+ {operation:'ocr',label:'文字识别'},
+];
+
+function managedModelsFromFields(values:Record<string,string>, initial:Record<string,string>, current?:ManagedModels):ManagedModels | undefined {
+ const policy:ManagedModels = {...current};
+ let changed = false;
+ for (const {operation} of managedModelFields) {
+  const key = `managed_models_${operation}`;
+  if (values[key] === initial[key]) continue;
+  changed = true;
+  const input = values[key].trim();
+  if (!input) {
+   delete policy[operation];
+  } else {
+   policy[operation] = input === '[]' ? [] : input.split(',').map(id => id.trim());
+  }
+ }
+ if (!changed) return current;
+ return Object.keys(policy).length ? policy : undefined;
+}
+
 function ProfileEditor({row,csrf,onSaved}:{row:Row;csrf?:string;onSaved:()=>void}) {
  // The admin list adds audit metadata to the profile and permits implicit legacy rows.
  const current=row as Pick<BillingProfile,'product_id'|'version'> & Partial<BillingProfile>;
@@ -173,7 +204,11 @@ function ProfileEditor({row,csrf,onSaved}:{row:Row;csrf?:string;onSaved:()=>void
  const yes=(v:unknown)=>v===true?'yes':'no';
  const modes=Array.isArray(usage.funding_modes)?usage.funding_modes.join(','):'none';
  const initial={subscription_enabled:yes(current.subscription?.enabled),included_credits_enabled:yes(current.included_credits?.enabled),addons_enabled:yes(current.addons?.enabled),usage_enabled:yes(usage.enabled),require_subscription:yes(usage.require_subscription),require_subscription_for_credits:yes(usage.require_subscription_for_credits),funding_modes:modes||'none',default_funding_mode:String(usage.default_funding_mode||'none'),models:Array.isArray(usage.models)?usage.models.join(','):'',credit_scope:current.credit_scope||'legacy',conversion_action:'preserve',conversion_version:String(conversion?.version||''),conversion_numerator:String(conversion?.numerator||''),conversion_denominator:String(conversion?.denominator||''),conversion_rounding:String(conversion?.rounding||'lr-cumulative-ceil-v1')};
- return <ActionForm key={`${row.product_id}:${row.version}`} title="更新计费配置" path={`/admin/v1/billing-profiles/${encoded(row.product_id)}`} method="PUT" csrf={csrf} onSaved={onSaved} initial={initial}
+ const managedInitial = Object.fromEntries(managedModelFields.map(({operation}) => {
+  const models = usage.managed_models?.[operation];
+  return [`managed_models_${operation}`, models === undefined ? '' : models.join(', ') || '[]'];
+ }));
+ return <ActionForm key={`${row.product_id}:${row.version}`} title="更新计费配置" path={`/admin/v1/billing-profiles/${encoded(row.product_id)}`} method="PUT" csrf={csrf} onSaved={onSaved} initial={{...initial,...managedInitial}}
  fields={values => [
   creditScopeField,
   {key:'subscription_enabled',label:'订阅能力',options:['yes','no']},
@@ -185,6 +220,10 @@ function ProfileEditor({row,csrf,onSaved}:{row:Row;csrf?:string;onSaved:()=>void
   {key:'funding_modes',label:'支持的资金模式',options:['credits','prepaid_cash','credits,prepaid_cash','none']},
   {key:'default_funding_mode',label:'默认资金模式',options:['credits','prepaid_cash','none'],required:false},
   {key:'models',label:'模型白名单（逗号分隔，未改动保留原策略）',required:false},
+  ...(current.product_id === 'superwagie' ? managedModelFields.map(({operation,label}) => ({
+   key:`managed_models_${operation}`, label:`托管模型 · ${label}（${operation}）`, required:false, maxLength:32 * 130,
+   placeholder:'留空沿用旧规则，[] 禁用，多个公开模型 ID 按优先顺序用逗号分隔',
+  })) : []),
   ...(current.product_id === 'superwagie' || conversion || values.credit_scope === productCreditScope ? [
    {key:'conversion_action',label:'原生 CREDIT 换算操作（preserve 保留、update 更新、remove 移除）',options:['preserve','update','remove']},
    {key:'conversion_version',label:'原生换算版本（参数变更须使用新标识）',required:false},
@@ -201,7 +240,9 @@ function ProfileEditor({row,csrf,onSaved}:{row:Row;csrf?:string;onSaved:()=>void
    included_credits:{enabled:v.included_credits_enabled==='yes'},
    addons:{enabled:v.addons_enabled==='yes'},
    native_credit_conversion:v.conversion_action==='update'?{version:v.conversion_version,numerator:v.conversion_numerator,denominator:v.conversion_denominator,rounding:v.conversion_rounding}:v.conversion_action==='remove'?null:conversion,
-   usage:{enabled:v.usage_enabled==='yes',require_subscription:v.require_subscription==='yes',require_subscription_for_credits:v.require_subscription_for_credits==='yes',funding_modes:v.funding_modes==='none'?[]:v.funding_modes.split(',').filter(Boolean),default_funding_mode:v.default_funding_mode==='none'?'':v.default_funding_mode,models:v.models===initial.models?usage.models??null:v.models.trim()?v.models.split(',').map(s=>s.trim()).filter(Boolean):null},
+   usage:{
+    ...(current.product_id === 'superwagie' ? {managed_models:managedModelsFromFields(v,managedInitial,usage.managed_models)} : {}),
+    enabled:v.usage_enabled==='yes',require_subscription:v.require_subscription==='yes',require_subscription_for_credits:v.require_subscription_for_credits==='yes',funding_modes:v.funding_modes==='none'?[]:v.funding_modes.split(',').filter(Boolean),default_funding_mode:v.default_funding_mode==='none'?'':v.default_funding_mode,models:v.models===initial.models?usage.models??null:v.models.trim()?v.models.split(',').map(s=>s.trim()).filter(Boolean):null},
   };
   return {version:current.version,profile};
  }}/>;

@@ -221,7 +221,7 @@ def validate_billing_profiles(items):
         usage = item['usage']
         usage_fields = {'enabled', 'require_subscription', 'funding_modes', 'default_funding_mode'}
         require(isinstance(usage, dict) and usage_fields <= set(usage)
-                and set(usage) <= usage_fields | {'models', 'require_subscription_for_credits'})
+                and set(usage) <= usage_fields | {'models', 'require_subscription_for_credits', 'managed_models'})
         require(type(usage['enabled']) is bool and type(usage['require_subscription']) is bool)
         credit_subscription = usage.get('require_subscription_for_credits', False)
         require(type(credit_subscription) is bool)
@@ -230,6 +230,17 @@ def validate_billing_profiles(items):
             require(models is None or (isinstance(models, list) and len(models) <= 32
                                        and all(isinstance(model, str) and 0 < len(model) <= 128 for model in models)
                                        and len(set(models)) == len(models)))
+        managed_models = usage.get('managed_models')
+        if managed_models is not None:
+            operations = {'chat', 'vision', 'speech', 'transcription', 'image-generation', 'image-edit',
+                          'video', 'knowledge-embedding', 'knowledge-rerank', 'ocr'}
+            require(product == 'superwagie' and isinstance(managed_models, dict)
+                    and set(managed_models) <= operations)
+            for ids in managed_models.values():
+                require(isinstance(ids, list) and len(ids) <= 32
+                        and all(isinstance(model, str) and re.fullmatch(r'[A-Za-z0-9._:/-]{1,128}', model)
+                                for model in ids)
+                        and len(set(ids)) == len(ids))
         modes = usage['funding_modes']
         require(isinstance(modes, list) and all(isinstance(mode, str) and mode in {'credits', 'prepaid_cash'} for mode in modes))
         require(len(set(modes)) == len(modes) and isinstance(usage['default_funding_mode'], str))

@@ -21,6 +21,10 @@ export type NativeCreditConversion = {
   denominator: string;
   rounding: string;
 };
+export type ManagedModelOperation =
+  | 'chat' | 'vision' | 'speech' | 'transcription' | 'image-generation'
+  | 'image-edit' | 'video' | 'knowledge-embedding' | 'knowledge-rerank' | 'ocr';
+export type ManagedModels = Partial<Record<ManagedModelOperation, string[]>>;
 export type BillingProfile = {
   credit_scope?: string;
   native_credit_conversion?: NativeCreditConversion | null;
@@ -36,6 +40,7 @@ export type BillingProfile = {
     funding_modes: string[];
     default_funding_mode: string;
     models?: string[] | null;
+    managed_models?: ManagedModels;
   };
 };
 export type Product = {
