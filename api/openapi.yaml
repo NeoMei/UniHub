@@ -1,7 +1,7 @@
 "openapi": "3.1.0"
 "info":
   "title": "UniHub Headless Product API"
-  "version": "0.4.71"
+  "version": "0.4.72"
   "description": "Product-owned JSON UI and backend integration. Each client has its own exact access-token audience and approved registry scopes/origins/callbacks/BillingProducts. Scopes are server registry policy, not OAuth token-scope claims. Amounts/counts/usage are integer strings; no implicit currency/credit conversion. Formance is authoritative. No automatic financial retries. API errors never expose provider credentials. Browser CORS exact registered origins; no Allow-Credentials; preflight permits only Authorization, Content-Type, Idempotency-Key. Approved product clients may use one-use rotating refresh tokens; no public GET client configuration exists. Billing profiles compose subscriptions, credits, addons and prepaid CNY/6 usage per product. Product reads never permit commercial configuration writes; operator audience is separate. Mixed-asset summaries have no single charged total."
 "servers":
   -
@@ -1070,6 +1070,30 @@
           "$ref": "#/components/responses/Error"
       "x-product-scopes":
         - "catalog:read"
+  "/v1/products/{product}/managed-models":
+    "get":
+      "operationId": "publicProductManagedModels"
+      "summary": "Read product managed model policy before sign-in"
+      "description": "Returns the current billing profile version and its public managed model IDs for an enabled product."
+      "security": []
+      "parameters":
+        - {"name": "product", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}}
+      "responses":
+        "200":
+          "description": "Public product managed model policy"
+          "content":
+            "application/json":
+              "schema":
+                "type": "object"
+                "required": ["product_id", "version", "managed_models"]
+                "additionalProperties": false
+                "properties":
+                  "product_id": {"type": "string"}
+                  "version": {"type": "integer", "format": "int64", "minimum": 0}
+                  "managed_models":
+                    "anyOf": [{"$ref": "#/components/schemas/ManagedModels"}, {"type": "null"}]
+        "404": {"$ref": "#/components/responses/Error"}
+        "503": {"$ref": "#/components/responses/Error"}
   "/v1/products/{product}/billing-profile":
     "get":
       "operationId": "billingProfile"
@@ -3077,6 +3101,8 @@
         "pricing_source": {"type":"string"}
         "native_credit_conversion": {"$ref":"#/components/schemas/NativeCreditConversion"}
         "credential_version": {"type":"integer","minimum":1}
+        "managed_models": {"$ref": "#/components/schemas/ManagedModels"}
+        "managed_models_version": {"type": "integer", "format": "int64", "minimum": 1, "description": "Current billing profile version when managed_models is included for SuperWagie product_v1 discovery."}
         "account_id": {"type": "string"}
         "instance_id": {"type": "string"}
         "origin_product_id": {"type": "string"}
@@ -4624,6 +4650,18 @@
           "items": {"type": "string"}
       "required": ["product_id", "asset", "allowlist", "published_rates", "missing_models", "extra_models", "duplicate_models"]
       "additionalProperties": false
+    "ManagedModels":
+      "type": "object"
+      "description": "SuperWagie product_v1 policy. Entries are ordered public model IDs. chat[0] is the default chat model. Omitted operations inherit legacy behavior. An empty list denies its operation."
+      "propertyNames":
+        "enum": ["chat", "vision", "speech", "transcription", "image-generation", "image-edit", "video", "knowledge-embedding", "knowledge-rerank", "ocr"]
+      "additionalProperties":
+        "type": "array"
+        "maxItems": 32
+        "uniqueItems": true
+        "items":
+          "type": "string"
+          "pattern": '^[A-Za-z0-9._:/-]{1,128}$'
     "UsagePolicy":
       "type": "object"
       "properties":
@@ -4636,6 +4674,8 @@
           "maxItems": 32
           "uniqueItems": true
           "description": "Product model allowlist. Omitted or null retains the legacy catalog; an explicit empty array denies all models. New credentials require exactly one published rate per requested model in the selected asset."
+        "managed_models":
+          "anyOf": [{"$ref": "#/components/schemas/ManagedModels"}, {"type": "null"}]
         "enabled":
           "type": "boolean"
         "require_subscription":
@@ -4690,6 +4730,8 @@
           "$ref": "#/components/schemas/BillingComponent"
         "usage":
           "$ref": "#/components/schemas/UsagePolicy"
+        "credit_scope":
+          "enum": ["", "product_v1"]
         "native_credit_conversion":
           "anyOf": [{"$ref":"#/components/schemas/NativeCreditConversion"},{"type":"null"}]
       "required":

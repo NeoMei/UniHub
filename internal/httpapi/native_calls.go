@@ -18,6 +18,7 @@ func (s *api) nativeCallRoutes(m *http.ServeMux) {
 			RequestDigest        string              `json:"request_digest"`
 			Model                string              `json:"model"`
 			WireOperation        string              `json:"wire_operation"`
+			ManagedOperation     string              `json:"managed_operation,omitempty"`
 			Quote                billing.NativeQuote `json:"quote"`
 			CreditScope          string              `json:"credit_scope"`
 			ProductAuthorization string              `json:"product_authorization"`
@@ -45,7 +46,7 @@ func (s *api) nativeCallRoutes(m *http.ServeMux) {
 		}
 		out, e := s.options.Billing.ReserveNative(r.Context(), "llmrouter", billing.NativeReserveRequest{
 			ReserveRequest: billing.ReserveRequest{CredentialID: grant.ID, CallID: body.CallID, ActorID: grant.ActorID, AccountID: grant.AccountID, OriginProductID: grant.OriginProductID, RequestDigest: body.RequestDigest},
-			Model:          body.Model, WireOperation: body.WireOperation, InstanceID: grant.InstanceID,
+			Model:          body.Model, WireOperation: body.WireOperation, ManagedOperation: body.ManagedOperation, InstanceID: grant.InstanceID,
 			TaskID: body.TaskID, CredentialVersion: grant.CredentialVersion, Quote: body.Quote,
 			CreditScope: grant.CreditScope, SourceVerified: grant.SourceVerified, MinimumCreditAmount: body.MinimumCreditAmount,
 		})

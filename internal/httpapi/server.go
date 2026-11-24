@@ -481,6 +481,8 @@ func writeError(w http.ResponseWriter, e error) {
 	switch {
 	case errors.Is(e, errRuntimeActor):
 		fail(w, 401, "actor_proof_required")
+	case errors.Is(e, billing.ErrManagedModelNotAllowed):
+		fail(w, 403, "managed_model_not_allowed")
 	case errors.Is(e, accounts.ErrForbidden):
 		fail(w, 403, "forbidden")
 	case errors.Is(e, modelaccess.ErrCredential):

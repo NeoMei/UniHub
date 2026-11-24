@@ -89,6 +89,7 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 	m.HandleFunc("POST /internal/v1/model-credentials/verify", s.serviceAuthenticated(func(w http.ResponseWriter, r *http.Request) error {
 		var body struct {
 			WireOperation        string `json:"wire_operation"`
+			ManagedOperation     string `json:"managed_operation,omitempty"`
 			Token                string `json:"token"`
 			Model                string `json:"model"`
 			Purpose              string `json:"purpose"`
@@ -129,6 +130,11 @@ func (s *api) modelRoutes(m *http.ServeMux, add func(string, action)) {
 		}
 		if e = s.authorizeProductModelGrant(&v, body.ProductAuthorization); e != nil {
 			return e
+		}
+		if body.Purpose == "" && v.ModelScope == modelaccess.ScopeLLMRouterAvailable {
+			if e = b.AuthorizeManagedModel(r.Context(), v.OriginProductID, v.CreditScope, body.Model, body.WireOperation, body.ManagedOperation); e != nil {
+				return e
+			}
 		}
 		return respond(w, 200, modelCredentialVerificationResponse{Claims: v, ActorExpiresAt: actorExpiresAt})
 	}))

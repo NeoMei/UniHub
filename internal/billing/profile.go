@@ -22,12 +22,13 @@ type BillingComponent struct {
 	Enabled bool `json:"enabled"`
 }
 type UsagePolicy struct {
-	RequireSubscriptionForCredits bool     `json:"require_subscription_for_credits"`
-	Models                        []string `json:"models"` // nil retains legacy catalog; empty explicitly denies all models.
-	Enabled                       bool     `json:"enabled"`
-	RequireSubscription           bool     `json:"require_subscription"`
-	FundingModes                  []string `json:"funding_modes"`
-	DefaultFundingMode            string   `json:"default_funding_mode"`
+	RequireSubscriptionForCredits bool          `json:"require_subscription_for_credits"`
+	Models                        []string      `json:"models"` // nil retains legacy catalog; empty explicitly denies all models.
+	ManagedModels                 ManagedModels `json:"managed_models,omitzero"`
+	Enabled                       bool          `json:"enabled"`
+	RequireSubscription           bool          `json:"require_subscription"`
+	FundingModes                  []string      `json:"funding_modes"`
+	DefaultFundingMode            string        `json:"default_funding_mode"`
 }
 type BillingProfile struct {
 	CreditScope            string            `json:"credit_scope,omitempty"`
@@ -57,6 +58,9 @@ func (p BillingProfile) Validate() error {
 			return ErrInvalid
 		}
 		seenModels[m] = true
+	}
+	if p.Usage.ManagedModels != nil && (p.ProductID != "superwagie" || !p.Usage.ManagedModels.valid()) {
+		return ErrInvalid
 	}
 	modes := map[string]bool{}
 	for _, mode := range p.Usage.FundingModes {

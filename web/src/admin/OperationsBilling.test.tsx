@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
 import { Operations } from "./Operations";
+import type { BillingProfile } from "../types";
 
 const principal = { user_id: "root", roles: ["super_admin"], permissions: ["*"], enabled: true, version: 1 };
 const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -280,4 +281,35 @@ test("paid unfulfilled liability stays in review without a reject action", async
   render(<Operations resource="refunds" principal={principal} csrf="csrf" />);
   await screen.findByText(/已收款但尚未履约/);
   expect(screen.queryByRole("button", { name: "拒绝退款申请" })).toBeNull();
+});
+
+test('SuperWagie managed models preserve order and distinguish inherited and disabled operations', async () => {
+ const writes: { profile: BillingProfile }[] = [];
+ const managed = { chat: ['deepseek-flash', 'fixture-fallback'], vision: [] };
+ let profile: BillingProfile = { ...nativeProfile, usage: { ...nativeProfile.usage, managed_models: managed } };
+ vi.stubGlobal('fetch', vi.fn(async (_path: string, options: RequestInit) => {
+  if (options.method === 'PUT') {
+   const payload = JSON.parse(String(options.body));
+   writes.push(payload);
+   profile = { ...payload.profile, version: profile.version + 1 };
+   return json({});
+  }
+  return json({ items: [profile], total: 1 });
+ }));
+ render(<Operations resource="billing-profiles" principal={principal} csrf="fixture-csrf" />);
+ fireEvent.click(await screen.findByRole('button', { name: '更新计费配置' }));
+ expect((screen.getByLabelText(/托管模型 · 对话/) as HTMLInputElement).value).toBe('deepseek-flash, fixture-fallback');
+ expect((screen.getByLabelText(/托管模型 · 视觉/) as HTMLInputElement).value).toBe('[]');
+ fireEvent.change(screen.getByLabelText('加量包能力'), { target: { value: 'no' } });
+ fireEvent.change(screen.getByLabelText('操作原因'), { target: { value: 'unrelated' } });
+ fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+ await waitFor(() => expect(writes[0]?.profile.usage.managed_models).toEqual(managed));
+ await screen.findByRole('cell', { name: '3' });
+ fireEvent.click(await screen.findByRole('button', { name: '更新计费配置' }));
+ fireEvent.change(screen.getByLabelText(/托管模型 · 对话/), { target: { value: 'fixture-default, deepseek-flash' } });
+ fireEvent.change(screen.getByLabelText(/托管模型 · 视觉/), { target: { value: '' } });
+ fireEvent.change(screen.getByLabelText(/托管模型 · 语音合成/), { target: { value: '[]' } });
+ fireEvent.change(screen.getByLabelText('操作原因'), { target: { value: 'change policy' } });
+ fireEvent.click(screen.getByRole('button', { name: '确认提交' }));
+ await waitFor(() => expect(writes[1]?.profile.usage.managed_models).toEqual({ chat: ['fixture-default', 'deepseek-flash'], speech: [] }));
 });

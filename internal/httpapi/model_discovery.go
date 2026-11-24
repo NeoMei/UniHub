@@ -101,6 +101,20 @@ func (s *api) modelDiscoveryRoute(w http.ResponseWriter, r *http.Request, u acco
 	if e != nil {
 		return e
 	}
+	out := struct {
+		modelaccess.Discovery
+		ManagedModels        billing.ManagedModels `json:"managed_models,omitzero"`
+		ManagedModelsVersion int64                 `json:"managed_models_version,omitempty"`
+	}{Discovery: discovery}
+	if discovery.OriginProductID == "superwagie" && discovery.CreditScope == billing.ProductCreditScopeV1 && discovery.ModelScope == modelaccess.ScopeLLMRouterAvailable {
+		p, err := s.options.Billing.Profile(r.Context(), discovery.OriginProductID)
+		if err != nil {
+			return err
+		}
+		if p.Usage.ManagedModels != nil {
+			out.ManagedModels, out.ManagedModelsVersion = p.Usage.ManagedModels, p.Version
+		}
+	}
 	setDiscoveryHeaders(w, discovery)
-	return respond(w, http.StatusOK, discovery)
+	return respond(w, http.StatusOK, out)
 }

@@ -143,6 +143,27 @@ class BillingDeploymentTests(unittest.TestCase):
                                              'numerator': '146', 'denominator': '1',
                                              'rounding': 'lr-cumulative-ceil-v1'}}
 
+    def test_managed_model_policy_stages_in_order(self):
+        profile = self.native_profile()
+        profile['usage']['managed_models'] = {
+            'chat': ['deepseek-flash', 'fixture/backup:free'],
+            'vision': [],
+        }
+        self.stage([profile])
+        bundle.prepare(self.root, self.release, {})
+        self.assertEqual(json.loads(self.public.read_text()), [profile])
+
+    def test_managed_model_policy_rejects_invalid_operations_and_ids(self):
+        for invalid in [
+            [], {'chat': None}, {'chat': ['a', 'a']}, {'chat': ['a' * 129]},
+            {'chat': ['a'] * 33}, {'chat': ['model@version']}, {'custom': ['a']},
+        ]:
+            with self.subTest(invalid=invalid):
+                profile = self.native_profile()
+                profile['usage']['managed_models'] = invalid
+                with self.assertRaises(bundle.DeploymentError):
+                    bundle.validate_billing_profiles([profile])
+
     def test_native_conversion_and_credit_subscription_roundtrip(self):
         profile = self.native_profile()
         self.stage([profile])

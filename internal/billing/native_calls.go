@@ -43,6 +43,9 @@ type NativeQuote struct {
 
 type NativeReserveRequest struct {
 	ReserveRequest
+	// The trusted gateway derives this from the request body already bound
+	// by RequestDigest. Exclude it from the frozen reserve replay hash.
+	ManagedOperation    string      `json:"-"`
 	MinimumCreditAmount string      `json:"minimum_credit_amount,omitempty"`
 	CreditScope         string      `json:"credit_scope,omitempty"`
 	SourceVerified      bool        `json:"source_verified,omitempty"`
@@ -252,7 +255,14 @@ func (s *Service) ReserveNative(ctx context.Context, service string, r NativeRes
 			if e = tx.QueryRow(ctx, `SELECT id FROM products WHERE id=$1 FOR SHARE`, r.OriginProductID).Scan(&productID); e != nil {
 				return e
 			}
-			ready, e := s.NativeCreditsReadinessForScopeOn(ctx, tx, r.OriginProductID, r.CreditScope)
+			profile, e := s.ProfileOn(ctx, tx, r.OriginProductID)
+			if e != nil {
+				return e
+			}
+			if e = profile.authorizeManagedModel(r.CreditScope, r.Model, r.WireOperation, r.ManagedOperation); e != nil {
+				return e
+			}
+			ready, e := s.nativeCreditReadinessForProfile(ctx, tx, profile, r.CreditScope)
 			if e != nil {
 				return e
 			}
