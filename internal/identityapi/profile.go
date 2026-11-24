@@ -80,6 +80,16 @@ func (s *Server) profileIdentity(ctx context.Context, userID string) (profileIde
 	return out, nil
 }
 
+// ProductOwnsCredentials reports whether the identity still relies entirely on
+// an original product for its account credentials.
+func (s *Server) ProductOwnsCredentials(ctx context.Context, userID string) bool {
+	if _, err := s.profileIdentity(ctx, userID); !errors.Is(err, ErrUnavailable) {
+		return false
+	}
+	_, err := s.nativeProfile(ctx, userID)
+	return err == nil
+}
+
 func (s *Server) providerUser(ctx context.Context, id profileIdentity) (providerUser, error) {
 	if s.client == nil || s.opts.Production {
 		return providerUser{}, ErrUnavailable

@@ -52,6 +52,7 @@ type Options struct {
 }
 type ProfileService interface {
 	Profile(context.Context, string) (identityapi.Profile, error)
+	ProductOwnsCredentials(context.Context, string) bool
 	UpdateDisplayName(context.Context, string, string) (identityapi.Profile, error)
 	ChangePassword(context.Context, string, string, string) error
 	SessionAllowed(context.Context, string) bool
@@ -67,6 +68,13 @@ type api struct {
 	options  Options
 }
 type action func(http.ResponseWriter, *http.Request, accounts.User) error
+
+type oidcAuthenticationKey struct{}
+
+func hasOIDCAuthentication(ctx context.Context) bool {
+	authenticated, _ := ctx.Value(oidcAuthenticationKey{}).(bool)
+	return authenticated
+}
 
 func New(v auth.Verifier, a *accounts.Store, w *wallet.Service, o Options) http.Handler {
 	if o.ProductUsers != nil {
@@ -466,6 +474,11 @@ func (s *api) authenticated(next action) http.HandlerFunc {
 		if h != "" && s.options.Identity != nil && !s.options.Identity.SessionAllowed(r.Context(), strings.TrimPrefix(h, "Bearer ")) {
 			fail(w, 401, "unauthorized")
 			return
+		}
+		// Bearers passed an OIDC verifier and any policy for their audience.
+		// Browser identities can prove the same provenance only at the console.
+		if h != "" || c.CentralSession {
+			r = r.WithContext(context.WithValue(r.Context(), oidcAuthenticationKey{}, true))
 		}
 		if e = next(w, r, u); e != nil {
 			writeError(w, e)

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, expect, test, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
 import { AdminConsole } from './AdminConsole';
 
 const endpoint = '/admin/v1/application-integrations';
@@ -56,6 +56,16 @@ function mockApi(handler: (path: string, options?: RequestInit) => Response) {
   return fetcher;
 }
 
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
+});
+
+afterAll(() => {
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'showModal');
+  Reflect.deleteProperty(HTMLDialogElement.prototype, 'close');
+});
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -94,7 +104,7 @@ test('super_admin can navigate to applications and view a deployment without mut
   expect(screen.getByText(fields.callback_url)).toBeTruthy();
   expect(screen.getByText('bridge.wiki.default')).toBeTruthy();
   expect(screen.getAllByText('未验证')).toHaveLength(2);
-  expect(screen.queryByRole('button', { name: /签发服务凭据|编辑草稿|启用试点|正式发布|暂停接入/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /签发服务凭据|编辑草稿|编辑接入配置|启用试点|正式发布|暂停接入/ })).toBeNull();
 });
 
 test('validates a draft and creates it with exact URLs and the default instance', async () => {
@@ -136,7 +146,33 @@ test('saves a draft with its latest version and keeps its identifiers fixed', as
   ]);
 });
 
-test('issues and copies a single-view credential and removes it from view when the admin dismisses it', async () => {
+test('saves a paused callback correction and uses the API response to block resuming without a new credential', async () => {
+  const paused = {
+    ...draft, state: 'paused', version: 9, credential_configured: true, runtime_configured: true,
+    inbound_verified: true, outbound_verified: true,
+  };
+  const callbackURL = 'https://wiki.example.test/connect/new-return';
+  const fetcher = mockApi((_, options) => options?.method === 'PUT' ? respond({
+    ...paused, callback_url: callbackURL, version: 10, credential_configured: false, runtime_configured: false,
+    inbound_verified: false, outbound_verified: false,
+  }) : respond([paused]));
+  mount();
+  fireEvent.click(await screen.findByRole('button', { name: /查看.*示例知识库/ }));
+  click('编辑接入配置');
+  expect(screen.queryByRole('textbox', { name: '产品标识' })).toBeNull();
+  expect(screen.queryByRole('textbox', { name: '实例标识' })).toBeNull();
+  fill('精确回调地址', callbackURL);
+  click('保存接入配置');
+  expect(await screen.findByText(callbackURL)).toBeTruthy();
+  expect(screen.getByRole('button', { name: '恢复试点' })).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: '签发服务凭据' })).toHaveProperty('disabled', false);
+  expect(screen.getAllByText('未验证')).toHaveLength(2);
+  expect(submitted(fetcher)).toEqual([
+    { path: appPath, method: 'PUT', csrf: 'test-csrf', body: { ...fields, callback_url: callbackURL, version: 9 } },
+  ]);
+});
+
+test('issues and copies a single-view credential and removes it after acknowledgment', async () => {
   const token = 'example-single-view-token';
   const copy = vi.fn(async () => {});
   vi.stubGlobal('navigator', Object.assign(Object.create(window.navigator), { clipboard: { writeText: copy } }));
@@ -154,7 +190,7 @@ test('issues and copies a single-view credential and removes it from view when t
     { path: appPath + '/credential', method: 'POST', csrf: 'test-csrf', body: { version: 1 } },
   ]);
   expect(storageWrite).not.toHaveBeenCalled();
-  click('隐藏凭据');
+  click('已保存凭据');
   expect(screen.queryByDisplayValue(token)).toBeNull();
   expect(screen.getByRole('button', { name: '启用试点' })).toHaveProperty('disabled', false);
 });
@@ -219,11 +255,14 @@ test('keeps unsaved changes when a save conflicts and allows cancel after a refr
   expect(submitted(fetcher)).toHaveLength(1);
 });
 
-test('a refreshed application list never reveals the issued token again', async () => {
-  const token = 'example-refresh-invalidates-reveal';
-  const issued = { ...draft, version: 2, credential_configured: true };
-  let current = draft;
-  mockApi((path) => {
+test('requires confirmation before reissue and acknowledgment before refresh or navigation', async () => {
+  const token = 'example-rotation-token';
+  const paused = { ...draft, state: 'paused', credential_configured: true, version: 5 };
+  const issued = { ...paused, version: 6 };
+  let current = paused;
+  const navigation = new EventTarget();
+  vi.stubGlobal('navigation', navigation);
+  const fetcher = mockApi((path) => {
     if (path.endsWith('/credential')) {
       current = issued;
       return respond({ application: issued, token });
@@ -232,10 +271,35 @@ test('a refreshed application list never reveals the issued token again', async 
   });
   mount();
   fireEvent.click(await screen.findByRole('button', { name: /查看.*示例知识库/ }));
-  click('签发服务凭据');
+  click('重新签发服务凭据');
+  expect(screen.getByRole('dialog')).toBeTruthy();
+  expect(submitted(fetcher)).toEqual([]);
+  click('取消');
+  expect(screen.queryByRole('dialog')).toBeNull();
+  expect(submitted(fetcher)).toEqual([]);
+
+  click('重新签发服务凭据');
+  click('确认重新签发');
   expect(await screen.findByDisplayValue(token)).toBeTruthy();
+  expect(submitted(fetcher)).toEqual([
+    { path: appPath + '/credential', method: 'POST', csrf: 'test-csrf', body: { version: 5 } },
+  ]);
+  expect(screen.getByRole('button', { name: '刷新状态' })).toHaveProperty('disabled', true);
+  fireEvent.click(screen.getByRole('link', { name: '接入手册' }));
+  expect(window.location.pathname).toBe('/admin/applications');
+  expect(screen.getByDisplayValue(token)).toBeTruthy();
+  const traverse = Object.assign(new Event('navigate', { cancelable: true }), {
+    destination: { sameDocument: true, url: new URL('/admin/onboarding', window.location.href).href },
+  });
+  expect(navigation.dispatchEvent(traverse)).toBe(false);
+  const unload = new Event('beforeunload', { cancelable: true });
+  window.dispatchEvent(unload);
+  expect(unload.defaultPrevented).toBe(true);
+
+  click('已保存凭据');
   click('刷新状态');
-  await screen.findByRole('row', { name: /示例知识库/ });
+  await screen.findByRole('row', { name: /示例知识库.*已暂停/ });
   expect(screen.queryByDisplayValue(token)).toBeNull();
-  expect(screen.getByRole('button', { name: '重新签发服务凭据' })).toHaveProperty('disabled', false);
+  fireEvent.click(screen.getByRole('link', { name: '接入手册' }));
+  expect(screen.getByRole('heading', { name: '应用接入手册' })).toBeTruthy();
 });

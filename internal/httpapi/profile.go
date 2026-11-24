@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"unihub/internal/accounts"
+	"unihub/internal/auth"
 	"unihub/internal/identityapi"
 )
 
@@ -30,6 +31,18 @@ func profileError(w http.ResponseWriter, err error) error {
 		fail(w, 503, "identity_unavailable")
 	}
 	return nil
+}
+
+func (s *api) centralCredentialMutation(next action) action {
+	return func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+		if hasOIDCAuthentication(r.Context()) {
+			return next(w, r, u)
+		}
+		if auth.ProductBrowserSession(r.Context()) && s.options.Identity.ProductOwnsCredentials(r.Context(), u.ID) {
+			return profileError(w, identityapi.ErrManagedByProduct)
+		}
+		return accounts.ErrForbidden
+	}
 }
 
 func (s *api) profileRoutes(add func(string, action)) {
@@ -58,7 +71,7 @@ func (s *api) profileRoutes(add func(string, action)) {
 		}
 		return respond(w, 200, v)
 	})
-	add("POST /v1/me/password", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
+	add("POST /v1/me/password", s.centralCredentialMutation(func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 		var body struct {
 			CurrentPassword string `json:"current_password"`
 			NewPassword     string `json:"new_password"`
@@ -71,7 +84,7 @@ func (s *api) profileRoutes(add func(string, action)) {
 		}
 		w.WriteHeader(204)
 		return nil
-	})
+	}))
 	if a, ok := s.options.Identity.(avatarService); ok {
 		add("GET /v1/me/avatar", func(w http.ResponseWriter, r *http.Request, u accounts.User) error {
 			contentType, data, err := a.Avatar(r.Context(), u.ID)

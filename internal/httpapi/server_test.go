@@ -33,6 +33,7 @@ type identityProfile = identityapi.Profile
 func (f *profileFixture) Profile(context.Context, string) (identityProfile, error) {
 	return f.profile, nil
 }
+func (f *profileFixture) ProductOwnsCredentials(context.Context, string) bool { return false }
 func (f *profileFixture) UpdateDisplayName(_ context.Context, _ string, name string) (identityProfile, error) {
 	f.profile.DisplayName = name
 	f.profile.Version = "2"
@@ -227,6 +228,9 @@ func TestProfileProductScopesAndBoundedAvatar(t *testing.T) {
 	}
 	if w = call(h, "PUT", "/v1/me/avatar", "product-alice", `{"content_type":"image/png","data_base64":"`+strings.Repeat("A", 1<<20)+`"}`, ""); w.Code != 413 {
 		t.Fatalf("oversized avatar %d %s", w.Code, w.Body)
+	}
+	if w = call(h, "POST", "/v1/me/password", "product-alice", `{"current_password":"old","new_password":"new"}`, ""); w.Code != 204 {
+		t.Fatalf("scoped product OIDC password change: %d %s", w.Code, w.Body)
 	}
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { request } from '../api';
 import { go } from './types';
-import { Notice, Panel, ResourceState, Table } from '../ui';
+import { Modal, Notice, Panel, ResourceState, Table } from '../ui';
 import type { Resource } from '../useResource';
 import './application-integrations.css';
 
@@ -48,6 +48,7 @@ type Application = ApplicationFields & {
   hub_origin: string;
 };
 type Editor = { application?: Application };
+type CredentialFlow = { step: 'confirm' | 'issuing' } | { step: 'reveal'; token: string };
 
 const applicationPath = ({ product_id, instance_id }: Application) =>
   `${endpoint}/${encodeURIComponent(product_id)}/${encodeURIComponent(instance_id)}`;
@@ -69,7 +70,7 @@ function absoluteURL(value: string) {
   }
 }
 
-function DraftForm({ application, busy, cannotSave, stale, error, onCancel, onSave }: {
+function IntegrationForm({ application, busy, cannotSave, stale, error, onCancel, onSave }: {
   application?: Application;
   busy: boolean;
   cannotSave: boolean;
@@ -83,6 +84,7 @@ function DraftForm({ application, busy, cannotSave, stale, error, onCancel, onSa
   const hintId = useId();
   const urlHintId = useId();
   const [invalid, setInvalid] = useState<{ name: string; message: string }>();
+  const paused = application?.state === 'paused';
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -137,7 +139,7 @@ function DraftForm({ application, busy, cannotSave, stale, error, onCancel, onSa
   return (
     <Panel className="application-editor">
       <div className="panel-head">
-        <h2 id={headingId}>{application ? '编辑应用草稿' : '新建原生身份接入'}</h2>
+        <h2 id={headingId}>{paused ? '编辑接入配置' : application ? '编辑应用草稿' : '新建原生身份接入'}</h2>
       </div>
       <form
         className="admin-form"
@@ -148,6 +150,12 @@ function DraftForm({ application, busy, cannotSave, stale, error, onCancel, onSa
           if (event.target instanceof HTMLInputElement && event.target.name === invalid?.name) setInvalid(undefined);
         }}
       >
+        {application ? (
+          <p className="application-hint">产品 / 实例 <code>{application.product_id} / {application.instance_id}</code></p>
+        ) : null}
+        {paused ? (
+          <p className="application-hint">修改产品来源或精确回调地址会使现有服务凭据失效。修改接入地址后，请更新产品端配置，恢复试点并重新核验双向登录。</p>
+        ) : null}
         <fieldset disabled={busy} className="application-form-grid">
           {application ? null : <>
             <label>
@@ -173,10 +181,10 @@ function DraftForm({ application, busy, cannotSave, stale, error, onCancel, onSa
         </fieldset>
         <p className="application-hint" id={urlHintId}>请填写完整 HTTPS 地址。产品来源只填协议、域名和端口，三个地址均使用该来源。精确回调地址须包含完整路径，且不带查询参数。</p>
         {invalid ? <Notice kind="error"><span id={errorId}>{invalid.message}</span></Notice> : null}
-        {stale ? <Notice kind="error">这条记录已更新，请取消后重新打开草稿，核对最新配置。</Notice> : null}
+        {stale ? <Notice kind="error">这条记录已更新，请取消后重新打开详情，核对最新配置。</Notice> : null}
         {error ? <Notice kind="error">{error}</Notice> : null}
         <div className="admin-actions">
-          <button className="primary" type="submit" disabled={cannotSave || stale}>{application ? '保存草稿' : '创建草稿'}</button>
+          <button className="primary" type="submit" disabled={cannotSave || stale}>{paused ? '保存接入配置' : application ? '保存草稿' : '创建草稿'}</button>
           <button type="button" disabled={busy} onClick={onCancel}>取消</button>
         </div>
       </form>
@@ -184,7 +192,7 @@ function DraftForm({ application, busy, cannotSave, stale, error, onCancel, onSa
   );
 }
 
-function CredentialReveal({ token, onDismiss }: { token: string; onDismiss: () => void }) {
+function CredentialReveal({ token, onAcknowledge }: { token: string; onAcknowledge: () => void }) {
   const [feedback, setFeedback] = useState('');
   async function copy() {
     try {
@@ -196,15 +204,15 @@ function CredentialReveal({ token, onDismiss }: { token: string; onDismiss: () =
   }
 
   return (
-    <div className="application-secret admin-form">
+    <div className="admin-form">
       <label>
         新签发的服务凭据
         <input value={token} readOnly autoFocus autoComplete="off" spellCheck={false} />
       </label>
-      <p className="application-hint">明文仅在签发后显示一次。请复制到产品服务端的密钥配置。刷新状态、隐藏凭据或离开详情后无法重新查看。</p>
+      <p className="application-hint">明文仅显示一次。请先将凭据保存到产品服务端的密钥配置，再确认已保存。确认后无法重新查看明文。</p>
       <div className="admin-actions">
         <button type="button" onClick={copy}>复制凭据</button>
-        <button type="button" onClick={onDismiss}>隐藏凭据</button>
+        <button className="primary" type="button" onClick={onAcknowledge}>已保存凭据</button>
         <span role="status">{feedback}</span>
       </div>
     </div>
@@ -241,21 +249,18 @@ function NativeAdapterExample({ application }: { application: Application }) {
 }
 
 
-function ApplicationDetail({ application, disabled, pending, refreshFailed, error, token, onClose, onEdit, onIssue, onDismiss, onState }: {
+function ApplicationDetail({ application, disabled, pending, refreshFailed, error, onClose, onEdit, onIssue, onState }: {
   application: Application;
   disabled: boolean;
   pending: boolean;
   refreshFailed: boolean;
   error: string;
-  token: string;
   onClose: () => void;
   onEdit: () => void;
   onIssue: () => void;
-  onDismiss: () => void;
   onState: (state: TargetState) => void;
 }) {
   const heading = useRef<HTMLHeadingElement>(null);
-  const issueButton = useRef<HTMLButtonElement>(null);
   const verificationHintId = useId();
   const credentialHintId = useId();
   const { state, source, inbound_verified, outbound_verified, credential_configured } = application;
@@ -273,7 +278,7 @@ function ApplicationDetail({ application, disabled, pending, refreshFailed, erro
           <p className="application-hint">{application.product_id} / {application.instance_id} <StateBadge state={state} /></p>
         </div>
         <div className="admin-actions">
-          {managed && state === 'draft' ? <button disabled={disabled} onClick={onEdit}>编辑草稿</button> : null}
+          {mayIssue ? <button disabled={disabled} onClick={onEdit}>{state === 'paused' ? '编辑接入配置' : '编辑草稿'}</button> : null}
           <button disabled={pending} onClick={onClose}>收起详情</button>
         </div>
       </div>
@@ -321,13 +326,12 @@ function ApplicationDetail({ application, disabled, pending, refreshFailed, erro
           </p>
           {mayIssue ? (
             <>
-              <button ref={issueButton} aria-describedby={credentialHintId} disabled={disabled} onClick={onIssue}>
+              <button aria-describedby={credentialHintId} disabled={disabled} onClick={onIssue}>
                 {credential_configured ? '重新签发服务凭据' : '签发服务凭据'}
               </button>
               <p id={credentialHintId}>{credential_configured ? '重新签发会替换现有凭据，请同步更新产品服务端。' : '签发后将凭据配置到产品服务端，再启用试点。'}</p>
             </>
           ) : null}
-          {token ? <CredentialReveal key={token} token={token} onDismiss={() => { onDismiss(); (issueButton.current ?? heading.current)?.focus(); }} /> : null}
           {managed ? (
             <div className="admin-actions application-state-actions">
               {mayIssue ? (
@@ -353,7 +357,8 @@ function ApplicationDetail({ application, disabled, pending, refreshFailed, erro
           <ol>
             <li>在产品服务端填入 UniHub 来源、产品和实例标识、客户端 ID 与服务凭据。核对启动、回调和原生登录地址，按上方参数配置来源和回调允许列表。</li>
             <li>在产品侧仅向明确选定的试点用户开放身份桥接，并保留原生登录入口。未匹配到 UniHub 账号的用户可使用原产品身份接入。匹配到已有账号时，由用户验证已有账号并明确确认关联。同邮箱仅用于提示匹配。</li>
-            <li>启用试点后，在没有 UniHub 登录态的浏览器窗口中，从<a href={application.native_login_url} target="_blank" rel="noreferrer">原账号登录地址</a>进入 UniHub。保留 UniHub 登录态，清除原产品登录态，再从「我的应用」进入产品，确认回到同一个原产品账号，核对原有角色、权限和 Key。</li>
+            <li>启用试点后，在无 UniHub 登录态的独立浏览器配置中，通过<a href={application.native_login_url} target="_blank" rel="noreferrer">原账号登录地址</a>进入 UniHub。如先关联了已有 UniHub 账号，请在另一份无 UniHub 登录态的浏览器配置中，用已关联的原账号重新走一遍此入口，确认 UniHub 签发了会话。</li>
+            <li>保留该 UniHub 会话。用浏览器站点数据工具只清除原产品站点的本地登录凭据（如 Cookie 和站点存储）。随后从「我的应用」打开产品，核对原账号、角色、权限和 Key。产品的「退出登录」会触发服务端注销，请单独验证该流程。</li>
             <li>刷新并确认双向验证通过后正式发布。根据实际需要在产品侧逐步扩大试点允许名单。</li>
           </ol>
           <NativeAdapterExample application={application} />
@@ -372,13 +377,14 @@ export function ApplicationIntegrations({ csrf }: { csrf?: string }) {
   const [editor, setEditor] = useState<Editor>();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const [token, setToken] = useState('');
+  const [credentialFlow, setCredentialFlow] = useState<CredentialFlow>();
   const pageHeading = useRef<HTMLHeadingElement>(null);
   const detailTrigger = useRef<HTMLButtonElement>(null);
   const selected = resource.data?.find((application) => applicationPath(application) === selectedPath);
   const original = editor?.application;
-  const outdated = Boolean(original && (selected?.version !== original.version || selected?.state !== 'draft'));
-  const busy = pending || resource.loading;
+  const outdated = Boolean(original && (selected?.version !== original.version || selected?.state !== original.state));
+  const credentialLocked = credentialFlow?.step === 'issuing' || credentialFlow?.step === 'reveal';
+  const busy = pending || resource.loading || credentialLocked;
   const unavailable = busy || Boolean(resource.error);
 
   useEffect(() => {
@@ -392,9 +398,28 @@ export function ApplicationIntegrations({ csrf }: { csrf?: string }) {
     return () => controller.abort();
   }, [revision]);
 
+  useEffect(() => {
+    if (!credentialLocked) return;
+    const currentURL = window.location.href;
+    const navigation = (window as Window & { navigation?: EventTarget }).navigation;
+    function confirmBeforeLeaving(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+    function preventRouteChange(event: Event) {
+      const { destination } = event as Event & { destination: { sameDocument: boolean; url: string } };
+      if (destination.sameDocument && destination.url !== currentURL) event.preventDefault();
+    }
+    window.addEventListener('beforeunload', confirmBeforeLeaving);
+    navigation?.addEventListener('navigate', preventRouteChange);
+    return () => {
+      window.removeEventListener('beforeunload', confirmBeforeLeaving);
+      navigation?.removeEventListener('navigate', preventRouteChange);
+    };
+  }, [credentialLocked]);
+
   function refresh() {
     setError('');
-    setToken('');
     setResource((current) => ({ ...current, loading: true, error: undefined }));
     setRevision((previous) => previous + 1);
   }
@@ -402,13 +427,11 @@ export function ApplicationIntegrations({ csrf }: { csrf?: string }) {
   function select(path: string) {
     setSelectedPath(path);
     setError('');
-    setToken('');
   }
 
   function openEditor(application?: Application) {
     setEditor({ application });
     setError('');
-    setToken('');
   }
 
   function commit(application: Application) {
@@ -449,11 +472,17 @@ export function ApplicationIntegrations({ csrf }: { csrf?: string }) {
 
   function issueCredential(application: Application) {
     void mutate(async () => {
-      const issued = await request<{ application: Application; token: string }>(`${applicationPath(application)}/credential`, {
-        method: 'POST', csrf, body: { version: application.version },
-      });
-      commit(issued.application);
-      setToken(issued.token);
+      setCredentialFlow({ step: 'issuing' });
+      try {
+        const issued = await request<{ application: Application; token: string }>(`${applicationPath(application)}/credential`, {
+          method: 'POST', csrf, body: { version: application.version },
+        });
+        commit(issued.application);
+        setCredentialFlow({ step: 'reveal', token: issued.token });
+      } catch (cause) {
+        setCredentialFlow(undefined);
+        throw cause;
+      }
     });
   }
 
@@ -472,7 +501,7 @@ export function ApplicationIntegrations({ csrf }: { csrf?: string }) {
         <div>
           <h1 ref={pageHeading} tabIndex={-1}>应用接入与管理</h1>
           <p>配置原生身份桥接，查看部署状态并验证双向登录。</p>
-          <a className="button-link" href="/admin/applications/guide" onClick={(event) => { event.preventDefault(); go('/admin/applications/guide'); }}>接入手册</a>
+          <a className="button-link" href="/admin/applications/guide" onClick={(event) => { event.preventDefault(); if (!credentialLocked) go('/admin/applications/guide'); }}>接入手册</a>
         </div>
         <div className="admin-actions">
           <button type="button" disabled={busy} onClick={refresh}>刷新状态</button>
@@ -480,7 +509,7 @@ export function ApplicationIntegrations({ csrf }: { csrf?: string }) {
         </div>
       </div>
       {editor ? (
-        <DraftForm
+        <IntegrationForm
           application={original}
           busy={pending}
           cannotSave={unavailable}
@@ -498,20 +527,41 @@ export function ApplicationIntegrations({ csrf }: { csrf?: string }) {
           key={selectedPath}
           application={selected}
           disabled={unavailable}
-          pending={pending}
+          pending={pending || credentialLocked}
           refreshFailed={Boolean(resource.error)}
           error={error}
-          token={token}
           onClose={() => {
             select('');
             const trigger = detailTrigger.current;
             (trigger?.isConnected ? trigger : pageHeading.current)?.focus();
           }}
           onEdit={() => openEditor(selected)}
-          onIssue={() => issueCredential(selected)}
-          onDismiss={() => setToken('')}
+          onIssue={() => selected.credential_configured ? setCredentialFlow({ step: 'confirm' }) : issueCredential(selected)}
           onState={(state) => changeState(selected, state)}
         />
+      ) : null}
+      {selected && credentialFlow ? (
+        <Modal
+          title={credentialFlow.step === 'confirm' ? '重新签发服务凭据' : '服务凭据'}
+          busy={credentialLocked}
+          onClose={() => setCredentialFlow(undefined)}
+        >
+          {credentialFlow.step === 'confirm' ? (
+            <>
+              <div className="modal-body">
+                <p>确认重新签发后，旧凭据立即失效。依赖旧凭据的账号状态同步和会话校验会中断，直至产品服务端切换到新凭据。请先确认产品团队已准备好更新密钥。</p>
+              </div>
+              <div className="modal-actions">
+                <button type="button" onClick={() => setCredentialFlow(undefined)}>取消</button>
+                <button className="primary" type="button" onClick={() => issueCredential(selected)}>确认重新签发</button>
+              </div>
+            </>
+          ) : credentialFlow.step === 'reveal' ? (
+            <div className="modal-body"><CredentialReveal token={credentialFlow.token} onAcknowledge={() => setCredentialFlow(undefined)} /></div>
+          ) : (
+            <div className="modal-body" role="status">正在签发服务凭据…</div>
+          )}
+        </Modal>
       ) : null}
       <ResourceState resource={resource} empty="暂无应用接入记录" emptyHeaders={tableHeaders}>
         {(applications) => (
@@ -529,7 +579,7 @@ export function ApplicationIntegrations({ csrf }: { csrf?: string }) {
                       className="text-button"
                       aria-label={`查看 ${name}（${application.product_id} / ${application.instance_id}）详情`}
                       aria-expanded={selectedPath === path && !editor}
-                      disabled={pending || Boolean(editor)}
+                      disabled={pending || credentialLocked || Boolean(editor)}
                       onClick={(event) => {
                         detailTrigger.current = event.currentTarget;
                         select(selectedPath === path ? '' : path);

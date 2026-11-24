@@ -175,7 +175,7 @@ func (s *Store) RuntimeUsers(ctx context.Context, actor, product, instance, sear
 // It never changes the global identity status or another product's assignment.
 func (s *Store) SetRuntimeAccess(ctx context.Context, actor, target, product, instance string, roles []string, active bool, expected int64) (Assignment, error) {
 	instance = Instance(instance)
-	m, ok, err := s.findManifest(ctx, s.pool, product, instance)
+	m, ok, err := s.FindManifestOn(ctx, s.pool, product, instance)
 	if err != nil {
 		return Assignment{}, err
 	}

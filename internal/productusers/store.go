@@ -92,7 +92,8 @@ type RegistryOverlay interface {
 
 func (s *Store) ConfigureRegistryOverlay(overlay RegistryOverlay) { s.overlay = overlay }
 
-func (s *Store) findManifest(ctx context.Context, q accounts.Querier, product, instance string) (Manifest, bool, error) {
+// FindManifestOn resolves one product instance using the caller’s connection.
+func (s *Store) FindManifestOn(ctx context.Context, q accounts.Querier, product, instance string) (Manifest, bool, error) {
 	if manifest, ok := s.registry.Get(product, instance); ok {
 		return manifest, true, nil
 	}
@@ -132,14 +133,14 @@ func (s *Store) Managed(product, instance string) bool {
 }
 
 func (s *Store) ManagedOn(ctx context.Context, q accounts.Querier, product, instance string) bool {
-	_, ok, err := s.findManifest(ctx, q, product, instance)
+	_, ok, err := s.FindManifestOn(ctx, q, product, instance)
 	return err == nil && ok
 }
 
 // RequirePermissionOn reads the current assignment on the caller's connection.
 // Billing already holds the payer lock and must not acquire another pool slot.
 func (s *Store) RequirePermissionOn(ctx context.Context, q accounts.Querier, actor, product, instance, permission string) error {
-	m, managed, err := s.findManifest(ctx, q, product, instance)
+	m, managed, err := s.FindManifestOn(ctx, q, product, instance)
 	if err != nil {
 		return err
 	}
@@ -195,7 +196,7 @@ func (s *Store) Resolve(ctx context.Context, u accounts.User, product, instance 
 	return s.ResolveOn(ctx, s.pool, u, product, instance)
 }
 func (s *Store) ResolveOn(ctx context.Context, q accounts.Querier, u accounts.User, product, instance string) (Access, error) {
-	m, ok, err := s.findManifest(ctx, q, product, instance)
+	m, ok, err := s.FindManifestOn(ctx, q, product, instance)
 	if err != nil {
 		return Access{}, err
 	}
@@ -349,7 +350,7 @@ func (s *Store) SetAccess(ctx context.Context, actor, target, product, instance 
 	if s.management != nil {
 		return s.management.SetLegacyAccess(ctx, actor, target, product, instance, roles, active, expected)
 	}
-	m, ok, err := s.findManifest(ctx, s.pool, product, instance)
+	m, ok, err := s.FindManifestOn(ctx, s.pool, product, instance)
 	if err != nil {
 		return Assignment{}, err
 	}

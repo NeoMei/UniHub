@@ -21,8 +21,8 @@ const steps = [
   {
     title: '创建草稿，签发服务凭据',
     app: '向超管提供已确认的六组字段。通过应用服务端的密钥管理接收凭据。',
-    hub: '打开「应用接入与管理 → 新建接入」，填写字段并创建草稿。打开详情，记下 UniHub 来源和客户端 ID，然后点击「签发服务凭据」并保存本次显示的明文。',
-    result: '管理页显示草稿和凭据已配置。凭据明文仅在签发后可见，丢失时可在草稿或暂停状态重新签发。',
+    hub: '打开「应用接入与管理 → 新建接入」，填写字段并创建草稿。打开详情，记下 UniHub 来源和客户端 ID。点击「签发服务凭据」，将明文保存到产品服务端的密钥配置，然后点击「已保存凭据」。',
+    result: '管理页显示草稿和凭据已配置。凭据丢失时可在草稿或暂停状态重新签发。确认重新签发后，旧凭据立即失效，产品后端需要切换到新凭据。',
   },
   {
     title: '配置产品服务端，启用试点',
@@ -32,14 +32,14 @@ const steps = [
   },
   {
     title: '完成双向登录并核对原权限',
-    app: '在没有 UniHub 登录态的浏览器窗口中，先用原账号经试点入口进入 UniHub。已有 UniHub 账号时，由本人验证并确认绑定。保持 UniHub 登录态，清除原应用站点的本地登录态，再从「我的应用」打开原应用。',
-    hub: '刷新应用详情，分别确认「原产品账号 → UniHub」与「UniHub 我的应用 → 原产品账号」已验证。',
+    app: '用独立的浏览器配置，经试点入口以原账号进入 UniHub。若需关联已有 UniHub 账号，由本人登录并确认关联。完成关联后，再用一份没有 UniHub 登录态的浏览器配置，从原账号入口重新登录一次，以便 UniHub 签发会话。保留该 UniHub 会话，通过浏览器站点数据工具仅清除原应用站点的 Cookie 和本地登录存储，再从「我的应用」打开原应用。产品的「退出登录」会触发服务端注销，应单独验证。',
+    hub: '使用超管会话刷新应用详情，分别确认「原产品账号 → UniHub」与「UniHub 我的应用 → 原产品账号」已验证。两项分别记录 UniHub 会话签发和回调会话交换，原账号和原权限由验收人员在应用内核对。',
     result: '两条路径均已验证。回跳进入同一个原账号，原有工作区、角色和 Key 仍可使用。',
   },
   {
     title: '正式发布，按需暂停',
     app: '按试点结果扩大应用端允许范围。将原账号锁定、删除、密码变更和会话注销同步给 UniHub。',
-    hub: '两项验证通过后点击「正式发布」。如需暂停，在详情点击「暂停接入」。恢复时重新启用试点并验收两个方向。',
+    hub: '两项验证通过后点击「正式发布」。如需暂停，在详情点击「暂停接入」。暂停期间可编辑接入配置并保留产品和实例标识。修改产品来源或精确回调地址会使旧凭据失效，需重新签发并更新产品后端。恢复时重新启用试点并验收两个方向。',
     result: '已发布应用的原账号入口可在 UniHub 登录页使用。具有应用访问权限的用户可从「我的应用」进入。',
   },
 ];
@@ -102,19 +102,35 @@ export function ApplicationIntegrationGuide() {
       </Panel>
 
       <Panel title="应用开发者对接">
-        <p>应用后端使用 <code>Authorization: Bearer &lt;服务凭据&gt;</code> 调用 <code>/internal/v1/product-runtime/identity/</code> 下列接口。浏览器使用 UniHub 提供的跳转地址。原密码和原有资源权限由接入系统校验及管理。</p>
+        <p>以下运行时接口由应用后端发送 JSON POST 请求，路径前缀为 <code>/internal/v1/product-runtime/identity/</code>，请求头为 <code>Authorization: Bearer &lt;服务凭据&gt;</code>。<code>/auth/product/</code> 下的 GET 跳转由浏览器访问。原密码和原有资源权限由接入系统校验及管理。</p>
+        <p>以下认证事件包含 <code>local_user_id</code>、<code>authentication_id</code>、<code>method</code>、<code>authenticated_at</code>（Unix 秒）和 <code>auth_version</code>。每次新的认证使用新的事件 ID。</p>
         <Table headers={['环节', '调用顺序']}>
-          <tr><th scope="row">关联已验证的原账号</th><td><code>enroll</code>，或由用户确认后顺序使用 <code>link/start</code>、<code>link/preview</code>、<code>link/complete</code>。</td></tr>
-          <tr><th scope="row">应用登录 UniHub</th><td><code>/auth/product/start</code> → 应用验证原会话 → <code>authenticate</code> → <code>browser/approve</code>（携带 <code>X-UniHub-Actor-Authorization: Bearer &lt;用户证明&gt;</code>）→ UniHub 完成交接。</td></tr>
-          <tr><th scope="row">从 UniHub 进入应用</th><td><code>/auth/product/authorize</code> → 应用回调 → <code>session/exchange</code> → 按原用户 ID 建立应用会话。</td></tr>
-          <tr><th scope="row">账号和会话状态</th><td><code>source-lifecycle</code>、<code>source-session/revoke</code>、<code>session/verify</code>。</td></tr>
+          <tr><th scope="row">接入原账号</th><td>验证原账号后调用 <code>enroll</code>，传入 <code>client_id</code>、<code>authentication</code> 认证事件、<code>display_name</code> 和 <code>email</code>。需绑定已有 UniHub 账号时，执行下一行的确认流程。</td></tr>
+          <tr><th scope="row">关联已有账号</th><td>
+            调用 <code>link/start</code>，传入 <code>client_id</code>、<code>state</code>、<code>nonce</code>、<code>code_challenge</code> 和 <code>authentication</code>（须为原账号主动认证）。保留 <code>link_id</code> 并让浏览器打开返回的 <code>authorize_url</code>。用户在 UniHub 验证身份后，回调收到 <code>link=1</code>、<code>code</code> 和 <code>state</code>。
+            校验浏览器状态，用 <code>client_id</code>、<code>link_id</code>、<code>code</code>、<code>redirect_uri</code>、<code>nonce</code>、<code>code_verifier</code> 和 <code>authentication</code> 调用 <code>link/preview</code>，向用户显示返回的目标账号。用户确认后，将该账号的 <code>central_user_id</code> 和同组交换参数提交给 <code>link/complete</code>。
+          </td></tr>
+          <tr><th scope="row">应用登录 UniHub</th><td>
+            原账号登录后，浏览器带 <code>client_id</code> 和 <code>state</code> 打开 <code>/auth/product/start</code>。UniHub 将 <code>handoff</code> 和 <code>state</code> 送到登记的应用回调。
+            应用校验状态和原会话，向 <code>authenticate</code> 提交认证事件。用返回的 <code>actor_token</code> 设置 <code>X-UniHub-Actor-Authorization: Bearer &lt;actor_token&gt;</code>，调用 <code>browser/approve</code>，提交 <code>client_id</code>、<code>handoff_id</code>、<code>state</code>、<code>native_session_id</code>、<code>native_session_expires_at</code>（Unix 秒）和 <code>native_handoff_generation</code>（平台管理接入使用 <code>1</code>）。
+            让同一浏览器打开返回的 <code>finish_url</code>，再校验应用回调中的 <code>handoff_done=1</code> 和 <code>state</code>。
+          </td></tr>
+          <tr><th scope="row">从 UniHub 进入应用</th><td>
+            应用启动地址将浏览器送至 <code>/auth/product/authorize</code>，传入 <code>client_id</code>、登记的 <code>redirect_uri</code>、<code>state</code>、<code>nonce</code>、<code>code_challenge</code> 和 <code>code_challenge_method=S256</code>。
+            校验回调的 <code>broker=1</code> 和 <code>state</code> 后，用 <code>client_id</code>、<code>redirect_uri</code>、<code>code</code>、<code>nonce</code> 和 <code>code_verifier</code> 调用 <code>session/exchange</code>。按返回的 <code>identity.binding.local_user_id</code> 建立应用会话，并在后端保留 <code>source_proof_token</code>、<code>source_proof_expires_at</code> 及 <code>identity.binding.user_id</code>。
+          </td></tr>
+          <tr><th scope="row">账号和会话状态</th><td>
+            用 <code>source-lifecycle</code> 同步 <code>local_user_id</code>、<code>operation_id</code>、<code>previous_auth_version</code>、<code>next_auth_version</code> 及可选的 <code>state</code>（<code>active</code>、<code>locked</code> 或 <code>deleted</code>）。
+            原生会话注销时调用 <code>source-session/revoke</code>，传入 <code>local_user_id</code>、<code>native_session_id</code> 和 <code>expires_at</code>（Unix 秒）。
+            用 <code>source_proof_token</code> 调用 <code>session/verify</code>，将 <code>identity.binding.user_id</code> 作为 <code>central_user_id</code> 传入。校验成功返回 HTTP 204。
+          </td></tr>
         </Table>
         <p className="application-hint">核对接入参数时，可在应用详情展开「AgentWiki 兼容适配器配置示例」。使用中心 OIDC、模型或账务能力的应用可从这里继续准备客户端和权限。 <a href="/admin/onboarding">三方接入与计费准备</a></p>
       </Panel>
       <Panel title="接入遇到问题时">
         <ul>
           <li>回调失败时，在应用详情逐字比对客户端 ID、站点来源和回调路径，确认产品服务端读取了当前凭据。</li>
-          <li>试点未核验时，在没有 UniHub 登录态的浏览器窗口重试原账号登录。完成回跳后，在管理页刷新状态。</li>
+          <li>原产品账号方向未核验时，用已关联的原账号在全新的浏览器配置中重试。UniHub 签发会话后，在管理页刷新状态。</li>
           <li>用户看不到应用卡片时，先核对原账号是否已关联，再核对 UniHub 应用访问权限和应用当前状态。</li>
         </ul>
       </Panel>

@@ -600,7 +600,7 @@ func TestIdentityBrowserExchangeKeepsAuthorizationEpochWhilePublishing(t *testin
 		t.Fatal(err)
 	}
 	defer database.Rollback(blocker)
-	if _, err = blocker.Exec(ctx, `LOCK TABLE product_browser_source_proofs IN SHARE MODE`); err != nil {
+	if _, err = blocker.Exec(ctx, `LOCK TABLE product_browser_proofs IN SHARE MODE`); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -609,16 +609,17 @@ func TestIdentityBrowserExchangeKeepsAuthorizationEpochWhilePublishing(t *testin
 		done <- err
 	}()
 	for {
-		var consumed bool
-		if err = s.pool.QueryRow(ctx, `SELECT consumed FROM product_browser_codes WHERE code_hash=$1`, digest(code.Code)).Scan(&consumed); err != nil {
+		var waiting bool
+		if err = s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_locks WHERE
+			relation='product_browser_proofs'::regclass AND mode='RowExclusiveLock' AND NOT granted)`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
-		if consumed {
+		if waiting {
 			break
 		}
 		select {
 		case err = <-done:
-			t.Fatalf("exchange stopped before redeeming the code: %v", err)
+			t.Fatalf("exchange stopped before publishing the proof: %v", err)
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		case <-time.After(5 * time.Millisecond):
@@ -632,6 +633,10 @@ func TestIdentityBrowserExchangeKeepsAuthorizationEpochWhilePublishing(t *testin
 	}
 	if err = <-done; !errors.Is(err, accounts.ErrForbidden) {
 		t.Fatalf("exchange adopted a destination epoch changed after redemption: %v", err)
+	}
+	var consumed bool
+	if err = s.pool.QueryRow(ctx, `SELECT consumed FROM product_browser_codes WHERE code_hash=$1`, digest(code.Code)).Scan(&consumed); err != nil || consumed {
+		t.Fatalf("failed exchange did not roll back the code: consumed=%v, err=%v", consumed, err)
 	}
 }
 

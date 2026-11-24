@@ -368,10 +368,11 @@ it("saves the display name and submits password changes from account settings", 
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
     calls.push({ path, init });
     const data = path === "/auth/session"
-      ? { authenticated: true, sandbox: false, user: { id: "u1", name: "Alice" }, csrf_token: "csrf" }
+      ? { authenticated: true, can_manage_central_credentials: true, sandbox: false, user: { id: "u1", name: "Alice" }, csrf_token: "csrf" }
       : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }]
       : path === "/v1/me/profile" && init?.method === "PATCH" ? { id: "u1", username: "alice", display_name: "New Alice", email: "alice@example.com", version: "2" }
       : path === "/v1/me/profile" ? { id: "u1", username: "alice", display_name: "Alice", email: "alice@example.com", version: "1" }
+      : path === "/v1/me/mfa" ? { enabled: false }
       : path === "/v1/me/password" ? undefined
       : [];
     return new Response(data === undefined ? null : JSON.stringify(data), { status: path === "/v1/me/password" ? 204 : 200 });
@@ -379,6 +380,8 @@ it("saves the display name and submits password changes from account settings", 
   render(<App />);
   await screen.findByRole("heading", { name: "账户概览" });
   fireEvent.click(screen.getByRole("button", { name: /账户设置/ }));
+  expect(await screen.findByRole("button", { name: "开启两步验证" })).toBeDefined();
+  expect(screen.queryByRole("link", { name: "使用 UniHub 账号登录" })).toBeNull();
   fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "New Alice" } });
   fireEvent.click(screen.getByRole("button", { name: "保存个人资料" }));
   await waitFor(() => expect(calls.some((call) => call.path === "/v1/me/profile" && call.init?.method === "PATCH")).toBe(true));
@@ -390,6 +393,27 @@ it("saves the display name and submits password changes from account settings", 
   expect(await screen.findByRole("link", { name: "重新登录" })).toBeDefined();
   expect(screen.queryByRole("navigation", { name: "主导航" })).toBeNull();
   expect(screen.queryByLabelText("当前密码")).toBeNull();
+});
+
+it.each([false, undefined])("directs a linked account to central sign-in when session capability is %s", async (capability) => {
+  const fetchMock = vi.fn(async (path: string) => {
+    const data = path === "/auth/session"
+      ? { authenticated: true, can_manage_central_credentials: capability, sandbox: false, user: { id: "linked", name: "Linked" }, csrf_token: "csrf" }
+      : path === "/v1/accounts" ? [{ id: "personal", name: "个人账户", kind: "personal", role: "owner" }]
+      : path === "/v1/me/profile" ? { id: "linked", username: "linked", display_name: "Linked", email: "linked@example.test", version: "1" }
+      : [];
+    return new Response(JSON.stringify(data), { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(<App />);
+  await screen.findByRole("heading", { name: "账户概览" });
+  fireEvent.click(screen.getByRole("button", { name: "账户设置" }));
+  const login = await screen.findByRole("link", { name: "使用 UniHub 账号登录" });
+  expect(login.getAttribute("href")).toBe("/auth/login?method=central&switch_account=1");
+  expect(screen.queryByLabelText("当前密码")).toBeNull();
+  expect(screen.queryByRole("heading", { name: "两步验证（TOTP）" })).toBeNull();
+  expect(screen.getByRole("button", { name: "保存个人资料" })).toBeDefined();
+  expect(fetchMock.mock.calls.some(([path]) => path.startsWith("/v1/me/mfa") || path === "/v1/me/password")).toBe(false);
 });
 
 it("selects a newly created team after the create confirmation completes", async () => {
@@ -549,12 +573,13 @@ it.each(["member", "billing_admin"])("shows groups read-only to %s and clears th
 
 it("shows trusted product credential management for a native-only central account", async () => {
  vi.stubGlobal("fetch",vi.fn(async(path:string)=>{
-  const data=path==="/auth/session"?{authenticated:true,sandbox:false,user:{id:"native",name:"Native"},csrf_token:"csrf"}:path==="/v1/accounts"?[{id:"personal",name:"个人账户",kind:"personal",role:"owner"}]:path==="/v1/me/profile"?{id:"native",username:"native",display_name:"Native",email:"native@example.test",version:"1",credential_source:"product",credential_management:[{product_id:"llmrouter",instance_id:"default",url:"https://router.example.test/profile"}]}:[];
+  const data=path==="/auth/session"?{authenticated:true,can_manage_central_credentials:false,sandbox:false,user:{id:"native",name:"Native"},csrf_token:"csrf"}:path==="/v1/accounts"?[{id:"personal",name:"个人账户",kind:"personal",role:"owner"}]:path==="/v1/me/profile"?{id:"native",username:"native",display_name:"Native",email:"native@example.test",version:"1",credential_source:"product",credential_management:[{product_id:"llmrouter",instance_id:"default",url:"https://router.example.test/profile"}]}:[];
   return new Response(JSON.stringify(data),{status:200});
  }));
  render(<App/>);await screen.findByRole("heading",{name:"账户概览"});fireEvent.click(screen.getByRole("button",{name:/账户设置/}));
  expect(await screen.findByText("native@example.test")).toBeDefined();
  expect(screen.queryByLabelText("当前密码")).toBeNull();
+ expect(screen.queryByRole("link",{name:"使用 UniHub 账号登录"})).toBeNull();
  expect(screen.queryByRole("button",{name:"保存个人资料"})).toBeNull();
  expect(screen.getByRole("link",{name:"前往 llmrouter 管理密码与二次验证"}).getAttribute("href")).toBe("https://router.example.test/profile");
 });

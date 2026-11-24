@@ -104,9 +104,25 @@ func (s *Store) Authenticate(ctx context.Context, token string, allowPaused bool
 	return app, err == nil && !s.reserved(app)
 }
 
+// RequireRuntimeMutation serializes a managed runtime write with a pause,
+// pilot restart or credential rotation.
+func (s *Store) RequireRuntimeMutation(ctx context.Context, tx pgx.Tx, admitted Application, token string, allowPaused bool) error {
+	hash := sha256.Sum256([]byte(token))
+	var id string
+	err := tx.QueryRow(ctx, `SELECT client_id FROM application_integrations
+		WHERE client_id=$1 AND credential_hash=$2
+			AND (($3 AND state IN ('pilot','active','paused')) OR
+				(state IN ('pilot','active') AND pilot_started_at=$4))
+		FOR UPDATE`, admitted.ClientID, hash[:], allowPaused, admitted.pilotStartedAt).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return accounts.ErrForbidden
+	}
+	return err
+}
+
 // AcceptBrowserWork pins validation to the pilot in which the browser artifact
 // was created. A writer locks the integration row through its final commit.
-func (s *Store) AcceptBrowserWork(ctx context.Context, q accounts.Querier, id string, issuedAt time.Time, receipt productauth.BrowserReceipt) error {
+func (s *Store) AcceptBrowserWork(ctx context.Context, q accounts.Querier, id string, pilot *time.Time, receipt productauth.BrowserReceipt) error {
 	if !strings.HasPrefix(id, "bridge.") || s.reservedClients[id] {
 		return nil
 	}
@@ -124,7 +140,7 @@ func (s *Store) AcceptBrowserWork(ctx context.Context, q accounts.Querier, id st
 	if err != nil {
 		return err
 	}
-	if started == nil || issuedAt.Before(*started) || (state != "pilot" && state != "active") {
+	if started == nil || pilot == nil || !started.Equal(*pilot) || (state != "pilot" && state != "active") {
 		return accounts.ErrForbidden
 	}
 	if state != "pilot" || receipt == productauth.CheckBrowserWork {

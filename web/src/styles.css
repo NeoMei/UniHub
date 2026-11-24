@@ -21,7 +21,6 @@
   box-sizing: border-box;
 }
 body {
-  min-width: 1152px;
   margin: 0;
 }
 html {
@@ -1224,12 +1223,16 @@ td.team-member-groups {
 }
 
 /* Native desktop reference alignment. */
+.app-shell {
+  --account-sidebar-width: clamp(216px, 22vw, 256px);
+}
 .sidebar {
-  width: 256px;
+  width: var(--account-sidebar-width);
 }
 .workspace {
-  margin-left: 256px;
-  width: calc(100% - 256px);
+  margin-left: var(--account-sidebar-width);
+  width: calc(100% - var(--account-sidebar-width));
+  min-width: 0;
 }
 .topbar {
   height: 64px;

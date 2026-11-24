@@ -23,6 +23,7 @@ type Claims struct {
 	ExpiresAt      int64
 	IssuedAt       int64
 	ProductSession bool
+	CentralSession bool
 }
 
 // Verifier verifies a raw bearer access token before exposing an identity.

@@ -61,15 +61,14 @@ func (s *Service) identityLinkClientForSession(id, redirect string, includePause
 	if err != nil || client.IdentityLinkRole == "" {
 		return products.Client{}, accounts.ErrForbidden
 	}
-	for _, manifest := range s.users.Products() {
-		if manifest.ProductID != client.ProductID || manifest.InstanceID != productusers.Instance(client.InstanceID) {
-			continue
-		}
-		for _, role := range manifest.Roles {
-			if role.ID == client.IdentityLinkRole && !role.Privileged && !role.NativeBaseline && role.ProductRole <= 1 &&
-				len(role.Permissions) == 1 && role.Permissions[0] == "product:use" {
-				return client, nil
-			}
+	manifest, ok, err := s.users.FindManifestOn(ctx, s.pool, client.ProductID, client.InstanceID)
+	if err != nil || !ok {
+		return products.Client{}, accounts.ErrForbidden
+	}
+	for _, role := range manifest.Roles {
+		if role.ID == client.IdentityLinkRole && !role.Privileged && !role.NativeBaseline && role.ProductRole <= 1 &&
+			len(role.Permissions) == 1 && role.Permissions[0] == "product:use" {
+			return client, nil
 		}
 	}
 	return products.Client{}, accounts.ErrForbidden
@@ -86,18 +85,31 @@ func (s *Service) BeginIdentityLink(ctx context.Context, product, instance strin
 		return IdentityLinkStart{}, accounts.ErrInvalid
 	}
 
+	tx, err := s.beginRuntimeMutation(ctx, pgx.TxOptions{})
+	if err != nil {
+		return IdentityLinkStart{}, err
+	}
+	defer database.Rollback(tx)
+	if err = s.acceptBrowserWork(ctx, tx, client.ClientID, client.PilotStartedAt, CheckBrowserWork); err != nil {
+		return IdentityLinkStart{}, err
+	}
+
 	link := browserSecret()
-	result, err := s.pool.Exec(ctx, `INSERT INTO product_identity_links
-		(id_hash,client_id,product_id,instance_id,local_user_id,auth_version,native_auth_id,state_hash,nonce_hash,pkce_challenge,expires_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now()+interval '5 minutes') ON CONFLICT DO NOTHING`,
+	result, err := tx.Exec(ctx, `INSERT INTO product_identity_links
+		(id_hash,client_id,product_id,instance_id,local_user_id,auth_version,native_auth_id,state_hash,nonce_hash,pkce_challenge,expires_at,application_pilot_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now()+interval '5 minutes',$11) ON CONFLICT DO NOTHING`,
 		digest(link), client.ClientID, product, instance, in.Authentication.LocalUserID, in.Authentication.AuthVersion,
-		in.Authentication.AuthenticationID, digest(in.State), digest(in.Nonce), in.Challenge)
+		in.Authentication.AuthenticationID, digest(in.State), digest(in.Nonce), in.Challenge, client.PilotStartedAt)
 	if err != nil {
 		return IdentityLinkStart{}, err
 	}
 	if result.RowsAffected() != 1 {
 		return IdentityLinkStart{}, accounts.ErrConflict
 	}
+	if err = tx.Commit(ctx); err != nil {
+		return IdentityLinkStart{}, err
+	}
+
 	destination := browserRedirect(s.issuer+"/auth/product/link", url.Values{
 		"client_id": {client.ClientID}, "redirect_uri": {client.RedirectURIs[0]}, "state": {in.State}, "link": {link},
 	})
@@ -109,31 +121,47 @@ func (s *Service) AuthorizeIdentityLink(ctx context.Context, clientID, redirect,
 	if err != nil || redirect == "" || !validBrowserState(state) || len(link) != 43 {
 		return "", accounts.ErrForbidden
 	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer database.Rollback(tx)
+	if err = s.acceptBrowserWork(ctx, tx, client.ClientID, client.PilotStartedAt, CheckBrowserWork); err != nil {
+		return "", err
+	}
+
 	code := browserSecret()
 	// A fresh central session proves only control of the canonical subject. It
 	// provides neither a product grant nor authority to select a local user.
-	result, err := s.pool.Exec(ctx, `UPDATE product_identity_links l
+	result, err := tx.Exec(ctx, `UPDATE product_identity_links l
 		SET code_hash=$1,central_user_id=u.id,source_session_hash=b.id_hash
 		FROM browser_sessions b JOIN identities i ON i.issuer=b.issuer AND i.subject=b.subject
 		JOIN users u ON u.id=i.user_id
 		WHERE l.id_hash=$2 AND l.client_id=$3 AND l.state_hash=$4 AND l.expires_at>now() AND l.code_hash IS NULL
+		AND l.application_pilot_at IS NOT DISTINCT FROM $6::timestamptz
+		AND ($6::timestamptz IS NULL OR NOT EXISTS (SELECT 1 FROM product_browser_session_origins o WHERE o.session_id_hash=b.id_hash))
 		AND b.id_hash=$5 AND b.expires_at>now() AND b.created_at>=now()-interval '5 minutes'
 		AND b.created_at>=u.session_not_before AND u.active
 		AND NOT EXISTS (SELECT 1 FROM identity_revocations r WHERE r.issuer=b.issuer AND r.subject=b.subject AND r.pending)`,
-		digest(code), digest(link), client.ClientID, digest(state), sessionHash)
+		digest(code), digest(link), client.ClientID, digest(state), sessionHash, client.PilotStartedAt)
 	if err != nil {
 		return "", err
 	}
 	if result.RowsAffected() != 1 {
 		return "", accounts.ErrForbidden
 	}
+	if err = tx.Commit(ctx); err != nil {
+		return "", err
+	}
+
 	return browserRedirect(redirect, url.Values{"link": {"1"}, "code": {code}, "state": {state}}), nil
 }
 
 func (s *Service) handleIdentityLink(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	client, redirect, state := query.Get("client_id"), query.Get("redirect_uri"), query.Get("state")
-	if _, err := s.identityLinkClient(client, redirect); err != nil || redirect == "" || !validBrowserState(state) {
+	policy, err := s.identityLinkClient(client, redirect)
+	if err != nil || redirect == "" || !validBrowserState(state) {
 		http.Error(w, "Invalid account link", http.StatusBadRequest)
 		return
 	}
@@ -152,8 +180,9 @@ func (s *Service) handleIdentityLink(w http.ResponseWriter, r *http.Request) {
 	if query.Get("reauth") != "1" && len(query.Get("link")) == 43 {
 		var pending bool
 		if err = s.pool.QueryRow(r.Context(), `SELECT EXISTS (SELECT 1 FROM product_identity_links
-			WHERE id_hash=$1 AND client_id=$2 AND state_hash=$3 AND code_hash IS NULL AND expires_at>now())`,
-			digest(query.Get("link")), client, digest(state)).Scan(&pending); err == nil && pending {
+			WHERE id_hash=$1 AND client_id=$2 AND state_hash=$3 AND code_hash IS NULL AND expires_at>now()
+			  AND application_pilot_at IS NOT DISTINCT FROM $4::timestamptz)`,
+			digest(query.Get("link")), client, digest(state), policy.PilotStartedAt).Scan(&pending); err == nil && pending {
 			resume := browserRedirect("/auth/product/link", url.Values{
 				"client_id": {client}, "redirect_uri": {redirect}, "state": {state}, "link": {query.Get("link")}, "reauth": {"1"},
 			})
@@ -183,20 +212,21 @@ func (s *Service) identityLinkExchangeClient(product, instance string, in Comple
 type identityLinkProof struct {
 	central, session string
 	completed        *string
-	issuedAt         time.Time
+	pilotStartedAt   *time.Time
 }
 
 func readIdentityLinkProof(ctx context.Context, q accounts.Querier, client products.Client, in CompleteIdentityLink, lock bool) (proof identityLinkProof, err error) {
 	challenge := sha256.Sum256([]byte(in.Verifier))
-	query := `SELECT central_user_id,source_session_hash,completed_digest,expires_at-interval '5 minutes' FROM product_identity_links
+	query := `SELECT central_user_id,source_session_hash,completed_digest,application_pilot_at FROM product_identity_links
 		WHERE id_hash=$1 AND client_id=$2 AND product_id=$3 AND instance_id=$4 AND local_user_id=$5
-		AND auth_version=$6 AND code_hash=$7 AND nonce_hash=$8 AND pkce_challenge=$9 AND expires_at>now()`
+		AND auth_version=$6 AND code_hash=$7 AND nonce_hash=$8 AND pkce_challenge=$9 AND expires_at>now()
+		  AND application_pilot_at IS NOT DISTINCT FROM $10::timestamptz`
 	if lock {
 		query += " FOR UPDATE"
 	}
 	err = q.QueryRow(ctx, query, digest(in.LinkID), client.ClientID, client.ProductID, productusers.Instance(client.InstanceID),
 		in.Authentication.LocalUserID, in.Authentication.AuthVersion, digest(in.Code), digest(in.Nonce),
-		base64.RawURLEncoding.EncodeToString(challenge[:])).Scan(&proof.central, &proof.session, &proof.completed, &proof.issuedAt)
+		base64.RawURLEncoding.EncodeToString(challenge[:]), client.PilotStartedAt).Scan(&proof.central, &proof.session, &proof.completed, &proof.pilotStartedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return proof, accounts.ErrForbidden
 	}
@@ -212,7 +242,7 @@ func (s *Service) PreviewIdentityLink(ctx context.Context, product, instance str
 	if err != nil {
 		return IdentityLinkPreview{}, err
 	}
-	if err = s.acceptBrowserWork(ctx, s.pool, client.ClientID, proof.issuedAt, CheckBrowserWork); err != nil {
+	if err = s.acceptBrowserWork(ctx, s.pool, client.ClientID, proof.pilotStartedAt, CheckBrowserWork); err != nil {
 		return IdentityLinkPreview{}, err
 	}
 
@@ -236,19 +266,19 @@ func (s *Service) CompleteIdentityLink(ctx context.Context, product, instance st
 	if err != nil || in.CentralUserID == "" {
 		return Identity{}, accounts.ErrForbidden
 	}
-	tx, err := s.pool.Begin(ctx)
+	tx, err := s.beginRuntimeMutation(ctx, pgx.TxOptions{})
 	if err != nil {
 		return Identity{}, err
 	}
 	defer database.Rollback(tx)
+	if err = s.acceptBrowserWork(ctx, tx, client.ClientID, client.PilotStartedAt, CheckBrowserWork); err != nil {
+		return Identity{}, err
+	}
+
 	proof, err := readIdentityLinkProof(ctx, tx, client, in, true)
 	if err != nil {
 		return Identity{}, err
 	}
-	if err = s.acceptBrowserWork(ctx, tx, client.ClientID, proof.issuedAt, CheckBrowserWork); err != nil {
-		return Identity{}, err
-	}
-
 	if proof.central != in.CentralUserID {
 		return Identity{}, accounts.ErrForbidden
 	}
@@ -310,7 +340,7 @@ func (s *Service) lockIdentityLinkSource(ctx context.Context, tx pgx.Tx, proof i
 	if err != nil {
 		return err
 	}
-	if !s.users.Managed(product, instance) {
+	if !s.users.ManagedOn(ctx, tx, product, instance) {
 		return accounts.ErrForbidden
 	}
 	return s.users.RequirePermissionOn(ctx, tx, proof.central, product, instance, "product:use")

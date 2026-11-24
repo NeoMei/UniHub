@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"log"
+	"maps"
 	"net/http"
 	"os"
 	"os/signal"
@@ -37,6 +38,32 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+func newApplicationIntegrationStore(pool *pgxpool.Pool, admin *platformadmin.Store, c config) *appintegrations.Store {
+	runtimeInstances := make(map[string]bool, len(c.ProductRuntime))
+	for _, service := range c.ProductRuntime {
+		runtimeInstances[service.ProductID+"/"+productusers.Instance(service.InstanceID)] = true
+	}
+	// This inventory includes legacy OIDC clients without changing their runtime policy.
+	clients := make(map[string]products.Client, len(c.ProductAccess)+len(c.ProductClients))
+	maps.Copy(clients, c.ProductAccess)
+	explicitDefaults := make(map[string]bool, len(c.ProductAccess))
+	for _, client := range c.ProductAccess {
+		if productusers.Instance(client.InstanceID) == "default" {
+			explicitDefaults[client.ProductID] = true
+		}
+	}
+	reservedClients := []string{c.Audience, c.OperatorAudience, c.IdentityManagementClientID}
+	for product, audience := range c.ProductClients {
+		reservedClients = append(reservedClients, audience)
+		if !explicitDefaults[product] {
+			clients[audience] = products.Client{ClientID: audience, ProductID: product, InstanceID: "default"}
+		}
+	}
+	return appintegrations.New(pool, admin, c.PublicURL, !c.Production,
+		c.ProductUserManifests, clients, runtimeInstances, reservedClients)
+}
+
 func run() error {
 	mode := "serve"
 	if len(os.Args) > 1 {
@@ -197,16 +224,7 @@ func run() error {
 	}
 	var integrations *appintegrations.Store
 	if c.PublicURL != "" {
-		runtimeInstances := make(map[string]bool, len(c.ProductRuntime))
-		for _, service := range c.ProductRuntime {
-			runtimeInstances[service.ProductID+"/"+productusers.Instance(service.InstanceID)] = true
-		}
-		reservedClients := []string{c.Audience, c.OperatorAudience, c.IdentityManagementClientID}
-		for _, audience := range c.ProductClients {
-			reservedClients = append(reservedClients, audience)
-		}
-		integrations = appintegrations.New(pool, platformAdmin, c.PublicURL, !c.Production,
-			c.ProductUserManifests, c.ProductAccess, runtimeInstances, reservedClients)
+		integrations = newApplicationIntegrationStore(pool, platformAdmin, c)
 		productUsers.ConfigureRegistryOverlay(integrations)
 	}
 	var productAuth *productauth.Service

@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"errors"
+	"github.com/jackc/pgx/v5"
 	"net/http"
 	"slices"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"unihub/internal/appintegrations"
 	"unihub/internal/auth"
 	"unihub/internal/billing"
+	"unihub/internal/productauth"
 	"unihub/internal/productusers"
 	"unihub/internal/wallet"
 )
@@ -58,6 +61,9 @@ func (s *api) runtimeAuthenticated(op string, next func(http.ResponseWriter, *ht
 			if app, authenticated := s.options.ApplicationIntegrations.Authenticate(r.Context(), raw, allowPaused); authenticated {
 				service = RuntimeService{ProductID: app.ProductID, InstanceID: app.InstanceID,
 					IdentityClientID: app.ClientID, AllowedOps: appintegrations.NativeIdentityOperations(), ManagedIntegration: true}
+				r = r.WithContext(productauth.WithRuntimeMutationGuard(r.Context(), func(ctx context.Context, tx pgx.Tx) error {
+					return s.options.ApplicationIntegrations.RequireRuntimeMutation(ctx, tx, app, raw, allowPaused)
+				}))
 				matches++
 			}
 		}

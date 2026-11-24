@@ -269,6 +269,10 @@ func (s *Service) writeBrowserHandoffSession(w http.ResponseWriter, r *http.Requ
 		return false
 	}
 	defer database.Rollback(tx)
+	if err = s.acceptBrowserWork(ctx, tx, completion.ClientID, completion.PilotStartedAt, RecordInbound); err != nil {
+		http.Error(w, "Handoff unavailable", http.StatusForbidden)
+		return false
+	}
 	if err = s.lockBrowserHandoffSource(ctx, tx, completion); err != nil {
 		if errors.Is(err, accounts.ErrForbidden) {
 			http.Error(w, "Invalid Handoff", http.StatusUnauthorized)
@@ -316,10 +320,6 @@ func (s *Service) writeBrowserHandoffSession(w http.ResponseWriter, r *http.Requ
 	if _, err = tx.Exec(ctx, `INSERT INTO product_browser_session_origins(session_id_hash,binding_id,auth_version,native_session_id)
 		VALUES($1,$2,$3,NULLIF($4,''))`, idHash, completion.BindingID, completion.AuthVersion, completion.NativeSessionID); err != nil {
 		http.Error(w, "Unavailable", http.StatusServiceUnavailable)
-		return false
-	}
-	if err = s.acceptBrowserWork(ctx, tx, completion.ClientID, completion.IssuedAt, RecordInbound); err != nil {
-		http.Error(w, "Handoff unavailable", http.StatusForbidden)
 		return false
 	}
 	if err = tx.Commit(ctx); err != nil {

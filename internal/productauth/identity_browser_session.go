@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -48,13 +47,17 @@ func (s *Service) MatchesIdentityBrowser(ctx context.Context, product, instance,
 		FROM product_browser_codes c
 		WHERE c.code_hash=$1 AND c.client_id=$2 AND c.pkce_challenge=$3 AND c.nonce_hash=$4
 		  AND c.expires_at>now() AND NOT c.consumed AND c.source_session_hash IS NOT NULL
+		  AND c.application_pilot_at IS NOT DISTINCT FROM $8::timestamptz
 		  AND EXISTS (`+currentIdentityBrowserCodeDestination+`
 		    AND b.product_id=$5 AND b.instance_id=$6 AND b.local_user_id=$7)`,
-		digest(in.Code), in.ClientID, challenge, digest(in.Nonce), product, instance, local).Scan(&userID, &sessionHash)
+		digest(in.Code), in.ClientID, challenge, digest(in.Nonce), product, instance, local, client.PilotStartedAt).Scan(&userID, &sessionHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
+		return false, err
+	}
+	if err = s.acceptBrowserWork(ctx, s.pool, client.ClientID, client.PilotStartedAt, CheckBrowserWork); err != nil {
 		return false, err
 	}
 	if _, err = currentBrowserSourceSession(ctx, s.pool, sessionHash, userID); err != nil {
@@ -74,22 +77,25 @@ func (s *Service) ExchangeIdentityBrowser(ctx context.Context, product, instance
 		client.ProductID != product || productusers.Instance(client.InstanceID) != instance {
 		return ProductIdentitySession{}, accounts.ErrForbidden
 	}
-	grant, err := s.ExchangeBrowser(ctx, product, instance, in)
+	tx, err := s.beginRuntimeMutation(ctx, pgx.TxOptions{})
+	if err != nil {
+		return ProductIdentitySession{}, err
+	}
+	defer database.Rollback(tx)
+
+	grant, err := s.exchangeBrowserOn(ctx, tx, client, product, instance, in)
 	if err != nil {
 		return ProductIdentitySession{}, err
 	}
 	if grant.SourceProofToken == "" {
 		return ProductIdentitySession{}, accounts.ErrForbidden
 	}
-	if err = s.ConsumeBrowserProof(ctx, grant.ProofToken); err != nil {
+	if err = consumeBrowserProofOn(ctx, tx, grant.ProofToken); err != nil {
 		return ProductIdentitySession{}, err
 	}
-
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
-	if err != nil {
+	if err = s.acceptBrowserWork(ctx, tx, client.ClientID, client.PilotStartedAt, RecordOutbound); err != nil {
 		return ProductIdentitySession{}, err
 	}
-	defer database.Rollback(tx)
 
 	userID, raw := grant.Access.User.ID, grant.SourceProofToken
 	// Carry the authorization epoch forward. The verification below rejects
@@ -108,7 +114,7 @@ func (s *Service) ExchangeIdentityBrowser(ctx context.Context, product, instance
 	if result.RowsAffected() != 1 {
 		return ProductIdentitySession{}, accounts.ErrForbidden
 	}
-	local, err := s.verifyIdentityBrowserSourceOn(ctx, tx, raw, product, instance, in.ClientID, userID)
+	local, err := s.verifyIdentityBrowserSourceOn(ctx, tx, raw, product, instance, in.ClientID, userID, true)
 	if err != nil {
 		return ProductIdentitySession{}, err
 	}
@@ -119,15 +125,6 @@ func (s *Service) ExchangeIdentityBrowser(ctx context.Context, product, instance
 	identity, err := s.lookupBindingOn(ctx, tx, binding)
 	if err != nil {
 		return ProductIdentitySession{}, err
-	}
-	if s.browserOverlay != nil {
-		var issuedAt time.Time
-		if err = tx.QueryRow(ctx, `SELECT expires_at-interval '120 seconds' FROM product_browser_codes WHERE code_hash=$1`, digest(in.Code)).Scan(&issuedAt); err != nil {
-			return ProductIdentitySession{}, accounts.ErrForbidden
-		}
-		if err = s.acceptBrowserWork(ctx, tx, client.ClientID, issuedAt, RecordOutbound); err != nil {
-			return ProductIdentitySession{}, err
-		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return ProductIdentitySession{}, err

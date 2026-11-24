@@ -37,7 +37,7 @@
 }
 
 .application-detail h2,
-.application-detail code {
+.application-integrations code {
   overflow-wrap: anywhere;
 }
 
@@ -60,13 +60,6 @@
 
 .application-detail .application-info code {
   font-size: 12px;
-}
-
-.application-secret {
-  padding: 12px;
-  margin: 12px 0;
-  border: 1px solid var(--admin-line);
-  border-radius: 8px;
 }
 
 .application-state-actions {
@@ -109,7 +102,6 @@
 
 .application-guide ul { padding-inline-start: 20px; }
 .application-guide li + li { margin-top: 8px; }
-.application-guide table code { overflow-wrap: anywhere; }
 .application-guide .application-guide-steps { display: grid; gap: 18px; padding-inline-start: 24px; }
 .application-guide-steps li { padding-inline-start: 6px; }
 .application-guide-steps h3 { margin: 0 0 8px; }

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"strings"
+	"time"
 	"unicode"
 
 	"unihub/internal/accounts"
@@ -35,6 +36,7 @@ type Application struct {
 	InboundVerified      bool   `json:"inbound_verified"`
 	OutboundVerified     bool   `json:"outbound_verified"`
 	HubOrigin            string `json:"hub_origin"`
+	pilotStartedAt       *time.Time
 }
 
 func normalize(input Input, hub string, allowLoopback bool) (Application, error) {
@@ -102,7 +104,7 @@ func (a Application) Manifest() productusers.Manifest {
 func (a Application) Client() products.Client {
 	return products.Client{ClientID: a.ClientID, ProductID: a.ProductID, InstanceID: a.InstanceID, BrowserSSO: true,
 		Origins: []string{a.Origin}, RedirectURIs: []string{a.CallbackURL}, IdentityLinkRole: "member",
-		NativeLoginURL: a.NativeLoginURL, NativeLoginLabel: "使用 " + a.Name + " 账号登录", NativeHandoffGeneration: "1"}
+		NativeLoginURL: a.NativeLoginURL, NativeLoginLabel: "使用 " + a.Name + " 账号登录", NativeHandoffGeneration: "1", PilotStartedAt: a.pilotStartedAt}
 }
 
 func (a Application) allows(state string) bool {

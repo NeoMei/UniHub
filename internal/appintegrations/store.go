@@ -21,7 +21,7 @@ import (
 )
 
 const applicationFields = `product_id, instance_id, name, origin, entry_url, callback_url,
-	native_login_url, client_id, state, version, credential_hash IS NOT NULL, inbound_verified, outbound_verified`
+	native_login_url, client_id, state, version, credential_hash IS NOT NULL, inbound_verified, outbound_verified, pilot_started_at`
 
 type Store struct {
 	pool            *pgxpool.Pool
@@ -88,7 +88,7 @@ func New(pool *pgxpool.Pool, admin *platformadmin.Store, hub string, allowLoopba
 func (s *Store) scan(row interface{ Scan(...any) error }) (Application, error) {
 	app := Application{Source: "managed", BrowserSSO: true, HubOrigin: s.hub}
 	err := row.Scan(&app.ProductID, &app.InstanceID, &app.Name, &app.Origin, &app.EntryURL, &app.CallbackURL,
-		&app.NativeLoginURL, &app.ClientID, &app.State, &app.Version, &app.CredentialConfigured, &app.InboundVerified, &app.OutboundVerified)
+		&app.NativeLoginURL, &app.ClientID, &app.State, &app.Version, &app.CredentialConfigured, &app.InboundVerified, &app.OutboundVerified, &app.pilotStartedAt)
 	app.RuntimeConfigured = app.CredentialConfigured && app.State != "draft"
 	return app, err
 }
@@ -210,12 +210,14 @@ func (s *Store) Update(ctx context.Context, actor, product, instance string, inp
 		if err != nil {
 			return Application{}, err
 		}
-		if app.State != "draft" {
+		if app.State != "draft" && app.State != "paused" {
 			return Application{}, accounts.ErrConflict
 		}
 		return s.scan(tx.QueryRow(ctx, `UPDATE application_integrations SET
 			name=$3,origin=$4,entry_url=$5,callback_url=$6,native_login_url=$7,version=version+1,
-			credential_hash=CASE WHEN origin=$4 AND callback_url=$6 THEN credential_hash ELSE NULL END
+			credential_hash=CASE WHEN origin=$4 AND callback_url=$6 THEN credential_hash ELSE NULL END,
+			inbound_verified=inbound_verified AND origin=$4 AND entry_url=$5 AND callback_url=$6 AND native_login_url=$7,
+			outbound_verified=outbound_verified AND origin=$4 AND entry_url=$5 AND callback_url=$6 AND native_login_url=$7
 			WHERE product_id=$1 AND instance_id=$2 RETURNING `+applicationFields,
 			product, instance, next.Name, next.Origin, next.EntryURL, next.CallbackURL, next.NativeLoginURL))
 	})

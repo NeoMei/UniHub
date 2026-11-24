@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"unihub/internal/accounts"
 	"unihub/internal/appintegrations"
@@ -59,18 +62,19 @@ func TestApplicationIntegrationSuperAdminAndLiveBrowserRoundTrip(t *testing.T) {
 	const route = "/admin/v1/application-integrations"
 	const item = route + "/example-wiki/default"
 	const runtime = "/internal/v1/product-runtime/identity/"
-	productSession := httptest.NewRequest("GET", route, nil)
-	productSession = productSession.WithContext(auth.WithBrowserClaims(ctx, auth.Claims{
-		Issuer: "https://test", Subject: "bob", Name: "bob", ProductSession: true,
-	}))
-	blocked := httptest.NewRecorder()
-	handler.ServeHTTP(blocked, productSession)
-	integrationStatus(t, blocked, 403)
-	capability := httptest.NewRequest("GET", "/admin/v1/me", nil).WithContext(productSession.Context())
-	settings := httptest.NewRecorder()
-	handler.ServeHTTP(settings, capability)
-	if principal := integrationBody[platformadmin.Principal](t, settings, 200); principal.Enabled || len(principal.Roles) > 0 {
-		t.Fatal("product session inherited platform authority")
+	for _, claims := range []auth.Claims{
+		{Issuer: "https://test", Subject: "bob", Name: "bob", ProductSession: true},
+		{Issuer: "https://test", Subject: "bob", Name: "bob"},
+	} {
+		unproven := auth.WithBrowserClaims(ctx, claims)
+		blocked := httptest.NewRecorder()
+		handler.ServeHTTP(blocked, httptest.NewRequest("GET", route, nil).WithContext(unproven))
+		integrationStatus(t, blocked, 403)
+		settings := httptest.NewRecorder()
+		handler.ServeHTTP(settings, httptest.NewRequest("GET", "/admin/v1/me", nil).WithContext(unproven))
+		principal := integrationBody[platformadmin.Principal](t, settings, 200)
+		require.False(t, principal.Enabled)
+		require.Empty(t, principal.Roles)
 	}
 	const input = `{"product_id":"example-wiki","name":"Example Wiki","origin":"https://wiki.example","entry_url":"https://wiki.example/auth/start","callback_url":"https://wiki.example/auth/callback","native_login_url":"https://wiki.example/native"}`
 	for _, check := range []struct{ method, path string }{
@@ -180,6 +184,31 @@ func TestApplicationIntegrationSuperAdminAndLiveBrowserRoundTrip(t *testing.T) {
 	if oldCode == "" {
 		t.Fatal("failed to issue pre-pause authorization")
 	}
+	oldStart := integrationRequest(handler, "GET", "/auth/product/start?client_id="+url.QueryEscape(app.ClientID)+"&state="+state, "", nil, nil, "")
+	integrationStatus(t, oldStart, 303)
+	oldHandoff := integrationLocation(t, oldStart).Query().Get("handoff")
+	require.NotEmpty(t, oldHandoff)
+
+	linkAuth := authn
+	linkAuth.AuthenticationID = "link-before-pause"
+	linkAuth.LocalUserID = "second-user"
+	link := integrationBody[productauth.IdentityLinkStart](t, integrationRequest(handler, "POST", runtime+"link/start", cred.Token,
+		productauth.BeginIdentityLink{ClientID: app.ClientID, State: state, Nonce: nonce,
+			Challenge: base64.RawURLEncoding.EncodeToString(challenge[:]), Authentication: linkAuth}, nil, ""), 201)
+	centralHash := sha256.Sum256([]byte("test-central-cookie"))
+	_, err = pool.Exec(ctx, `INSERT INTO browser_sessions(id_hash,issuer,subject,name,email,csrf_token,expires_at)
+		VALUES($1,'https://test','alice','Alice','','csrf',now()+interval '5 minutes')`, hex.EncodeToString(centralHash[:]))
+	require.NoError(t, err)
+	linkCallback, err := authService.AuthorizeIdentityLink(ctx, app.ClientID, app.CallbackURL, state, link.LinkID, hex.EncodeToString(centralHash[:]))
+	require.NoError(t, err)
+	linkURL, err := url.Parse(linkCallback)
+	require.NoError(t, err)
+	completeLink := productauth.CompleteIdentityLink{ClientID: app.ClientID, LinkID: link.LinkID, Code: linkURL.Query().Get("code"),
+		RedirectURI: app.CallbackURL, Nonce: nonce, Verifier: verifier, CentralUserID: ordinary.ID, Authentication: linkAuth}
+	integrationStatus(t, integrationRequest(handler, "POST", runtime+"link/preview", cred.Token, completeLink, nil, ""), 200)
+
+	admitted, ok := integrations.Authenticate(ctx, cred.Token, false)
+	require.True(t, ok)
 	integrationStatus(t, call(handler, "POST", item+"/state", "bob", `{"version":4,"state":"paused"}`, ""), 200)
 	integrationStatus(t, integrationRequest(handler, "POST", runtime+"session/verify", cred.Token,
 		map[string]string{"source_proof_token": session.SourceProofToken, "central_user_id": identity.Binding.UserID}, nil, ""), 204)
@@ -198,9 +227,33 @@ func TestApplicationIntegrationSuperAdminAndLiveBrowserRoundTrip(t *testing.T) {
 	}
 	integrationStatus(t, call(handler, "POST", runtime+"source-lifecycle/status", cred.Token, `{"local_user_id":"user-1"}`, ""), 401)
 	integrationStatus(t, call(handler, "POST", item+"/state", "bob", `{"version":6,"state":"pilot"}`, ""), 200)
+	guardTx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer database.Rollback(guardTx)
+	require.ErrorIs(t, integrations.RequireRuntimeMutation(ctx, guardTx, admitted, cred.Token, true), accounts.ErrForbidden)
+	require.ErrorIs(t, integrations.RequireRuntimeMutation(ctx, guardTx, admitted, second.Token, false), accounts.ErrForbidden)
+	require.NoError(t, guardTx.Rollback(ctx))
+
+	integrationStatus(t, integrationRequest(handler, "POST", runtime+"browser/approve", second.Token,
+		productauth.BrowserApproval{ClientID: app.ClientID, HandoffID: oldHandoff, State: state,
+			NativeSessionID: strings.Repeat("b", 64), NativeSessionExpiresAt: time.Now().Add(time.Hour).Unix(), NativeHandoffGeneration: "1"}, nil, actor.ActorToken), 403)
+	integrationStatus(t, integrationRequest(handler, "POST", runtime+"link/preview", second.Token, completeLink, nil, ""), 403)
+	integrationStatus(t, integrationRequest(handler, "POST", runtime+"link/complete", second.Token, completeLink, nil, ""), 403)
 	integrationStatus(t, integrationRequest(handler, "POST", runtime+"session/exchange", second.Token,
 		productauth.BrowserExchange{ClientID: app.ClientID, Code: oldCode, Verifier: verifier, Nonce: nonce, RedirectURI: app.CallbackURL}, nil, ""), 403)
 	integrationStatus(t, call(handler, "POST", item+"/state", "bob", `{"version":7,"state":"active"}`, ""), 409)
+	integrationStatus(t, call(handler, "POST", item+"/state", "bob", `{"version":7,"state":"paused"}`, ""), 200)
+	editInput := strings.ReplaceAll(input, "/auth/callback", "/auth/new-callback")
+	integrationStatus(t, call(handler, "PUT", item, "bob", `{"version":7,`+editInput[1:], ""), 409)
+	edited := integrationBody[appintegrations.Application](t, call(handler, "PUT", item, "bob", `{"version":8,`+editInput[1:], ""), 200)
+	require.Equal(t, app.ClientID, edited.ClientID)
+	require.Equal(t, "https://wiki.example/auth/new-callback", edited.CallbackURL)
+	require.False(t, edited.CredentialConfigured)
+	require.False(t, edited.InboundVerified)
+	require.False(t, edited.OutboundVerified)
+	integrationStatus(t, call(handler, "POST", runtime+"source-lifecycle/status", second.Token, `{"local_user_id":"user-1"}`, ""), 401)
+	integrationStatus(t, call(handler, "POST", item+"/state", "bob", `{"version":9,"state":"pilot"}`, ""), 409)
+
 	list = call(handler, "GET", route, "bob", "", "")
 	if strings.Contains(list.Body.String(), second.Token) || strings.Contains(list.Body.String(), cred.Token) {
 		t.Fatal("credential leaked in list")

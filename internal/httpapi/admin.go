@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"time"
 	"unihub/internal/accounts"
-	"unihub/internal/auth"
 	"unihub/internal/platformadmin"
 )
 
@@ -45,7 +44,7 @@ func (s *api) adminRoutes(add func(string, action)) {
 			if originProduct(r) != "" {
 				return accounts.ErrForbidden
 			}
-			if auth.ProductBrowserSession(r.Context()) {
+			if !hasOIDCAuthentication(r.Context()) {
 				if pattern == "GET /admin/v1/me" {
 					return respond(w, 200, platformadmin.Principal{UserID: u.ID, Roles: []string{}, Permissions: []string{}})
 				}
