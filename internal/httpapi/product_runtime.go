@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 	"unihub/internal/accounts"
+	"unihub/internal/appintegrations"
 	"unihub/internal/auth"
 	"unihub/internal/billing"
 	"unihub/internal/productusers"
@@ -17,12 +18,13 @@ import (
 // RuntimeService is private deployment policy. Tokens are never accepted from
 // product configuration JSON and no legacy global billing token enables it.
 type RuntimeService struct {
-	Token            string   `json:"token"`
-	ProductID        string   `json:"product_id"`
-	InstanceID       string   `json:"instance_id"`
-	FinanceClientID  string   `json:"finance_client_id,omitempty"`
-	IdentityClientID string   `json:"identity_client_id,omitempty"`
-	AllowedOps       []string `json:"allowed_ops"`
+	Token              string   `json:"token"`
+	ManagedIntegration bool     `json:"-"`
+	ProductID          string   `json:"product_id"`
+	InstanceID         string   `json:"instance_id"`
+	FinanceClientID    string   `json:"finance_client_id,omitempty"`
+	IdentityClientID   string   `json:"identity_client_id,omitempty"`
+	AllowedOps         []string `json:"allowed_ops"`
 }
 
 func runtimeBearer(r *http.Request, name string) (string, bool) {
@@ -48,6 +50,14 @@ func (s *api) runtimeAuthenticated(op string, next func(http.ResponseWriter, *ht
 		for _, candidate := range s.options.ProductRuntime {
 			if len(candidate.Token) >= 32 && subtle.ConstantTimeCompare([]byte(raw), []byte(candidate.Token)) == 1 {
 				service = candidate
+				matches++
+			}
+		}
+		if s.options.ApplicationIntegrations != nil && r.Header.Get("Origin") == "" {
+			allowPaused := op == "identity:source-lifecycle" || r.Pattern == "POST /internal/v1/product-runtime/identity/session/verify"
+			if app, authenticated := s.options.ApplicationIntegrations.Authenticate(r.Context(), raw, allowPaused); authenticated {
+				service = RuntimeService{ProductID: app.ProductID, InstanceID: app.InstanceID,
+					IdentityClientID: app.ClientID, AllowedOps: appintegrations.NativeIdentityOperations(), ManagedIntegration: true}
 				matches++
 			}
 		}
@@ -138,7 +148,7 @@ func (s *api) runtimeActor(r *http.Request, service RuntimeService) (accounts.Us
 var errRuntimeActor = errors.New("runtime actor proof required")
 
 func (s *api) productRuntimeRoutes(m *http.ServeMux) {
-	if len(s.options.ProductRuntime) == 0 {
+	if len(s.options.ProductRuntime) == 0 && s.options.ApplicationIntegrations == nil {
 		return
 	}
 	route := func(pattern, op string, next func(http.ResponseWriter, *http.Request, RuntimeService) error) {

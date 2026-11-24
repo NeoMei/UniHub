@@ -455,6 +455,7 @@ func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 		s.opts.ProductUsers.RequirePermissionOn(ctx, s.pool, user, *product, *instance, "product:use") != nil) {
 		return auth.Claims{}, "", false
 	}
+	claims.ProductSession = product != nil
 	return claims, csrf, true
 }
 func (s *Server) csrf(r *http.Request, expected string) bool {

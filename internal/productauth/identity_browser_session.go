@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -118,6 +119,15 @@ func (s *Service) ExchangeIdentityBrowser(ctx context.Context, product, instance
 	identity, err := s.lookupBindingOn(ctx, tx, binding)
 	if err != nil {
 		return ProductIdentitySession{}, err
+	}
+	if s.browserOverlay != nil {
+		var issuedAt time.Time
+		if err = tx.QueryRow(ctx, `SELECT expires_at-interval '120 seconds' FROM product_browser_codes WHERE code_hash=$1`, digest(in.Code)).Scan(&issuedAt); err != nil {
+			return ProductIdentitySession{}, accounts.ErrForbidden
+		}
+		if err = s.acceptBrowserWork(ctx, tx, client.ClientID, issuedAt, RecordOutbound); err != nil {
+			return ProductIdentitySession{}, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return ProductIdentitySession{}, err

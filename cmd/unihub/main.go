@@ -12,6 +12,7 @@ import (
 	"time"
 	publicapi "unihub/api"
 	"unihub/internal/accounts"
+	"unihub/internal/appintegrations"
 	"unihub/internal/auth"
 	"unihub/internal/billing"
 	"unihub/internal/cashtopup"
@@ -194,12 +195,29 @@ func run() error {
 	if identity.ProfileEnabled() {
 		profileService = identity
 	}
+	var integrations *appintegrations.Store
+	if c.PublicURL != "" {
+		runtimeInstances := make(map[string]bool, len(c.ProductRuntime))
+		for _, service := range c.ProductRuntime {
+			runtimeInstances[service.ProductID+"/"+productusers.Instance(service.InstanceID)] = true
+		}
+		reservedClients := []string{c.Audience, c.OperatorAudience, c.IdentityManagementClientID}
+		for _, audience := range c.ProductClients {
+			reservedClients = append(reservedClients, audience)
+		}
+		integrations = appintegrations.New(pool, platformAdmin, c.PublicURL, !c.Production,
+			c.ProductUserManifests, c.ProductAccess, runtimeInstances, reservedClients)
+		productUsers.ConfigureRegistryOverlay(integrations)
+	}
 	var productAuth *productauth.Service
-	if len(c.ProductRuntime) > 0 {
+	if len(c.ProductRuntime) > 0 || integrations != nil {
 		productAuth = productauth.New(pool, a, productUsers, c.PublicURL)
 		productAuth.ConfigureBrowserClients(c.ProductAccess)
+		if integrations != nil {
+			productAuth.ConfigureBrowserRegistryOverlay(integrations)
+		}
 	}
-	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentConfiguration: paymentConfiguration, PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, ProductModelSigningKey: c.ProductModelSigningKey, Billing: b, CashTopup: ct, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth})
+	var handler http.Handler = httpapi.New(v, a, w, httpapi.Options{PaymentConfiguration: paymentConfiguration, PaymentProviders: c.PaymentProviders, Sandbox: c.Sandbox, Merchant: c.Merchant, SigningKey: c.SigningKey, ProductModelSigningKey: c.ProductModelSigningKey, Billing: b, CashTopup: ct, ServiceToken: c.ModelServiceToken, ModelAccess: modelAccess, OperatorVerifier: operatorVerifier, ProductVerifiers: productVerifiers, ProductAccess: c.ProductAccess, ProductUsers: productUsers, PlatformAdmin: platformAdmin, Identity: profileService, ProductRuntime: c.ProductRuntime, ProductAuth: productAuth, ApplicationIntegrations: integrations})
 	if c.PublicURL != "" {
 		browser, err := console.New(startup, pool, v, console.Options{Issuer: c.Issuer, ClientID: c.Audience, ClientSecret: c.ClientSecret, PublicURL: c.PublicURL, Production: c.Production, Sandbox: c.Sandbox, StaticDir: c.StaticDir, ProductUsers: productUsers})
 		if err != nil {

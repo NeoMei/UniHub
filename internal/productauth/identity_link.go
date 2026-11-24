@@ -51,7 +51,13 @@ type IdentityLinkPreview struct {
 }
 
 func (s *Service) identityLinkClient(id, redirect string) (products.Client, error) {
-	client, err := s.BrowserClient(id, redirect)
+	return s.identityLinkClientForSession(id, redirect, false)
+}
+
+func (s *Service) identityLinkClientForSession(id, redirect string, includePaused bool) (products.Client, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := s.browserClientOn(ctx, s.pool, id, redirect, includePaused)
 	if err != nil || client.IdentityLinkRole == "" {
 		return products.Client{}, accounts.ErrForbidden
 	}
@@ -177,11 +183,12 @@ func (s *Service) identityLinkExchangeClient(product, instance string, in Comple
 type identityLinkProof struct {
 	central, session string
 	completed        *string
+	issuedAt         time.Time
 }
 
 func readIdentityLinkProof(ctx context.Context, q accounts.Querier, client products.Client, in CompleteIdentityLink, lock bool) (proof identityLinkProof, err error) {
 	challenge := sha256.Sum256([]byte(in.Verifier))
-	query := `SELECT central_user_id,source_session_hash,completed_digest FROM product_identity_links
+	query := `SELECT central_user_id,source_session_hash,completed_digest,expires_at-interval '5 minutes' FROM product_identity_links
 		WHERE id_hash=$1 AND client_id=$2 AND product_id=$3 AND instance_id=$4 AND local_user_id=$5
 		AND auth_version=$6 AND code_hash=$7 AND nonce_hash=$8 AND pkce_challenge=$9 AND expires_at>now()`
 	if lock {
@@ -189,7 +196,7 @@ func readIdentityLinkProof(ctx context.Context, q accounts.Querier, client produ
 	}
 	err = q.QueryRow(ctx, query, digest(in.LinkID), client.ClientID, client.ProductID, productusers.Instance(client.InstanceID),
 		in.Authentication.LocalUserID, in.Authentication.AuthVersion, digest(in.Code), digest(in.Nonce),
-		base64.RawURLEncoding.EncodeToString(challenge[:])).Scan(&proof.central, &proof.session, &proof.completed)
+		base64.RawURLEncoding.EncodeToString(challenge[:])).Scan(&proof.central, &proof.session, &proof.completed, &proof.issuedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return proof, accounts.ErrForbidden
 	}
@@ -205,6 +212,10 @@ func (s *Service) PreviewIdentityLink(ctx context.Context, product, instance str
 	if err != nil {
 		return IdentityLinkPreview{}, err
 	}
+	if err = s.acceptBrowserWork(ctx, s.pool, client.ClientID, proof.issuedAt, CheckBrowserWork); err != nil {
+		return IdentityLinkPreview{}, err
+	}
+
 	if _, err = currentBrowserSourceSession(ctx, s.pool, proof.session, proof.central); err != nil ||
 		!s.BrowserSessionAllowed(ctx, proof.session) {
 		return IdentityLinkPreview{}, accounts.ErrForbidden
@@ -234,6 +245,10 @@ func (s *Service) CompleteIdentityLink(ctx context.Context, product, instance st
 	if err != nil {
 		return Identity{}, err
 	}
+	if err = s.acceptBrowserWork(ctx, tx, client.ClientID, proof.issuedAt, CheckBrowserWork); err != nil {
+		return Identity{}, err
+	}
+
 	if proof.central != in.CentralUserID {
 		return Identity{}, accounts.ErrForbidden
 	}

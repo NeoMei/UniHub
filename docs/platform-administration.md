@@ -2,6 +2,10 @@
 
 平台后台使用中央控制台会话和数据库中的平台角色。团队 owner、产品管理员、Casdoor `isAdmin`、账单 operator、模型 Key 和产品服务凭据都不会自动获得平台权限。
 
+## 应用接入与管理
+
+平台超管可在 `/admin/applications` 查看部署管理的应用并登记新的原账号接入应用。草稿、凭据签发、试点、双向核验、发布和暂停均在此页处理。用户仅从「我的应用」使用已有访问权限的实例。[接入向导与 AgentWiki 案例](application-integration-management.md)
+
 ## 首次启用
 
 1. 确认目标账号已登录过 UniHub，记录 `/v1/me` 返回的中央 UUID。

@@ -29,6 +29,7 @@ type Service struct {
 	users          *productusers.Store
 	issuer         string
 	browserClients map[string]products.Client
+	browserOverlay BrowserRegistryOverlay
 }
 
 func New(pool *pgxpool.Pool, a *accounts.Store, u *productusers.Store, issuer string) *Service {

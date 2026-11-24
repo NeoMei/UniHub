@@ -12,7 +12,10 @@ import (
 // The caller holds this transaction until the immutable financial command is
 // accepted, so a concurrent role change cannot authorize a peer adjustment.
 func (s *Store) RequireRuntimeCreditOn(ctx context.Context, tx pgx.Tx, actor, product, instance, account string) error {
-	m, ok := s.registry.Get(product, instance)
+	m, ok, err := s.findManifest(ctx, tx, product, instance)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return accounts.ErrForbidden
 	}

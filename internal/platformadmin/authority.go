@@ -20,7 +20,7 @@ type Principal struct {
 	Source          string   `json:"source,omitempty"`
 }
 
-var allPermissions = []string{"users:read", "users:write", "users:status", "users:sessions", "admins:manage", "accounts:read", "teams:write", "teams:privileged", "products:read", "access:write", "access:privileged", "finance:read", "finance:write", "keys:read", "keys:revoke", "calls:read", "audit:read", "system:read", "export:read", "identity:manage"}
+var allPermissions = []string{"users:read", "users:write", "users:status", "users:sessions", "admins:manage", "accounts:read", "teams:write", "teams:privileged", "products:read", "access:write", "access:privileged", "finance:read", "finance:write", "keys:read", "keys:revoke", "calls:read", "audit:read", "system:read", "export:read", "identity:manage", "applications:manage", "products:write"}
 var rolePermissions = map[string][]string{
 	"super_admin":   allPermissions,
 	"user_admin":    {"users:read", "users:write", "users:status", "users:sessions", "accounts:read", "teams:write", "products:read", "access:write", "identity:manage", "keys:revoke", "audit:read", "system:read", "export:read"},

@@ -45,6 +45,8 @@ type BrowserGrant struct {
 	SourceProofExpiresAt int64               `json:"source_proof_expires_at,omitempty"`
 }
 type BrowserCompletion struct {
+	ClientID               string
+	IssuedAt               time.Time
 	User                   accounts.User
 	Claims                 auth.Claims
 	BindingID              string
@@ -60,9 +62,46 @@ func (s *Service) ConfigureBrowserClients(clients map[string]products.Client) {
 		s.browserClients[id] = c
 	}
 }
+
+// BrowserRegistryOverlay serves administrator-managed native-identity clients.
+type BrowserRegistryOverlay interface {
+	BrowserClient(context.Context, accounts.Querier, string, bool) (products.Client, bool)
+	PublicBrowserClients(context.Context) map[string]products.Client
+	AcceptBrowserWork(context.Context, accounts.Querier, string, time.Time, BrowserReceipt) error
+}
+
+type BrowserReceipt int
+
+const (
+	CheckBrowserWork BrowserReceipt = iota
+	RecordInbound
+	RecordOutbound
+)
+
+func (s *Service) acceptBrowserWork(ctx context.Context, q accounts.Querier, id string, issuedAt time.Time, receipt BrowserReceipt) error {
+	if s.browserOverlay == nil {
+		return nil
+	}
+	return s.browserOverlay.AcceptBrowserWork(ctx, q, id, issuedAt, receipt)
+}
+
+func (s *Service) ConfigureBrowserRegistryOverlay(overlay BrowserRegistryOverlay) {
+	s.browserOverlay = overlay
+}
+
 func (s *Service) BrowserClient(id, redirect string) (products.Client, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return s.browserClientOn(ctx, s.pool, id, redirect, false)
+}
+func (s *Service) browserClientOn(ctx context.Context, q accounts.Querier, id, redirect string, includePaused bool) (products.Client, error) {
 	c, ok := s.browserClients[id]
-	if !ok || !c.BrowserSSO || !s.users.Managed(c.ProductID, c.InstanceID) || redirect != "" && !slices.Contains(c.RedirectURIs, redirect) {
+	if ok {
+		ok = s.users.ManagedOn(ctx, q, c.ProductID, c.InstanceID)
+	} else if s.browserOverlay != nil {
+		c, ok = s.browserOverlay.BrowserClient(ctx, q, id, includePaused)
+	}
+	if !ok || !c.BrowserSSO || redirect != "" && !slices.Contains(c.RedirectURIs, redirect) {
 		return c, accounts.ErrForbidden
 	}
 	if len(c.RedirectURIs) != 1 {
@@ -170,6 +209,7 @@ func (s *Service) FinishBrowserHandoff(ctx context.Context, id, state, browser s
 	var client, user, binding, nativeSession, generation string
 	var version int64
 	var nativeExpiry *time.Time
+	var issuedAt time.Time
 	e = tx.QueryRow(ctx, `UPDATE product_browser_handoffs h SET consumed=true
 		FROM product_auth_subjects p,product_runtime_bindings b,product_user_access a,users u
 		WHERE h.id_hash=$1 AND h.state_hash=$2 AND h.browser_hash=$3 AND h.expires_at>now()
@@ -181,20 +221,23 @@ func (s *Service) FinishBrowserHandoff(ctx context.Context, id, state, browser s
 		  AND NOT EXISTS (SELECT 1 FROM product_browser_native_session_revocations r
 		    WHERE r.binding_id=b.id AND r.native_session_id=h.native_session_id AND r.expires_at>clock_timestamp())
 		RETURNING h.client_id,h.approved_user_id,h.source_binding_id,h.source_auth_version,
-		  COALESCE(h.native_session_id,''),h.native_session_expires_at,h.native_handoff_generation`,
-		digest(id), digest(state), digest(browser)).Scan(&client, &user, &binding, &version, &nativeSession, &nativeExpiry, &generation)
+		  COALESCE(h.native_session_id,''),h.native_session_expires_at,h.native_handoff_generation,h.expires_at-interval '120 seconds'`,
+		digest(id), digest(state), digest(browser)).Scan(&client, &user, &binding, &version, &nativeSession, &nativeExpiry, &generation, &issuedAt)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return BrowserCompletion{}, accounts.ErrForbidden
 	}
 	if e != nil {
 		return BrowserCompletion{}, e
 	}
-	c, e := s.BrowserClient(client, "")
+	c, e := s.browserClientOn(ctx, tx, client, "", false)
 	if e != nil {
 		return BrowserCompletion{}, e
 	}
 	if !allowsBrowserHandoff(c, nativeSession, generation) {
 		return BrowserCompletion{}, accounts.ErrForbidden
+	}
+	if e = s.acceptBrowserWork(ctx, tx, client, issuedAt, CheckBrowserWork); e != nil {
+		return BrowserCompletion{}, e
 	}
 	if e = tx.Commit(ctx); e != nil {
 		return BrowserCompletion{}, e
@@ -208,7 +251,7 @@ func (s *Service) FinishBrowserHandoff(ctx context.Context, id, state, browser s
 		return BrowserCompletion{}, e
 	}
 	return BrowserCompletion{
-		User: u, Claims: claims, BindingID: binding, AuthVersion: version,
+		ClientID: client, IssuedAt: issuedAt, User: u, Claims: claims, BindingID: binding, AuthVersion: version,
 		NativeSessionID: nativeSession, NativeSessionExpiresAt: nativeExpiry,
 		RedirectURI: browserRedirect(c.RedirectURIs[0], url.Values{"handoff_done": {"1"}, "state": {state}}),
 	}, nil
@@ -378,6 +421,7 @@ func (s *Service) ExchangeBrowser(ctx context.Context, product, instance string,
 	var sourceBinding *string
 	var sourceVersion *int64
 	var sourceExpires *time.Time
+	var issuedAt time.Time
 	e = s.pool.QueryRow(ctx, `UPDATE product_browser_codes c SET consumed=true
 		WHERE c.code_hash=$1 AND c.client_id=$2 AND c.pkce_challenge=$3 AND c.nonce_hash=$4
 		  AND c.expires_at>now() AND NOT c.consumed
@@ -391,11 +435,15 @@ func (s *Service) ExchangeBrowser(ctx context.Context, product, instance string,
 		      AND s.created_at>=u.session_not_before
 		      AND NOT EXISTS (SELECT 1 FROM identity_revocations r WHERE r.issuer=s.issuer AND r.subject=s.subject AND r.pending)))
 		RETURNING c.user_id,c.source_binding_id,c.source_auth_version,c.source_session_hash,
-		  (SELECT s.expires_at FROM browser_sessions s WHERE s.id_hash=c.source_session_hash)`, digest(in.Code), in.ClientID, challenge, digest(in.Nonce),
-		c.IdentityLinkRole != "", product, productusers.Instance(instance)).Scan(&user, &sourceBinding, &sourceVersion, &sourceSessionHash, &sourceExpires)
+		  (SELECT s.expires_at FROM browser_sessions s WHERE s.id_hash=c.source_session_hash),c.expires_at-interval '120 seconds'`, digest(in.Code), in.ClientID, challenge, digest(in.Nonce),
+		c.IdentityLinkRole != "", product, productusers.Instance(instance)).Scan(&user, &sourceBinding, &sourceVersion, &sourceSessionHash, &sourceExpires, &issuedAt)
 	if e != nil {
 		return BrowserGrant{}, accounts.ErrForbidden
 	}
+	if e = s.acceptBrowserWork(ctx, s.pool, in.ClientID, issuedAt, CheckBrowserWork); e != nil {
+		return BrowserGrant{}, e
+	}
+
 	if sourceBinding != nil && (sourceVersion == nil || !s.browserSourceAllowed(ctx, *sourceBinding, *sourceVersion)) {
 		return BrowserGrant{}, accounts.ErrForbidden
 	}

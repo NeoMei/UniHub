@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 	"unihub/internal/accounts"
+	"unihub/internal/appintegrations"
 	"unihub/internal/auth"
 	"unihub/internal/billing"
 	"unihub/internal/cashtopup"
@@ -29,24 +30,25 @@ import (
 )
 
 type Options struct {
-	PaymentProviders       []payments.Provider
-	PaymentConfiguration   PaymentConfiguration
-	PlatformAdmin          *platformadmin.Store
-	ProductRuntime         map[string]RuntimeService
-	ProductAuth            *productauth.Service
-	Sandbox                bool
-	Merchant               string
-	SigningKey             []byte
-	ProductModelSigningKey []byte
-	Billing                *billing.Service
-	CashTopup              *cashtopup.Service
-	ServiceToken           string
-	ModelAccess            *modelaccess.Service
-	OperatorVerifier       auth.Verifier
-	ProductVerifiers       map[string]auth.Verifier
-	ProductAccess          map[string]products.Client
-	ProductUsers           *productusers.Store
-	Identity               ProfileService
+	PaymentProviders        []payments.Provider
+	PaymentConfiguration    PaymentConfiguration
+	PlatformAdmin           *platformadmin.Store
+	ProductRuntime          map[string]RuntimeService
+	ApplicationIntegrations *appintegrations.Store
+	ProductAuth             *productauth.Service
+	Sandbox                 bool
+	Merchant                string
+	SigningKey              []byte
+	ProductModelSigningKey  []byte
+	Billing                 *billing.Service
+	CashTopup               *cashtopup.Service
+	ServiceToken            string
+	ModelAccess             *modelaccess.Service
+	OperatorVerifier        auth.Verifier
+	ProductVerifiers        map[string]auth.Verifier
+	ProductAccess           map[string]products.Client
+	ProductUsers            *productusers.Store
+	Identity                ProfileService
 }
 type ProfileService interface {
 	Profile(context.Context, string) (identityapi.Profile, error)

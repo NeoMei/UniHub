@@ -121,7 +121,7 @@ func (s *Service) VerifyProductBrowserSource(ctx context.Context, raw, product, 
 		return accounts.ErrForbidden
 	}
 	instance = productusers.Instance(instance)
-	client, err := s.identityLinkClient(expectedClientID, "")
+	client, err := s.identityLinkClientForSession(expectedClientID, "", true)
 	if err != nil || client.ClientID != expectedClientID || client.ProductID != product ||
 		productusers.Instance(client.InstanceID) != instance {
 		return accounts.ErrForbidden

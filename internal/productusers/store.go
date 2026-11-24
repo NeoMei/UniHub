@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"slices"
 	"strings"
+	"time"
 	"unihub/internal/accounts"
 	"unihub/internal/database"
 )
@@ -53,6 +54,7 @@ type Application struct {
 	EntryURL string `json:"entry_url"`
 }
 type Store struct {
+	overlay    RegistryOverlay
 	pool       *pgxpool.Pool
 	registry   Registry
 	issuer     string
@@ -80,16 +82,67 @@ func (s *Store) CanManage(user string) bool {
 	}
 	return false
 }
-func (s *Store) Products() []Manifest { return s.registry.List() }
+
+// RegistryOverlay adds deployments registered by platform administrators.
+type RegistryOverlay interface {
+	FindManifest(context.Context, accounts.Querier, string, string) (Manifest, bool, error)
+	RegisteredManifests(context.Context) ([]Manifest, error)
+	LaunchManifests(context.Context, string) ([]Manifest, error)
+}
+
+func (s *Store) ConfigureRegistryOverlay(overlay RegistryOverlay) { s.overlay = overlay }
+
+func (s *Store) findManifest(ctx context.Context, q accounts.Querier, product, instance string) (Manifest, bool, error) {
+	if manifest, ok := s.registry.Get(product, instance); ok {
+		return manifest, true, nil
+	}
+	if s.overlay == nil {
+		return Manifest{}, false, nil
+	}
+	return s.overlay.FindManifest(ctx, q, product, instance)
+}
+
+func (s *Store) Products() []Manifest {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, _ := s.ProductsContext(ctx)
+	return out
+}
+
+func (s *Store) ProductsContext(ctx context.Context) ([]Manifest, error) {
+	out := s.registry.List()
+	if s.overlay == nil {
+		return out, nil
+	}
+	extra, err := s.overlay.RegisteredManifests(ctx)
+	if err != nil {
+		return out, err
+	}
+	out = append(out, extra...)
+	slices.SortFunc(out, func(a, b Manifest) int {
+		return strings.Compare(key(a.ProductID, a.InstanceID), key(b.ProductID, b.InstanceID))
+	})
+	return out, nil
+}
+
 func (s *Store) Managed(product, instance string) bool {
-	_, ok := s.registry.Get(product, instance)
-	return ok
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return s.ManagedOn(ctx, s.pool, product, instance)
+}
+
+func (s *Store) ManagedOn(ctx context.Context, q accounts.Querier, product, instance string) bool {
+	_, ok, err := s.findManifest(ctx, q, product, instance)
+	return err == nil && ok
 }
 
 // RequirePermissionOn reads the current assignment on the caller's connection.
 // Billing already holds the payer lock and must not acquire another pool slot.
 func (s *Store) RequirePermissionOn(ctx context.Context, q accounts.Querier, actor, product, instance, permission string) error {
-	m, managed := s.registry.Get(product, instance)
+	m, managed, err := s.findManifest(ctx, q, product, instance)
+	if err != nil {
+		return err
+	}
 	if !managed {
 		return nil
 	}
@@ -142,7 +195,10 @@ func (s *Store) Resolve(ctx context.Context, u accounts.User, product, instance 
 	return s.ResolveOn(ctx, s.pool, u, product, instance)
 }
 func (s *Store) ResolveOn(ctx context.Context, q accounts.Querier, u accounts.User, product, instance string) (Access, error) {
-	m, ok := s.registry.Get(product, instance)
+	m, ok, err := s.findManifest(ctx, q, product, instance)
+	if err != nil {
+		return Access{}, err
+	}
 	if !ok {
 		return Access{}, accounts.ErrNotFound
 	}
@@ -193,7 +249,15 @@ func (s *Store) ResolveOn(ctx context.Context, q accounts.Querier, u accounts.Us
 }
 func (s *Store) Applications(ctx context.Context, u accounts.User, product, instance string) ([]Application, error) {
 	out := []Application{}
-	for _, m := range s.Products() {
+	manifests := s.registry.List()
+	if s.overlay != nil {
+		extra, err := s.overlay.LaunchManifests(ctx, u.ID)
+		if err != nil {
+			return nil, err
+		}
+		manifests = append(manifests, extra...)
+	}
+	for _, m := range manifests {
 		if product != "" && (product != m.ProductID || Instance(instance) != m.InstanceID) {
 			continue
 		}
@@ -285,7 +349,10 @@ func (s *Store) SetAccess(ctx context.Context, actor, target, product, instance 
 	if s.management != nil {
 		return s.management.SetLegacyAccess(ctx, actor, target, product, instance, roles, active, expected)
 	}
-	m, ok := s.registry.Get(product, instance)
+	m, ok, err := s.findManifest(ctx, s.pool, product, instance)
+	if err != nil {
+		return Assignment{}, err
+	}
 	if !ok {
 		return Assignment{}, accounts.ErrNotFound
 	}
