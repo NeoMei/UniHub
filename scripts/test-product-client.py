@@ -20,6 +20,7 @@ class ProductClientTests(unittest.TestCase):
   commercial='catalog:read subscriptions:read credits:read wallets:read recharges:read recharges:write transfers:write operations:read orders:read orders:write settings:read settings:write refunds:write usage:read usage:all-products usage:llmrouter model-credentials:write'.split()
   cases=[('defaults',[],['llmrouter']),('access',['--scope','access:read'],[]),('identity-and-accounts',sum((['--scope',s] for s in ['identity:read','profile:write','accounts:read','accounts:write','members:read','members:write']),[]),[]),('explicit',['--scope','access:read','--billing-product','notes','--billing-product','other'],['notes','other'])]
   cases.extend((scope,['--scope',scope],['llmrouter']) for scope in commercial)
+  cases.extend((scope,['--scope',scope],[]) for scope in ('groups:read','groups:members:read'))
   for name,flags,want in cases:
    with self.subTest(name=name),tempfile.TemporaryDirectory() as d:
     registry=Path(d)/'clients.json';output=Path(d)/'plan.json'

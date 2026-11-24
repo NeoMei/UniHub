@@ -24,6 +24,7 @@ const client = new UniHubClient({
 类型与接口（节选，完整列表见 `src/index.ts`）：
 
 - 账户与会员：`Account`、`Subscription`、`Offer`、`Batch`、`Order`、`Wallet`、`Operation`
+- 团队小组：`TeamGroup`、`TeamGroups`、`TeamGroupMembership`
 - 身份：`Registration`、`RegistrationResult`、`TokenSet`、`MfaPending`、`IdentityProfile`、`ProductAccess`
 - 计费：`BillingProfile`、`BillingPreset`、`BillingAsset`、`FundingMode`、`ModelCredential`
 - 凭据：`APIKey`、`APIKeyGrant`、`APIKeyRequest`、`UsageBudget`
@@ -38,7 +39,11 @@ const client = new UniHubClient({
 | `productAccess` | 读取当前用户在某产品/实例内的角色与权限 |
 | `applications` | 列出当前用户可进入的产品入口 |
 | `accounts`、`subscriptions`、`credits`、`wallets`、`orders` | 读取账户、会员、额度、钱包与订单 |
+| `teamGroups(account)` | 读取团队小组与本人归属，需要 `groups:read` |
+| `teamGroupMemberships(account)` | 读取全团队成员的分组归属，需要 `groups:members:read` |
 | `createAPIKey`、`revokeAPIKey`、`usageBudget` | 管理产品范围内的长期凭据与预算 |
+
+以 `accounts()` 返回的团队账户 ID 调用小组读取方法。UniHub 校验当前团队成员关系。两个 scope 独立授予，管理小组请使用 UniHub 控制台。详见[团队小组 API](../../docs/headless-product-api.md#团队小组)。
 
 金额与额度统一使用整数小数字符串（现金 `CNY/6`、额度 `CREDIT/6`）。不要把它们转成浮点数再回写，也不要假设存在隐式兑换。
 

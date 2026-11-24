@@ -242,7 +242,7 @@ curl -fsS -X POST https://unihub.quukk.com/v1/accounts \
   -d '{"name":"示例团队"}'
 ~~~
 
-账户成员角色至少包括 owner、billing_admin 和普通 member。只有账户 owner 或 billing_admin 能执行资金、订单和退款操作；普通成员可按 scopes 读取自己的订阅权益和额度。最后一个 owner 不能被移除。
+账户成员角色包括 owner、admin、billing_admin 和 member。只有账户 owner 或 billing_admin 能执行资金、订单和退款操作；普通成员可按 scopes 读取自己的订阅权益和额度。最后一个 owner 不能被移除。
 
 邀请按不可变中央用户 ID 定位：
 
@@ -251,6 +251,22 @@ curl -fsS -X POST https://unihub.quukk.com/v1/accounts \
 ~~~
 
 UniHub 不会因为邮箱相同自动合并用户，也不会把产品管理员、Casdoor 管理员或财务 operator 自动加入团队。
+
+从 `GET /v1/accounts` 返回的 `kind: "team"` 账户还可查询团队小组。先检查客户端获得的 scope，再调用对应 SDK 方法。
+
+~~~ts
+const [accounts, capabilities] = await Promise.all([hub.accounts(), hub.capabilities()]);
+const team = accounts.find(account => account.kind === "team" && account.id === selectedAccountId);
+const scopes = Array.isArray(capabilities.scopes) ? capabilities.scopes : [];
+if (team && scopes.includes("groups:read")) {
+  const { groups, group_ids: myGroupIds } = await hub.teamGroups(team.id);
+}
+if (team && scopes.includes("groups:members:read")) {
+  const memberships = await hub.teamGroupMemberships(team.id);
+}
+~~~
+
+`teamGroups` 返回团队小组和本人归属。`teamGroupMemberships` 返回全团队成员的用户 ID 和分组归属，包含无分组的成员。仅需展示本人所属小组时，申请 `groups:read` 即可。小组沿用所属团队的成员角色和付款账户。接口及权限见[团队小组](headless-product-api.md#团队小组)。
 
 ## 6. 充值模型
 

@@ -4,7 +4,7 @@ import {createServer} from 'node:http';
 import {UniHubClient, UniHubError} from '../src/index.ts';
 
 async function fixture(t, handle) {
- const calls=[]; const server=createServer(async(req,res)=>{let body='';for await(const c of req)body+=c;const record={path:req.url,headers:req.headers,body:body?JSON.parse(body):undefined};calls.push(record);handle(record,res);});
+ const calls=[]; const server=createServer(async(req,res)=>{let body='';for await(const c of req)body+=c;const record={method:req.method,path:req.url,headers:req.headers,body:body?JSON.parse(body):undefined};calls.push(record);handle(record,res);});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>server.close());
  return {client:new UniHubClient({baseUrl:`http://127.0.0.1:${server.address().port}`,clientId:'own-client',redirectUri:'https://product.test/callback'}),calls};
 }
@@ -53,6 +53,27 @@ test('malformed token response is rejected without storing credentials',async t=
   else send(res,200,{access_token:'access',id_token:12,token_type:'Bearer',scope:'openid profile email',expires_in:300});
  });
  await assert.rejects(client.passwordLogin({username:'alice',password:'private'}),e=>e instanceof UniHubError&&e.code==='invalid_token_response');assert.equal(calls.length,2);assert.equal(client.hasAccessToken(),false);
+});
+
+test('team group reads use distinct authenticated routes and keep empty memberships', async t => {
+ const groups = { groups: [{ id: 'eng', name: 'Engineering' }, { id: 'prod', name: 'Product' }], group_ids: ['eng', 'prod'] };
+ const memberships = [{ user_id: 'alice', group_ids: ['eng', 'prod'] }, { user_id: 'bob', group_ids: [] }];
+ const accountPath = '/v1/accounts/team%2Fwest/groups';
+ const { client, calls } = await fixture(t, (request, response) => {
+  if (request.path === accountPath) return send(response, 200, groups);
+  if (request.path === accountPath + '/memberships') return send(response, 200, memberships);
+  send(response, 403, { error: 'forbidden' });
+ });
+ client.setAccessToken('product-access');
+ assert.deepEqual(await client.teamGroups('team/west'), groups);
+ assert.deepEqual(await client.teamGroupMemberships('team/west'), memberships);
+ await assert.rejects(client.teamGroupMemberships('denied'), error =>
+  error instanceof UniHubError && error.status === 403 && error.code === 'forbidden');
+ assert.deepEqual(calls.map(({ method, path, headers, body }) => [method, path, headers.authorization, body]), [
+  ['GET', accountPath, 'Bearer product-access', undefined],
+  ['GET', accountPath + '/memberships', 'Bearer product-access', undefined],
+  ['GET', '/v1/accounts/denied/groups/memberships', 'Bearer product-access', undefined],
+ ]);
 });
 
 test('normalized generic path cannot escape v1 boundary',async t=>{

@@ -1,8 +1,10 @@
 export const publicScopeOptions = [
- ['identity:read','识别统一用户'],['accounts:read','读取自己的账户'],['catalog:read','读取产品目录'],
+ ['identity:read','识别统一用户'],['accounts:read','读取自己的账户'],
+ ['groups:read','读取团队小组和本人归属'],['groups:members:read','读取团队成员的小组归属'],['catalog:read','读取产品目录'],
  ['subscriptions:read','读取订阅'],['credits:read','读取模型额度'],['wallets:read','读取钱包'],
  ['orders:read','读取订单'],['usage:read','读取授权范围内的消费'],['model-credentials:write','管理托管模型凭据（按需）'],
 ] as const;
+const nonBillingScopes = new Set(['identity:read','accounts:read','groups:read','groups:members:read']);
 export type OnboardingInput={product:string;callback:string;origin:string;issuer:string;clientId:string;application:string;instance:string;profile:string;scopes:string[];maturity:string;billing:string;browserSSO:boolean;sandbox:boolean};
 const slug=/^[a-z][a-z0-9_-]{0,63}$/;
 function validURL(raw:string,origin=false) {
@@ -27,7 +29,7 @@ export function buildOnboardingPlan(input:OnboardingInput) {
  if(!validURL(callback)||!validURL(issuer,true)||(origin&&!validURL(origin,true)))throw new Error('回调须为精确 HTTPS URL（本机可用 HTTP）；身份提供方与允许来源只能填写 origin，不含路径。');
  if(!input.scopes.length||new Set(input.scopes).size!==input.scopes.length||input.scopes.some(s=>!publicScopeOptions.some(([scope])=>s===scope)))throw new Error('至少选择一个受支持的公开客户端权限。');
  if(!['hybrid','prepaid','subscription'].includes(input.profile))throw new Error('请选择受支持的计费组合。');
- const commercial=input.scopes.some(scope=>scope!=='identity:read'&&scope!=='accounts:read');
+ const commercial=input.scopes.some(scope=>!nonBillingScopes.has(scope));
  const publicClient={product_id:product,client_id:clientId,application,organization:'unihub',instance_id:instance,redirect_uris:[callback],origins:origin?[origin]:[],scopes:input.scopes,billing_products:commercial?[product]:[],password_login:false,registration:false,browser_sso:input.browserSSO,refresh_tokens:false};
  const billingConfiguration=[{product_id:product,version:1,preset:input.profile}];
  const clientPath=`./${product}-client-plan.json`,billingPath=`./${product}-billing.json`;

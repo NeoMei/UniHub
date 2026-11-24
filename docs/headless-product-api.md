@@ -66,6 +66,7 @@ SDK不持久化 token、不写 Cookie/localStorage。BFF 或产品后端必须�
 | --- | --- |
 | `accounts:read` / `accounts:write` | me/accounts/capabilities / 创建团队；仅 me 也可用 identity:read |
 | `members:read` / `members:write` | 成员和待接受邀请读取 / 邀请、接受、角色变更和撤销 |
+| `groups:read` / `groups:members:read` | 团队小组与调用者所属小组 / 全团队成员的小组归属 |
 | `catalog:read` | 产品与已发布商品目录 |
 | `subscriptions:read` / `credits:read` | 本产品订阅和 resources / 共享模型额度批次与汇总 |
 | `wallets:read` / `recharges:read` / `recharges:write` | 余额 / 原充值单 / 建充值单与显式 sandbox settle |
@@ -76,6 +77,19 @@ SDK不持久化 token、不写 Cookie/localStorage。BFF 或产品后端必须�
 | `model-credentials:write` | 本来源产品短期模型凭证签发/撤销；本产品实例长期 API Key 创建、列表、追加模型和撤销 |
 
 财务查询与命令仍须账户 owner 或 billing_admin。admin 管理普通成员不等于财务权限；新 owner 必须本人接受邀请；最后 owner 不可移除。邀请列表只含仍有效的待接受项，最多最近 100 条，没有通用分页。GET `/v1/invitations` 只看本人收件，GET `/v1/accounts/{account}/invitations` 仅团队 owner/admin 查看；DELETE `/v1/accounts/{account}/invitations/{invitation}` 用于撤销待处理邀请，admin 只能撤销普通成员邀请。
+
+### 团队小组
+
+产品先用 `GET /v1/accounts` 和 `accounts:read` 发现当前用户可访问的 `kind: "team"` 账户，再把团队账户 ID 用于小组接口。一个团队成员可以属于零个或多个小组，组内继续沿用该成员的团队角色。团队账户 ID 继续用于订阅、钱包和账单。
+
+| GET 路径 | 产品 scope | 成功响应 |
+| --- | --- | --- |
+| `/v1/accounts/{account}/groups` | `groups:read` | `{"groups":[{"id":"group-id","name":"项目组"}],"group_ids":["group-id"]}`。`groups` 列出当前团队的小组，`group_ids` 仅列调用者所属小组。 |
+| `/v1/accounts/{account}/groups/memberships` | `groups:members:read` | `[{"user_id":"member-id","group_ids":["group-id"]},{"user_id":"ungrouped-id","group_ids":[]}]`。每位当前团队成员都有一条记录。 |
+
+两个 scope 分别由 UniHub 审批，可从 `GET /v1/capabilities` 的 `scopes` 查询。读取时服务端复核调用者当前的团队成员关系。普通成员、管理员、所有者和财务管理员均适用同一读取规则。未分组的成员返回 `group_ids: []`。读取名单仅返回不可变的用户 ID 与小组 ID，产品可按自身获得的成员权限决定如何展示。个人账户、团队外用户和缺少所需 scope 的产品客户端返回 403。
+
+小组写操作由 UniHub 控制台的团队所有者和管理员完成。支持创建 `POST /groups`、改名 `PATCH /groups/{group}`、删除 `DELETE /groups/{group}`，以及 `PUT` 或 `DELETE /groups/{group}/members/{member}` 增删现有团队成员的分组归属。路径均以 `/v1/accounts/{account}` 开头。创建和改名接收 `{"name":"项目组"}`，去掉首尾空白后须为 1 至 80 个 Unicode 字符。名称无效返回 400，同一团队内名字忽略大小写判重，重复返回 409。当前团队没有该小组或成员时返回 404。团队普通成员和财务管理员对管理操作返回 403。创建成功返回 201，改名返回 200，响应均为小组 ID 和名称。删除小组、添加或移除组员成功返回 204。产品客户端通过现有 `/v1` 接口读取，管理操作由控制台完成。
 
 产品列表只返回获准资源，详情和命令先检查产品归属。请求体不能自称 actor、其他 account、费用或最终 usage。模型凭证 origin 缺省由服务端填写；显式其他 origin 被拒绝，撤销同样约束产品。可信预占/结算只对独立 llmrouter 服务身份开放，不属于产品 SDK。
 

@@ -55,6 +55,9 @@ export type Member = {
   email: string;
   role: string;
 };
+export type TeamGroup = { id: string; name: string };
+export type TeamGroupDirectory = { groups: TeamGroup[]; group_ids: string[] };
+export type TeamGroupMembership = { user_id: string; group_ids: string[] };
 export type Invitation = {
   id: string;
   account_id: string;

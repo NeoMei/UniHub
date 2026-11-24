@@ -421,6 +421,132 @@ it("selects a newly created team after the create confirmation completes", async
   await waitFor(() => expect((screen.getByLabelText("当前付费账户") as HTMLSelectElement).value).toBe("team-new"));
 });
 
+function teamGroupsFixture(role: string) {
+  const team = "/v1/accounts/team";
+  const calls: Array<{path: string; method: string; body?: unknown; csrf?: string}> = [];
+  const groups = [{id: "first", name: "研发组"}];
+  const members = [
+    {user_id: "alice", name: "Alice", email: "alice@example.test", role},
+    {user_id: "bob", name: "Bob", email: "bob@example.test", role: "member"},
+  ];
+  const memberships = [{user_id: "alice", group_ids: ["first"]}, {user_id: "bob", group_ids: [] as string[]}];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    const method = init?.method || "GET";
+    const body = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    calls.push({path, method, body, csrf: new Headers(init?.headers).get("X-CSRF-Token") || undefined});
+    if (method === "POST" && path === team + "/groups") {
+      const group = {id: "second", name: body.name};
+      groups.push(group);
+      return Response.json(group, {status: 201});
+    }
+    if (method === "PATCH" && path === team + "/groups/second") {
+      groups[1].name = body.name;
+      return Response.json(groups[1]);
+    }
+    if (method === "DELETE" && path === team + "/groups/second") {
+      groups.pop();
+      for (const membership of memberships) membership.group_ids = membership.group_ids.filter(id => id !== "second");
+      return new Response(null, {status: 204});
+    }
+    const assignment = path.match(/^\/v1\/accounts\/team\/groups\/(first|second)\/members\/bob$/);
+    if (assignment && (method === "PUT" || method === "DELETE")) {
+      const id = assignment[1];
+      memberships[1].group_ids = method === "PUT" ? [...memberships[1].group_ids, id] : memberships[1].group_ids.filter(group => group !== id);
+      return new Response(null, {status: 204});
+    }
+    const data = path === "/auth/session"
+      ? {authenticated: true, sandbox: true, csrf_token: "csrf", user: {id: "alice", name: "Alice"}}
+      : path === "/v1/accounts"
+        ? [{id: "team", name: "项目团队", kind: "team", role}, {id: "personal", name: "个人账户", kind: "personal", role: "owner"}]
+        : path === team + "/members" ? members
+        : path === team + "/groups" ? {groups, group_ids: memberships[0].group_ids}
+        : path === team + "/groups/memberships" ? memberships
+        : [];
+    return Response.json(data);
+  }));
+  return {calls, team};
+}
+
+async function openTeamMembers() {
+  window.history.replaceState(null, "", "/console?account=team");
+  render(<App />);
+  await screen.findByRole("heading", {name: "账户概览"});
+  fireEvent.click(screen.getByText("更多账户功能"));
+  fireEvent.click(screen.getByRole("button", {name: "团队成员"}));
+}
+
+it("manages overlapping groups through the team confirmation and reads updated members", async () => {
+  const {calls, team} = teamGroupsFixture("owner");
+  await openTeamMembers();
+  await screen.findByText("未分组");
+
+  async function confirmTeamAction() {
+    expect(screen.getByRole("dialog").textContent).toContain("团队账户：项目团队");
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", {name: "确认提交"}));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  }
+  async function addBob(group: string) {
+    fireEvent.click(await screen.findByRole("button", {name: group}));
+    fireEvent.change(await screen.findByLabelText("选择要加入的成员"), {target: {value: "bob"}});
+    fireEvent.click(screen.getByRole("button", {name: "加入小组"}));
+    await confirmTeamAction();
+    await screen.findByRole("button", {name: `将 Bob 移出${group}`});
+  }
+  function bobGroups() {
+    return within(screen.getByRole("row", {name: /Bob bob@example.test/}));
+  }
+
+  const create = screen.getByRole("button", {name: "创建小组"});
+  fireEvent.change(screen.getByLabelText("小组名称"), {target: {value: "🚀".repeat(81)}});
+  expect((create as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(screen.getByLabelText("小组名称"), {target: {value: "  项目组  "}});
+  fireEvent.click(create);
+  await confirmTeamAction();
+  expect(calls).toContainEqual({path: team + "/groups", method: "POST", body: {name: "项目组"}, csrf: "csrf"});
+
+  await addBob("研发组");
+  await addBob("项目组");
+  expect(bobGroups().getByText(/研发组.*项目组/)).toBeDefined();
+  fireEvent.change(screen.getByLabelText("小组新名称"), {target: {value: "交付组"}});
+  fireEvent.click(screen.getByRole("button", {name: "保存名称"}));
+  await confirmTeamAction();
+  await screen.findByRole("button", {name: "交付组"});
+  expect(bobGroups().getByText(/研发组.*交付组/)).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", {name: "将 Bob 移出交付组"}));
+  await confirmTeamAction();
+  await waitFor(() => expect(bobGroups().queryByText(/交付组/)).toBeNull());
+  expect(bobGroups().getByText("研发组")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", {name: "删除小组"}));
+  await confirmTeamAction();
+  await screen.findByRole("button", {name: "研发组"});
+  expect(screen.queryByRole("button", {name: "交付组"})).toBeNull();
+  expect(calls.filter(call => call.method !== "GET").map(({path, method}) => [method, path])).toEqual([
+    ["POST", team + "/groups"],
+    ["PUT", team + "/groups/first/members/bob"],
+    ["PUT", team + "/groups/second/members/bob"],
+    ["PATCH", team + "/groups/second"],
+    ["DELETE", team + "/groups/second/members/bob"],
+    ["DELETE", team + "/groups/second"],
+  ]);
+  expect(calls.filter(call => call.method !== "GET").every(call => call.csrf === "csrf")).toBe(true);
+  expect(calls.some(call => call.path === team + "/groups/memberships")).toBe(true);
+});
+
+it.each(["member", "billing_admin"])("shows groups read-only to %s and clears them on account switch", async role => {
+  const {calls} = teamGroupsFixture(role);
+  await openTeamMembers();
+  expect(await screen.findByRole("button", {name: "研发组"})).toBeDefined();
+  expect(screen.queryByRole("button", {name: "创建小组"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "保存名称"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "删除小组"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "加入小组"})).toBeNull();
+  fireEvent.change(screen.getByLabelText("当前付费账户"), {target: {value: "personal"}});
+  expect(screen.queryByRole("heading", {name: "团队小组"})).toBeNull();
+  expect(await screen.findByRole("heading", {name: "账户成员"})).toBeDefined();
+  expect(calls.some(call => call.path.includes("/personal/groups"))).toBe(false);
+});
+
 it("shows trusted product credential management for a native-only central account", async () => {
  vi.stubGlobal("fetch",vi.fn(async(path:string)=>{
   const data=path==="/auth/session"?{authenticated:true,sandbox:false,user:{id:"native",name:"Native"},csrf_token:"csrf"}:path==="/v1/accounts"?[{id:"personal",name:"个人账户",kind:"personal",role:"owner"}]:path==="/v1/me/profile"?{id:"native",username:"native",display_name:"Native",email:"native@example.test",version:"1",credential_source:"product",credential_management:[{product_id:"llmrouter",instance_id:"default",url:"https://router.example.test/profile"}]}:[];

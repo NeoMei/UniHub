@@ -1,5 +1,5 @@
 import { AlertCircle, Inbox, LoaderCircle, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import type { ReactNode } from "react";
 import type { Resource } from "./useResource";
 export function Notice({
@@ -174,6 +174,7 @@ export function Modal({
   busy?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
   useEffect(() => {
     const dialog = ref.current!;
     dialog.showModal();
@@ -183,13 +184,14 @@ export function Modal({
     <dialog
       ref={ref}
       className="modal"
+      aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) onClose();
       }}
     >
       <div className="modal-head">
-        <h2>{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <button
           aria-label="关闭"
           className="icon-button"
