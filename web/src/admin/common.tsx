@@ -31,7 +31,7 @@ export function DataList({endpoint,columns,actions,extra,refresh=0,header,initia
  {resource.loading?<p role="status">正在加载…</p>:resource.error?<Notice kind="error">{resource.error}<button onClick={()=>setVersion(v=>v+1)}>重试</button></Notice>:<>
  <div className="admin-list-meta"><span>共 {resource.data?.total||0} 条</span><span>{resource.data?.as_of ? `查询时间 ${new Date(resource.data.as_of).toLocaleString('zh-CN')}` : ''}</span></div>
  <Table headers={[...columns.map(c=>c[1]),...(actions?['操作']:[])]}>
- {resource.data?.items?.length ? resource.data.items.map((row,index)=><tr key={`${text(row.source)}:${text(row.id||row.user_id||row.product_id||index)}`}>{columns.map(([key,,display])=><td key={key}>{text(display?display(row):value(row,key))}</td>)}{actions?<td className="admin-row-actions">{actions(row)}</td>:null}</tr>):<tr><td colSpan={columns.length+(actions?1:0)}><p className="admin-empty">暂无符合条件的记录</p></td></tr>}
+ {resource.data?.items?.length ? resource.data.items.map((row,index)=><tr key={`${text(row.source)}:${text(row.id||row.user_id||row.product_id||index)}`}>{columns.map(([key,,display])=><td key={key}>{text(display?display(row):value(row,key))}</td>)}{actions?<td><div className="admin-row-actions">{actions(row)}</div></td>:null}</tr>):<tr><td colSpan={columns.length+(actions?1:0)}><p className="admin-empty">暂无符合条件的记录</p></td></tr>}
  </Table><div className="admin-pagination"><button disabled={!history.length} onClick={()=>{setCursor(history[history.length-1]);setHistory(h=>h.slice(0,-1));}}>上一页</button><span>第 {history.length+1} 页</span><button disabled={!resource.data?.next_cursor} onClick={()=>{setHistory(h=>[...h,cursor]);setCursor(resource.data!.next_cursor!);}}>下一页</button></div></>}
  </>;
 }
