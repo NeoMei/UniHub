@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 
@@ -135,6 +136,9 @@ func jsonResponse(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
+
+var managedModelsReadPath = regexp.MustCompile(`^/v1/products/[a-z][a-z0-9_-]{0,63}/managed-models$`)
+
 func (s *Server) Handler(api http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -174,6 +178,10 @@ func (s *Server) Handler(api http.Handler) http.Handler {
 			}
 			s.logout(w, r)
 		default:
+			if (r.Method == http.MethodGet || r.Method == http.MethodHead) && managedModelsReadPath.MatchString(r.URL.EscapedPath()) {
+				api.ServeHTTP(w, r)
+				return
+			}
 			if p == "/v1" || strings.HasPrefix(p, "/v1/") || p == "/ops/v1" || strings.HasPrefix(p, "/ops/v1/") || p == "/admin/v1" || strings.HasPrefix(p, "/admin/v1/") {
 				w.Header().Set("Cache-Control", "no-store")
 				s.api(api, w, r)
