@@ -515,9 +515,11 @@ const usageCounterRows = `WITH usage_rows AS MATERIALIZED (
 ) `
 
 // Only managed calls can supply the typed native observations we aggregate.
-// Apply the report's effective settlement and legacy masking directly to the
-// stored rows, without constructing the customer-facing detail projection.
-const nativeUsageQuery = `SELECT c.snapshot FROM billing_calls c WHERE ` + callScopeWhere + callTimeWhere + `
+// Apply effective settlement and legacy masking to the stored rows and fetch
+// only the evidence needed for native usage validation and aggregation.
+const nativeUsageQuery = `SELECT jsonb_build_object(
+ 'rate', c.snapshot->'rate', 'usage', c.snapshot->'usage', 'native_pricing', c.snapshot->'native_pricing'
+) FROM billing_calls c WHERE ` + callScopeWhere + callTimeWhere + `
  AND ($9='' OR $9='managed_model') AND c.snapshot->>'status'='SETTLED'
  AND ` + nativeUsageSelectSQL + ` AND NOT ` + managedReportHidesUsage + ` AND NOT ` + managedReportUnresolved
 
@@ -569,28 +571,32 @@ func (s *Service) QueryUsageSummary(ctx context.Context, actor, account string, 
 	nativeCount := new(big.Int)
 	for nativeRows.Next() {
 		var data []byte
-		var call Call
+		var evidence struct {
+			Rate          Rate         `json:"rate"`
+			Usage         *Usage       `json:"usage"`
+			NativePricing *NativeQuote `json:"native_pricing"`
+		}
 		if nativeErr = nativeRows.Scan(&data); nativeErr != nil {
 			break
 		}
-		if nativeErr = json.Unmarshal(data, &call); nativeErr != nil {
+		if nativeErr = json.Unmarshal(data, &evidence); nativeErr != nil {
 			break
 		}
-		if call.Usage == nil {
+		if evidence.Usage == nil {
 			nativeErr = ErrInvalid
 			break
 		}
-		if call.NativePricing != nil && call.NativePricing.PricingVersion == NativeCreditPricingVersion && call.Rate.Semantics == "llmrouter_native" {
-			nativeErr = validateNativeUsage(call.Usage)
+		if evidence.NativePricing != nil && evidence.NativePricing.PricingVersion == NativeCreditPricingVersion && evidence.Rate.Semantics == "llmrouter_native" {
+			nativeErr = validateNativeUsage(evidence.Usage)
 		} else {
-			_, nativeErr = CalculateCharge(call.Rate, *call.Usage)
+			_, nativeErr = CalculateCharge(evidence.Rate, *evidence.Usage)
 		}
 		if nativeErr != nil {
 			break
 		}
 		nativeCount.Add(nativeCount, big.NewInt(1))
-		for _, measurement := range call.Usage.Metered.Measurements {
-			d := dimension{call.Usage.Metered.Operation, measurement.Key, measurement.Unit, measurement.ProviderUnit}
+		for _, measurement := range evidence.Usage.Metered.Measurements {
+			d := dimension{evidence.Usage.Metered.Operation, measurement.Key, measurement.Unit, measurement.ProviderUnit}
 			n, _ := new(big.Int).SetString(measurement.Quantity.Value, 10)
 			q := new(big.Rat).SetFrac(n, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(measurement.Quantity.Scale)), nil))
 			if totals[d] == nil {
