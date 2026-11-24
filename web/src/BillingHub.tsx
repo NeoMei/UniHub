@@ -74,7 +74,7 @@ export function BillingHub({
   const cash = (id: string) => {
     if (wallets.loading || wallets.error) return "—";
     const amount = wallets.data?.find(wallet => wallet.product_id === id && ["CNY/6", "CNY"].includes(wallet.asset))?.amount;
-    return amount === undefined ? "—" : `¥ ${fixed(amount)}`;
+    return amount === undefined ? "—" : `¥\u00a0${fixed(amount)}`;
   };
   const navigate = (page: "memberships" | "addons" | "wallets" | "bills" | "consumption") => onNavigate?.(page);
   return (

@@ -385,13 +385,13 @@ export function WalletBalances({ wallets, products, focusProductId }: { wallets:
     <div className="purpose-balances">
       {primaryProducts.map(id => {
         const wallet = wallets.data?.find(value => value.product_id === id && cash(value));
-        return <div key={id}><h3>{purpose(id)}</h3><strong>{wallet ? `¥ ${fixed(wallet.amount)}` : "—"}</strong><small>{id === "" ? "LLMRouter 原生 Key 与原生套餐" : id === "llmrouter" ? "LLMRouter" : "SuperWagie"} · 人民币</small></div>;
+        return <div key={id}><h3>{purpose(id)}</h3><strong>{wallet ? `¥\u00a0${fixed(wallet.amount)}` : "—"}</strong><small>{id === "" ? "LLMRouter 原生 Key 与原生套餐" : id === "llmrouter" ? "LLMRouter" : "SuperWagie"} · 人民币</small></div>;
       })}
     </div>
     <details className="wallet-other-balances"><summary>{focusProductId === "" ? "其他产品余额" : "统一钱包与其他产品余额"}</summary>
       <div className="wallet-list">{wallets.data?.filter(wallet => !primaryProducts.includes(wallet.product_id) || !cash(wallet)).map(wallet => <div key={`${wallet.product_id}/${wallet.asset}`} className="wallet-row">
         <div><h3>{wallet.product_id ? products.find(product => product.id === wallet.product_id)?.name || wallet.product_id : "统一钱包"}</h3><small>{wallet.asset}</small></div>
-        <strong>{cash(wallet) ? `¥ ${fixed(wallet.amount)}` : wallet.amount}</strong>
+        <strong>{cash(wallet) ? `¥\u00a0${fixed(wallet.amount)}` : wallet.amount}</strong>
       </div>)}</div>
       {!wallets.data?.length && <p>暂无钱包余额记录；未记录的余额显示为 —。</p>}
     </details>

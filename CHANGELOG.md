@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.73 - 2026-11-24
+
+- Restore the desktop split layout in user and product permissions and size role cards to the available content width.
+- Keep wide management tables scrollable within their panels and preserve the close control in long configuration dialogs.
+- Keep long product names, credit balances and action buttons inside desktop account cards.
+
 ## 0.4.68 - 2026-11-23
 
 - Add opt-in AgentWiki identity enrollment, verified account links, and browser session handoff.
