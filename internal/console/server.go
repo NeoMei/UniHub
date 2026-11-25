@@ -204,10 +204,17 @@ func (s *Server) Handler(api http.Handler) http.Handler {
 	})
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	productLinkReturn := r.URL.Query().Get("product_link_return")
-	if productLinkReturn != "" && !validProductLinkReturn(productLinkReturn) {
+	query := r.URL.Query()
+	productReturn := query.Get("product_link_return")
+	authorizeReturn := query.Get("product_authorize_return")
+	if len(query["product_link_return"]) > 1 || len(query["product_authorize_return"]) > 1 ||
+		(productReturn != "" && (!validProductReturn(productReturn, "/auth/product/link") || authorizeReturn != "")) ||
+		(authorizeReturn != "" && !validProductReturn(authorizeReturn, "/auth/product/authorize")) {
 		failure(w, http.StatusBadRequest)
 		return
+	}
+	if authorizeReturn != "" {
+		productReturn = authorizeReturn
 	}
 	state, err := randomSecret()
 	if err != nil {
@@ -235,7 +242,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		failure(w, 503)
 		return
 	}
-	if _, err = s.pool.Exec(r.Context(), `INSERT INTO browser_login_transactions(state_hash,binding_hash,nonce,pkce_verifier,expires_at,product_link_return) VALUES($1,$2,$3,$4,$5,$6)`, digest(state), digest(binding), nonce, verifier, expiry, productLinkReturn); err != nil {
+	if _, err = s.pool.Exec(r.Context(), `INSERT INTO browser_login_transactions(state_hash,binding_hash,nonce,pkce_verifier,expires_at,product_link_return) VALUES($1,$2,$3,$4,$5,$6)`, digest(state), digest(binding), nonce, verifier, expiry, productReturn); err != nil {
 		failure(w, 503)
 		return
 	}
@@ -251,7 +258,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	hash := sha256.Sum256([]byte(verifier))
 	q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(hash[:]))
 	q.Set("code_challenge_method", "S256")
-	if productLinkReturn != "" || r.URL.Query().Get("switch_account") == "1" {
+	if productReturn != "" || r.URL.Query().Get("switch_account") == "1" {
 		q.Set("prompt", "login")
 	}
 	u.RawQuery = q.Encode()
@@ -265,8 +272,8 @@ func (s *Server) callbackRequest(w http.ResponseWriter, r *http.Request) {
 		failure(w, 400)
 		return
 	}
-	var nonce, pkce, productLinkReturn string
-	err = s.pool.QueryRow(r.Context(), `DELETE FROM browser_login_transactions WHERE state_hash=$1 AND binding_hash=$2 AND expires_at>now() RETURNING nonce,pkce_verifier,product_link_return`, digest(state), digest(binding.Value)).Scan(&nonce, &pkce, &productLinkReturn)
+	var nonce, pkce, productReturn string
+	err = s.pool.QueryRow(r.Context(), `DELETE FROM browser_login_transactions WHERE state_hash=$1 AND binding_hash=$2 AND expires_at>now() RETURNING nonce,pkce_verifier,product_link_return`, digest(state), digest(binding.Value)).Scan(&nonce, &pkce, &productReturn)
 	if err != nil {
 		failure(w, 400)
 		return
@@ -400,32 +407,51 @@ func (s *Server) callbackRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.cookie(w, "unihub_session", id, expiry)
-	if validProductLinkReturn(productLinkReturn) {
-		http.Redirect(w, r, productLinkReturn, http.StatusSeeOther)
+	if validProductReturn(productReturn, "/auth/product/link") || validProductReturn(productReturn, "/auth/product/authorize") {
+		http.Redirect(w, r, productReturn, http.StatusSeeOther)
 		return
 	}
 	http.Redirect(w, r, "/", 302)
 }
 
-func validProductLinkReturn(raw string) bool {
+func validProductReturn(raw, action string) bool {
 	if len(raw) > 2048 || strings.ContainsAny(raw, "\\#\r\n\t") {
 		return false
 	}
 	u, err := url.ParseRequestURI(raw)
-	if err != nil || u.IsAbs() || u.Host != "" || u.EscapedPath() != "/auth/product/link" {
+	if err != nil || u.IsAbs() || u.Host != "" || u.EscapedPath() != action {
 		return false
 	}
 	q, err := url.ParseQuery(u.RawQuery)
-	if err != nil || len(q) != 5 || q.Get("reauth") != "1" {
+	if err != nil {
 		return false
 	}
-	for _, key := range []string{"client_id", "redirect_uri", "state", "link", "reauth"} {
+	keys := []string{"client_id", "redirect_uri", "state"}
+	switch action {
+	case "/auth/product/link":
+		if q.Get("reauth") != "1" {
+			return false
+		}
+		keys = append(keys, "link", "reauth")
+	case "/auth/product/authorize":
+		if q.Get("code_challenge_method") != "S256" {
+			return false
+		}
+		keys = append(keys, "nonce", "code_challenge", "code_challenge_method")
+	default:
+		return false
+	}
+	if len(q) != len(keys) {
+		return false
+	}
+	for _, key := range keys {
 		if len(q[key]) != 1 || q.Get(key) == "" {
 			return false
 		}
 	}
 	return true
 }
+
 func (s *Server) identity(r *http.Request) (auth.Claims, string, bool) {
 	c, err := r.Cookie("unihub_session")
 	if err != nil || len(c.Value) != 43 {
