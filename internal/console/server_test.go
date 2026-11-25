@@ -570,3 +570,37 @@ func TestDisabledAndRevokedBrowserCannotUseSessionEndpoint(t *testing.T) {
 		t.Fatalf("revoked browser exposed session %s", w.Body)
 	}
 }
+
+func TestCentralLoginResumesProductAuthorization(t *testing.T) {
+	_, issuer, _, h := fixture(t)
+	value := strings.Repeat("a", 43)
+	params := url.Values{"client_id": {"wiki"}, "redirect_uri": {"https://wiki.test/return"},
+		"state": {value}, "nonce": {value}, "code_challenge": {value}, "code_challenge_method": {"S256"}}
+	resume := "/auth/product/authorize?" + params.Encode()
+	loginPath := "/auth/login?method=central&product_authorize_return=" + url.QueryEscape(resume)
+	started := request(h, "GET", loginPath, nil, "", "")
+	if started.Code != 302 {
+		t.Fatalf("start: %d %s", started.Code, started.Body)
+	}
+	u, err := url.Parse(started.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	issuer.nonce, issuer.challenge = q.Get("nonce"), q.Get("code_challenge")
+	if q.Get("prompt") != "login" || len(started.Result().Cookies()) != 1 {
+		t.Fatalf("missing central login transaction: %s", u)
+	}
+	finished := request(h, "GET", "/auth/callback?code=single-code&state="+url.QueryEscape(q.Get("state")), started.Result().Cookies()[0], "", "")
+	if finished.Code != 303 || finished.Header().Get("Location") != resume {
+		t.Fatalf("resume: %d %q", finished.Code, finished.Header().Get("Location"))
+	}
+	_ = sessionCookie(t, finished)
+
+	for _, invalid := range []string{"//outside.example/", resume + "&prompt=login", resume + "&state=" + value, "/admin/users"} {
+		w := request(h, "GET", "/auth/login?product_authorize_return="+url.QueryEscape(invalid), nil, "", "")
+		if w.Code != 400 {
+			t.Errorf("invalid continuation accepted: %d", w.Code)
+		}
+	}
+}

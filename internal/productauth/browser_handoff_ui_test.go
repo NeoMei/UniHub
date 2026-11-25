@@ -412,3 +412,21 @@ func TestConsoleProductBrowserSessionRequiresEffectiveProductUse(t *testing.T) {
 	check(source, false)
 	check(independent, true)
 }
+
+func TestProductAuthorizationCanRequestCentralLogin(t *testing.T) {
+	s, handler, clients, _ := setupBrowserHandoffUI(t)
+	s.ConfigureBrowserClients(clients)
+	value := strings.Repeat("a", 43)
+	params := url.Values{"client_id": {"wiki"}, "redirect_uri": {"https://wiki.test/return"},
+		"state": {value}, "nonce": {value}, "code_challenge": {value}, "code_challenge_method": {"S256"}}
+	path := "/auth/product/authorize?" + params.Encode()
+	passive := handoffUIRequest(t, handler, 303, "GET", path, nil)
+	if got := passive.Header().Get("Location"); !strings.HasPrefix(got, "https://wiki.test/return?broker=1&error=login_required") {
+		t.Fatalf("passive request: %s", got)
+	}
+	interactive := handoffUIRequest(t, handler, 303, "GET", path+"&prompt=login", nil)
+	target, err := url.Parse(interactive.Header().Get("Location"))
+	if err != nil || target.Path != "/auth/login" || target.Query().Get("method") != "central" || target.Query().Get("product_authorize_return") != path {
+		t.Fatalf("interactive login: %s %v", target, err)
+	}
+}

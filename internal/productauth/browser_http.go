@@ -110,6 +110,18 @@ func (s *Service) BrowserHandler(next http.Handler) http.Handler {
 				http.Error(w, "Invalid Authorization", 400)
 				return
 			}
+			if prompt := q.Get("prompt"); prompt != "" {
+				if prompt != "login" || len(q) != 7 || q.Get("redirect_uri") == "" || !validBrowserState(q.Get("code_challenge")) {
+					http.Error(w, "Invalid Authorization", 400)
+					return
+				}
+				q.Del("prompt")
+				resume := browserRedirect("/auth/product/authorize", q)
+				http.Redirect(w, r, browserRedirect("/auth/login", url.Values{
+					"method": {"central"}, "product_authorize_return": {resume},
+				}), http.StatusSeeOther)
+				return
+			}
 			cookie, e := r.Cookie("unihub_session")
 			if e != nil {
 				http.Redirect(w, r, browserRedirect(q.Get("redirect_uri"), url.Values{"broker": {"1"}, "error": {"login_required"}, "state": {q.Get("state")}}), 303)
