@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.76 - 2026-11-25
+
+- Resume registered product authorization after interactive UniHub sign-in. AgentWiki can complete sign-in through UniHub and reopen the requested workspace page.
+
 ## 0.4.75 - 2026-11-25
 
 - Add super-administrator application integration management and an in-console onboarding guide with AgentWiki as the example.
