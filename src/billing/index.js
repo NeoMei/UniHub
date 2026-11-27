@@ -55,7 +55,7 @@ function writeResult(reply, result, success = 200) {
   return reply.code(success).send(result);
 }
 
-export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator, { region, currency }) {
+export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator, { region, currency, lagoConfig = {} }) {
   app.post('/api/billing/checkout', { ...write, bodyLimit: 65_536 }, async (request, reply) => {
     try {
       const account = await activeAccount(pool, request.auth);
@@ -65,6 +65,7 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
         region,
         currency,
         input: request.body,
+        lagoEnabled: Boolean(lagoConfig?.enabled && lagoConfig?.baseUrl),
       });
       return writeResult(reply, result, 201);
     } catch (error) {
@@ -253,7 +254,7 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
   app.post('/api/internal/billing/outbox/process', write, async (request, reply) => {
     if (!isPlatformOperator(request.auth)) return reply.code(403).send({ error: 'operator_required' });
     try {
-      return processPendingOutbox(pool, { limit: request.body?.limit });
+      return processPendingOutbox(pool, { limit: request.body?.limit, lagoConfig });
     } catch (error) {
       return sendBillingError(reply, error);
     }
