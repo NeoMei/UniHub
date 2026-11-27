@@ -5,6 +5,8 @@ import * as oidc from 'openid-client';
 import { accountContext, registerAccountRoutes } from './accounts.js';
 import { issueAppLogin, readAppLogin, registerAppRoutes } from './apps.js';
 import { registerCommerceRoutes } from './commerce/index.js';
+import { registerBillingRoutes } from './billing/index.js';
+import { registerPaymentRoutes } from './payments/index.js';
 import { migrateDatabase } from './database.js';
 import { createSession, readSession, revokeSession } from './identity.js';
 import { renderPortal } from './portal.js';
@@ -14,6 +16,7 @@ const sessionLifetime = 8 * 60 * 60;
 
 export async function buildApp({
   origin, issuer, clientId, clientSecret, sessionKey, pool, region, currency, operatorSubjects = new Set(),
+  paymentConfig = {},
 }) {
   await migrateDatabase(pool, region, currency);
   const execution = [oidc.enableNonRepudiationChecks];
@@ -35,7 +38,19 @@ export async function buildApp({
       path: '/', httpOnly: true, sameSite: 'lax', secure: origin.protocol === 'https:', maxAge: sessionLifetime,
     },
   });
-  app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_request, body, done) => {
+  app.decorateRequest('rawBody', '');
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    request.rawBody = body;
+    if (!body) return done(null, undefined);
+    try {
+      done(null, JSON.parse(body));
+    } catch (error) {
+      error.statusCode = 400;
+      done(error);
+    }
+  });
+  app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (request, body, done) => {
+    request.rawBody = body;
     done(null, Object.fromEntries(new URLSearchParams(body)));
   });
   app.addHook('onRequest', async (_request, reply) => {
@@ -64,6 +79,8 @@ export async function buildApp({
   registerAccountRoutes(app, pool, auth, write);
   registerAppRoutes(app, pool, auth, write, isPlatformOperator);
   registerCommerceRoutes(app, pool, auth, write, isPlatformOperator, { region, currency });
+  registerPaymentRoutes(app, pool, auth, write, { region, currency, paymentConfig });
+  registerBillingRoutes(app, pool, auth, write, isPlatformOperator, { region, currency });
 
   app.get('/', async (request, reply) => {
     const session = await readSession(pool, request.session.get('sessionId'));
