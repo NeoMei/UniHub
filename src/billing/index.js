@@ -29,6 +29,15 @@ import {
   serializePayment,
   serializeWallet,
 } from './wallet.js';
+import { executePersonalUpgrade, quotePersonalUpgrade } from './upgrade.js';
+import {
+  cancelScheduledChange,
+  executeSeatExpansion,
+  processRenewalCycle,
+  quoteSeatExpansion,
+  scheduleSubscriptionChange,
+  setAutoRenew,
+} from './subscriptions.js';
 
 async function activeAccount(pool, session, accountId = session.activeAccountId) {
   const { rows: [account] } = await pool.query(`
@@ -293,6 +302,152 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
         wallet: serializeWallet(result.wallet),
         duplicate: result.duplicate,
       };
+    } catch (error) {
+      return sendBillingError(reply, error);
+    }
+  });
+
+  app.post('/api/billing/upgrades/quote', write, async (request, reply) => {
+    try {
+      const account = await activeAccount(pool, request.auth);
+      const body = request.body ?? {};
+      return quotePersonalUpgrade(pool, {
+        accountId: account.id,
+        appId: body.appId,
+        targetTierId: body.targetTierId,
+        targetVersionId: body.targetVersionId ?? null,
+        region,
+        currency,
+      });
+    } catch (error) {
+      return sendBillingError(reply, error);
+    }
+  });
+
+  app.post('/api/billing/upgrades', { ...write, bodyLimit: 65_536 }, async (request, reply) => {
+    try {
+      const account = await activeAccount(pool, request.auth);
+      const body = request.body ?? {};
+      return reply.code(201).send(await executePersonalUpgrade(pool, {
+        accountId: account.id,
+        userId: request.auth.userId,
+        appId: body.appId,
+        targetTierId: body.targetTierId,
+        targetVersionId: body.targetVersionId ?? null,
+        region,
+        currency,
+        autoRenew: body.autoRenew === true,
+      }));
+    } catch (error) {
+      if (error instanceof BillingError && error.code === 'insufficient_funds') {
+        try {
+          const account = await activeAccount(pool, request.auth);
+          const body = request.body ?? {};
+          const { createPaymentOrder } = await import('./wallet.js');
+          const payment = await createPaymentOrder(pool, {
+            accountId: account.id,
+            initiatorUserId: request.auth.userId,
+            region,
+            currency,
+            provider: body.provider ?? (region === 'us' ? 'stripe' : 'wechat'),
+            merchant: body.merchantId ?? `${region}-default-merchant`,
+            amountMinor: body.rechargeAmountMinor ?? error.details.amountMinor,
+            pendingCheckout: error.details.pendingCheckout,
+            returnUrl: body.returnUrl ?? null,
+          });
+          return reply.code(402).send({
+            error: error.code,
+            amountMinor: error.details.amountMinor,
+            availableMinor: error.details.availableMinor,
+            pendingCheckout: error.details.pendingCheckout,
+            paymentOrder: serializePayment(payment),
+          });
+        } catch (innerError) {
+          return sendBillingError(reply, innerError);
+        }
+      }
+      return sendBillingError(reply, error);
+    }
+  });
+
+  app.post('/api/billing/subscriptions/:subscriptionId/seats/expand-quote', write, async (request, reply) => {
+    try {
+      const account = await activeAccount(pool, request.auth);
+      return quoteSeatExpansion(pool, {
+        accountId: account.id,
+        subscriptionId: request.params.subscriptionId,
+        deltaSeats: request.body?.deltaSeats,
+      });
+    } catch (error) {
+      return sendBillingError(reply, error);
+    }
+  });
+
+  app.post('/api/billing/subscriptions/:subscriptionId/seats/expand', write, async (request, reply) => {
+    try {
+      const account = await activeAccount(pool, request.auth);
+      return reply.code(201).send(await executeSeatExpansion(pool, {
+        accountId: account.id,
+        userId: request.auth.userId,
+        subscriptionId: request.params.subscriptionId,
+        deltaSeats: request.body?.deltaSeats,
+        region,
+        currency,
+      }));
+    } catch (error) {
+      return sendBillingError(reply, error);
+    }
+  });
+
+  app.put('/api/billing/subscriptions/:subscriptionId/scheduled-change', write, async (request, reply) => {
+    try {
+      const account = await activeAccount(pool, request.auth);
+      return scheduleSubscriptionChange(pool, {
+        accountId: account.id,
+        userId: request.auth.userId,
+        subscriptionId: request.params.subscriptionId,
+        targetTierId: request.body?.targetTierId,
+        targetSeatCount: request.body?.targetSeatCount ?? null,
+        region,
+      });
+    } catch (error) {
+      return sendBillingError(reply, error);
+    }
+  });
+
+  app.delete('/api/billing/subscriptions/:subscriptionId/scheduled-change', write, async (request, reply) => {
+    try {
+      const account = await activeAccount(pool, request.auth);
+      return cancelScheduledChange(pool, {
+        accountId: account.id,
+        userId: request.auth.userId,
+        subscriptionId: request.params.subscriptionId,
+      });
+    } catch (error) {
+      return sendBillingError(reply, error);
+    }
+  });
+
+  app.put('/api/billing/subscriptions/:subscriptionId/auto-renew', write, async (request, reply) => {
+    try {
+      const account = await activeAccount(pool, request.auth);
+      return setAutoRenew(pool, {
+        accountId: account.id,
+        userId: request.auth.userId,
+        subscriptionId: request.params.subscriptionId,
+        autoRenew: request.body?.autoRenew,
+        authorizedPriceMinor: request.body?.authorizedPriceMinor ?? null,
+      });
+    } catch (error) {
+      return sendBillingError(reply, error);
+    }
+  });
+
+  app.post('/api/internal/billing/renewals/process', write, async (request, reply) => {
+    if (!isPlatformOperator(request.auth)) return reply.code(403).send({ error: 'operator_required' });
+    try {
+      const now = request.body?.now ? new Date(request.body.now) : new Date();
+      return processRenewalCycle(pool, { now, region, currency });
     } catch (error) {
       return sendBillingError(reply, error);
     }

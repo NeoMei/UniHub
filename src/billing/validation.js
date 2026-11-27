@@ -54,7 +54,10 @@ export function allocateCreditUnits(batches, requestedUnits) {
     .filter((batch) => batch.availableUnits > 0n)
     .sort((left, right) => {
       const expiry = new Date(left.expiresAt).getTime() - new Date(right.expiresAt).getTime();
-      return expiry || String(left.id).localeCompare(String(right.id));
+      if (expiry) return expiry;
+      const priority = (sourceType) => sourceType === 'plan_base' ? 0 : sourceType === 'credit_pack' ? 1 : 2;
+      const diff = priority(left.sourceType) - priority(right.sourceType);
+      return diff || String(left.id).localeCompare(String(right.id));
     });
 
   const totalAvailable = candidates.reduce((sum, batch) => sum + batch.availableUnits, 0n);
