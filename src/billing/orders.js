@@ -83,6 +83,11 @@ function cardFromVersion(version, tierId) {
   return version?.cardsSnapshot?.find((card) => card.tierId === tierId) ?? null;
 }
 
+function priceToStore(snapshot, order) {
+  if (snapshot?.unitPriceMinor !== undefined) return BigInt(snapshot.unitPriceMinor).toString();
+  return (BigInt(order.paid_minor) / BigInt(order.quantity || 1)).toString();
+}
+
 function readPrice(card) {
   const price = card?.rule?.priceMinor;
   return Number.isSafeInteger(price) && price >= 0 ? BigInt(price) : null;
@@ -169,7 +174,7 @@ async function fulfillOrder(connection, orderId) {
       ) RETURNING *, statement_timestamp() + interval '1 month' AS grant_expires_at`, [
       randomUUID(), order.account_id, order.app_id, order.commerce_version_id, order.id,
       order.card_tier_id, card.tierRank ?? 0, cycle, order.quantity,
-      snapshot.autoRenew === true, BigInt(order.paid_minor).toString(),
+      snapshot.autoRenew === true, priceToStore(snapshot, order),
     ]);
     subscriptionId = subscription.id;
     expiresAt = subscription.grant_expires_at;

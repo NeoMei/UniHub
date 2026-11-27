@@ -125,11 +125,13 @@ export async function holdCredits(pool, {
     ]);
 
     const { rows: batches } = await connection.query(`
-      SELECT id, expires_at AS "expiresAt", available_units AS "availableUnits"
+      SELECT id, source_type AS "sourceType", expires_at AS "expiresAt", available_units AS "availableUnits"
       FROM credit_batches
       WHERE account_id = $1 AND app_id = $2 AND available_units > 0
         AND NOT frozen_for_new_holds AND expires_at > statement_timestamp()
-      ORDER BY expires_at ASC, id ASC
+      ORDER BY expires_at ASC,
+        CASE source_type WHEN 'plan_base' THEN 0 WHEN 'credit_pack' THEN 1 ELSE 2 END ASC,
+        id ASC
       FOR UPDATE`, [accountId, appId]);
     let allocation;
     try {
