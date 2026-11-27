@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isUuid, transaction } from './database.js';
 
-const appFields = 'id, name, redirect_uris AS "redirectUris", enabled';
+const appFields = 'id, name, description, redirect_uris AS "redirectUris", enabled';
 const appPath = '/api/admin/apps/:appId';
 const appError = { error: 'invalid_app' };
 const forbidden = { error: 'app_forbidden' };
@@ -26,10 +26,13 @@ function validRedirect(value) {
 
 function readSettings(body, enabled = body?.enabled) {
   const name = typeof body?.name === 'string' ? body.name.trim() : '';
+  const description = body?.description === undefined ? '' : typeof body.description === 'string' ? body.description.trim() : null;
   const redirectUris = body?.redirectUris;
-  if (!name || name.length > 160 || name.includes('\0') || !Array.isArray(redirectUris) || redirectUris.length < 1
+  if (!name || name.length > 160 || name.includes('\0')
+    || description === null || description.length > 500 || description.includes('\0')
+    || !Array.isArray(redirectUris) || redirectUris.length < 1
     || redirectUris.length > 20 || !redirectUris.every(validRedirect) || typeof enabled !== 'boolean') return null;
-  return { name, redirectUris: [...new Set(redirectUris)], enabled };
+  return { name, description, redirectUris: [...new Set(redirectUris)], enabled };
 }
 
 export async function readAppLogin(pool, { app_id: appId, redirect_uri: redirectUri, state }) {
@@ -42,14 +45,26 @@ export async function readAppLogin(pool, { app_id: appId, redirect_uri: redirect
 
 export async function issueAppLogin(pool, sessionId, { appId, redirectUri, state }) {
   const code = randomBytes(32).toString('base64url');
-  const { rowCount } = await pool.query(`
-    INSERT INTO app_login_codes (code_hash, app_id, session_id, redirect_uri, expires_at)
-    SELECT $1, a.id, s.id, $4, statement_timestamp() + interval '2 minutes'
-    FROM apps a CROSS JOIN portal_sessions s
-    WHERE a.id = $2 AND a.enabled AND $4 = ANY(a.redirect_uris)
-      AND s.id = $3 AND s.revoked_at IS NULL AND s.expires_at > statement_timestamp()
-    FOR SHARE OF a, s`, [hash(code), appId, sessionId, redirectUri]);
-  if (rowCount !== 1) return null;
+  const issued = await transaction(pool, async (connection) => {
+    const { rowCount } = await connection.query(`
+      INSERT INTO app_login_codes (code_hash, app_id, session_id, redirect_uri, expires_at)
+      SELECT $1, a.id, s.id, $4, statement_timestamp() + interval '2 minutes'
+      FROM apps a CROSS JOIN portal_sessions s
+      WHERE a.id = $2 AND a.enabled AND $4 = ANY(a.redirect_uris)
+        AND s.id = $3 AND s.revoked_at IS NULL AND s.expires_at > statement_timestamp()
+      FOR SHARE OF a, s`, [hash(code), appId, sessionId, redirectUri]);
+    if (rowCount !== 1) return false;
+    await connection.query(`
+      INSERT INTO user_app_authorizations (user_id, app_id, first_authorized_at, last_authorized_at, revoked_at)
+      SELECT i.user_id, $2, statement_timestamp(), statement_timestamp(), NULL
+      FROM portal_sessions s
+      JOIN oidc_identities i USING (issuer, subject)
+      WHERE s.id = $1
+      ON CONFLICT (user_id, app_id) DO UPDATE
+      SET last_authorized_at = statement_timestamp(), revoked_at = NULL`, [sessionId, appId]);
+    return true;
+  });
+  if (!issued) return null;
   const target = new URL(redirectUri).href;
   const separator = target.includes('?') ? '&' : '?';
   return `${target}${separator}${new URLSearchParams({ code, state })}`;
@@ -96,15 +111,28 @@ async function exchange(pool, credentials, body) {
 }
 
 export function registerAppRoutes(app, pool, auth, write, isPlatformOperator) {
+  app.get('/api/admin/apps', auth, async (request, reply) => {
+    const platform = isPlatformOperator(request.auth);
+    const { rows } = await pool.query(`
+      SELECT a.id, a.name, a.description, a.redirect_uris AS "redirectUris", a.enabled,
+        (SELECT count(*)::int FROM app_operators o WHERE o.app_id = a.id) AS "operatorCount",
+        (SELECT count(*)::int FROM commerce_versions v WHERE v.app_id = a.id) AS "publishedVersionCount"
+      FROM apps a
+      WHERE $1 OR EXISTS (SELECT 1 FROM app_operators o WHERE o.app_id = a.id AND o.user_id = $2)
+      ORDER BY a.name, a.id`, [platform, request.auth.userId]);
+    if (!platform && rows.length === 0) return reply.code(403).send(forbidden);
+    return { apps: rows };
+  });
+
   app.post('/api/admin/apps', { ...write, bodyLimit: 32_768 }, async (request, reply) => {
     if (!isPlatformOperator(request.auth)) return reply.code(403).send(forbidden);
     const settings = readSettings(request.body, request.body?.enabled === undefined ? true : request.body.enabled);
     if (!settings) return reply.code(400).send(appError);
     const clientSecret = randomBytes(32).toString('base64url');
     const { rows: [created] } = await pool.query(`
-      INSERT INTO apps (id, name, client_secret_hash, redirect_uris, enabled)
-      VALUES ($1, $2, $3, $4, $5) RETURNING ${appFields}`,
-    [randomUUID(), settings.name, hash(clientSecret), settings.redirectUris, settings.enabled]);
+      INSERT INTO apps (id, name, description, client_secret_hash, redirect_uris, enabled)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING ${appFields}`,
+    [randomUUID(), settings.name, settings.description, hash(clientSecret), settings.redirectUris, settings.enabled]);
     return reply.code(201).send({ app: created, clientSecret });
   });
 
@@ -125,8 +153,9 @@ export function registerAppRoutes(app, pool, auth, write, isPlatformOperator) {
     if (!isUuid(appId) || !settings) return reply.code(400).send(appError);
     const updated = await transaction(pool, async (connection) => {
       const { rows: [registered] } = await connection.query(`
-        UPDATE apps SET name = $1, redirect_uris = $2, enabled = $3 WHERE id = $4 RETURNING ${appFields}`,
-      [settings.name, settings.redirectUris, settings.enabled, appId]);
+        UPDATE apps SET name = $1, description = $2, redirect_uris = $3, enabled = $4, updated_at = statement_timestamp()
+        WHERE id = $5 RETURNING ${appFields}`,
+      [settings.name, settings.description, settings.redirectUris, settings.enabled, appId]);
       if (!registered) return null;
       await connection.query(`
         DELETE FROM app_login_codes
@@ -135,6 +164,46 @@ export function registerAppRoutes(app, pool, auth, write, isPlatformOperator) {
       return registered;
     });
     return updated ? { app: updated } : reply.code(404).send({ error: 'app_not_found' });
+  });
+
+  app.post(`${appPath}/rotate-secret`, write, async (request, reply) => {
+    if (!isPlatformOperator(request.auth)) return reply.code(403).send(forbidden);
+    const { appId } = request.params;
+    if (!isUuid(appId)) return reply.code(400).send(appError);
+    const clientSecret = randomBytes(32).toString('base64url');
+    const { rowCount } = await pool.query(
+      'UPDATE apps SET client_secret_hash = $1, updated_at = statement_timestamp() WHERE id = $2',
+      [hash(clientSecret), appId],
+    );
+    if (rowCount !== 1) return reply.code(404).send({ error: 'app_not_found' });
+    return { appId, clientSecret };
+  });
+
+  app.get('/api/me/authorized-apps', auth, async (request) => {
+    const { rows } = await pool.query(`
+      SELECT a.id AS "appId", a.name, a.description,
+        u.first_authorized_at AS "firstAuthorizedAt", u.last_authorized_at AS "lastAuthorizedAt"
+      FROM user_app_authorizations u
+      JOIN apps a ON a.id = u.app_id
+      WHERE u.user_id = $1 AND u.revoked_at IS NULL
+      ORDER BY u.last_authorized_at DESC, a.name`, [request.auth.userId]);
+    return { authorizedApps: rows };
+  });
+
+  app.delete('/api/me/authorized-apps/:appId', write, async (request, reply) => {
+    const { appId } = request.params;
+    if (!isUuid(appId)) return reply.code(400).send(appError);
+    await transaction(pool, async (connection) => {
+      await connection.query(`
+        UPDATE user_app_authorizations SET revoked_at = statement_timestamp()
+        WHERE user_id = $1 AND app_id = $2 AND revoked_at IS NULL`, [request.auth.userId, appId]);
+      await connection.query(`
+        DELETE FROM app_login_codes c
+        USING portal_sessions s, oidc_identities i
+        WHERE c.session_id = s.id AND s.issuer = i.issuer AND s.subject = i.subject
+          AND i.user_id = $1 AND c.app_id = $2 AND c.used_at IS NULL`, [request.auth.userId, appId]);
+    });
+    return reply.code(204).send();
   });
 
   const operatorPath = `${appPath}/operators/:userId`;

@@ -4,6 +4,7 @@ import fastify from 'fastify';
 import * as oidc from 'openid-client';
 import { accountContext, registerAccountRoutes } from './accounts.js';
 import { issueAppLogin, readAppLogin, registerAppRoutes } from './apps.js';
+import { registerCommerceRoutes } from './commerce/index.js';
 import { migrateDatabase } from './database.js';
 import { createSession, readSession, revokeSession } from './identity.js';
 import { renderPortal } from './portal.js';
@@ -59,8 +60,10 @@ export async function buildApp({
   app.decorateRequest('auth', null);
   const auth = { preHandler: requireSession };
   const write = { preHandler: [requireSession, verifyCsrf] };
+  const isPlatformOperator = (session) => session.issuer === issuer.href && operatorSubjects.has(session.subject);
   registerAccountRoutes(app, pool, auth, write);
-  registerAppRoutes(app, pool, auth, write, (session) => session.issuer === issuer.href && operatorSubjects.has(session.subject));
+  registerAppRoutes(app, pool, auth, write, isPlatformOperator);
+  registerCommerceRoutes(app, pool, auth, write, isPlatformOperator, { region, currency });
 
   app.get('/', async (request, reply) => {
     const session = await readSession(pool, request.session.get('sessionId'));
