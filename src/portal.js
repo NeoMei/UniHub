@@ -24,19 +24,10 @@ function accountSelector({ accounts, activeAccount, csrf }) {
     </form>`;
 }
 
-export function renderPortal(context, failed) {
+export function renderPortalMain(context, failed) {
   const user = context?.user;
   const name = user ? escape(user.name || user.email || '用户') : '';
-  return `<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>UniHub</title>
-    <link rel="stylesheet" href="/portal.css">
-  </head>
-  <body>
-    <main class="portal">
+  return `<main class="portal">
       <header>
         <h1>UniHub</h1>
         ${context ? accountSelector(context) : ''}
@@ -61,7 +52,20 @@ export function renderPortal(context, failed) {
         </form>` : `
         ${failed ? '<p role="alert">登录未完成，请重试。</p>' : ''}
         <a class="action" href="/login">登录 UniHub</a>`}
-    </main>
+    </main>`;
+}
+
+export function renderPortal(context, failed) {
+  return `<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>UniHub</title>
+    <link rel="stylesheet" href="/portal.css">
+  </head>
+  <body>
+    ${renderPortalMain(context, failed)}
   </body>
 </html>`;
 }

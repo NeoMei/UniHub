@@ -84,8 +84,32 @@ function validMember(update) {
     && ['canRecharge', 'canPurchase', 'hasSeat'].every((key) => typeof update[key] === 'boolean');
 }
 
-export function registerAccountRoutes(app, pool, auth, write) {
-  app.get('/api/session', auth, async (request) => accountContext(pool, request.auth));
+export function registerAccountRoutes(app, pool, auth, write, { isPlatformOperator = () => false, region, currency } = {}) {
+  app.get('/api/session', auth, async (request) => {
+    const context = await accountContext(pool, request.auth);
+    const platformOp = isPlatformOperator(request.auth);
+    const { rows: operatorApps } = await pool.query(`
+      SELECT a.id, a.name
+      FROM app_operators o
+      JOIN apps a ON a.id = o.app_id
+      WHERE o.user_id = $1
+      ORDER BY a.name ASC`, [request.auth.userId]);
+    return {
+      ...context,
+      region,
+      currency,
+      isPlatformOperator: platformOp,
+      operatorApps,
+    };
+  });
+
+  app.get('/api/apps/public', async () => {
+    const { rows } = await pool.query(`
+      SELECT id, name, description FROM apps
+      WHERE enabled = true
+      ORDER BY name ASC`);
+    return { apps: rows, region, currency };
+  });
 
   app.post('/api/session/account', write, async (request, reply) => {
     const id = request.body?.accountId;
