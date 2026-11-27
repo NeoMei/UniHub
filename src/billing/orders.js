@@ -4,6 +4,12 @@ import { transaction } from '../database.js';
 import { BillingError } from './errors.js';
 import { BILLING_UNITS_PER_CREDIT, normalizeCheckoutInput } from './validation.js';
 
+const outboxHandlers = new Map();
+
+export function registerOutboxHandler(topic, handler) {
+  outboxHandlers.set(topic, handler);
+}
+
 function mapSubscription(row) {
   if (!row) return null;
   return {
@@ -207,7 +213,7 @@ async function fulfillOrder(connection, orderId) {
 }
 
 export async function createCheckout(pool, {
-  accountId, userId, region, currency, input,
+  accountId, userId, region, currency, input, lagoEnabled = false,
 }) {
   const normalized = normalizeCheckoutInput(input);
   if (!normalized) throw new BillingError('invalid_checkout', 400);
@@ -293,11 +299,12 @@ export async function createCheckout(pool, {
     const { rows: [created] } = await connection.query(`
       INSERT INTO commerce_orders (
         id, order_no, account_id, buyer_user_id, app_id, order_type, commerce_version_id,
-        card_tier_id, quantity, region, currency, paid_minor, snapshot_json, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, 'confirmed')
+        card_tier_id, quantity, region, currency, paid_minor, snapshot_json, status, lago_sync_status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, 'confirmed', $14)
       RETURNING *`, [
       id, orderNo(), accountId, userId, normalized.appId, orderType, version.id,
       normalized.tierId, normalized.quantity, region, currency, total.toString(), jsonSafe(snapshot),
+      lagoEnabled ? 'pending' : 'skipped',
     ]);
     const nextAvailable = available - total;
     await connection.query(`
@@ -316,6 +323,13 @@ export async function createCheckout(pool, {
       VALUES ($1, $2, 'grant_entitlement', $3::jsonb)`, [
       randomUUID(), `grant:${id}:cycle:0`, JSON.stringify({ orderId: id }),
     ]);
+    if (lagoEnabled) {
+      await connection.query(`
+        INSERT INTO billing_outbox (id, dedupe_key, topic, payload_json)
+        VALUES ($1, $2, 'lago_invoice_sync', $3::jsonb)`, [
+        randomUUID(), `lago_sync:${id}`, JSON.stringify({ orderId: id }),
+      ]);
+    }
     return { order: mapOrder(created), wallet: { availableMinor: nextAvailable.toString(), arrearsMinor: wallet.arrears_minor } };
   });
 }
@@ -340,20 +354,29 @@ export async function listSubscriptions(pool, accountId) {
   return rows.map(mapSubscription);
 }
 
-export async function processPendingOutbox(pool, { limit = 20 } = {}) {
+export async function processPendingOutbox(pool, { limit = 20, lagoConfig = null } = {}) {
   const max = Number.isSafeInteger(limit) && limit > 0 ? Math.min(limit, 100) : 20;
   let processed = 0;
   const failed = [];
+  const skippedIds = [];
   while (processed + failed.length < max) {
     let row;
+    let currentPendingId = null;
     try {
       row = await transaction(pool, async (connection) => {
         const { rows: [pending] } = await connection.query(`
           SELECT * FROM billing_outbox
           WHERE status = 'pending' AND next_retry_at <= statement_timestamp()
-          ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`);
+            AND NOT (id = ANY($1::uuid[]))
+          ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`, [skippedIds]);
         if (!pending) return null;
-        if (pending.topic === 'grant_entitlement') await fulfillOrder(connection, pending.payload_json.orderId);
+        currentPendingId = pending.id;
+        if (pending.topic === 'grant_entitlement') {
+          await fulfillOrder(connection, pending.payload_json.orderId);
+        } else {
+          const handler = outboxHandlers.get(pending.topic);
+          if (handler) await handler(connection, pending.payload_json, { pool, lagoConfig });
+        }
         await connection.query(`
           UPDATE billing_outbox SET status = 'done', attempts = attempts + 1, last_error = NULL
           WHERE id = $1`, [pending.id]);
@@ -361,16 +384,17 @@ export async function processPendingOutbox(pool, { limit = 20 } = {}) {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message.slice(0, 500) : 'outbox_failed';
+      if (currentPendingId) skippedIds.push(currentPendingId);
       try {
-        await pool.query(`
-          UPDATE billing_outbox
-          SET attempts = attempts + 1,
-              status = CASE WHEN attempts + 1 >= 5 THEN 'dead' ELSE 'pending' END,
-              next_retry_at = statement_timestamp() + (LEAST(attempts + 1, 5) * interval '1 minute'),
-              last_error = $2
-          WHERE id = (
-            SELECT id FROM billing_outbox WHERE status = 'pending' ORDER BY created_at, id LIMIT 1
-          )`, [null, message]);
+        if (currentPendingId) {
+          await pool.query(`
+            UPDATE billing_outbox
+            SET attempts = attempts + 1,
+                status = CASE WHEN attempts + 1 >= 5 THEN 'dead' ELSE 'pending' END,
+                next_retry_at = statement_timestamp() + (LEAST(attempts + 1, 5) * interval '1 minute'),
+                last_error = $2
+            WHERE id = $1`, [currentPendingId, message]);
+        }
       } catch {
         // The worker will retry the durable row on its next invocation.
       }

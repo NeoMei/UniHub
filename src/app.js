@@ -6,6 +6,9 @@ import { accountContext, registerAccountRoutes } from './accounts.js';
 import { issueAppLogin, readAppLogin, registerAppRoutes } from './apps.js';
 import { registerCommerceRoutes } from './commerce/index.js';
 import { registerBillingRoutes } from './billing/index.js';
+import { registerGatewayBillingRoutes } from './gateway/billing-v1.js';
+import { registerGatewayKeyRoutes } from './gateway/keys.js';
+import { registerAdminIntegrationRoutes } from './integrations/admin.js';
 import { registerPaymentRoutes } from './payments/index.js';
 import { migrateDatabase } from './database.js';
 import { createSession, readSession, revokeSession } from './identity.js';
@@ -16,7 +19,7 @@ const sessionLifetime = 8 * 60 * 60;
 
 export async function buildApp({
   origin, issuer, clientId, clientSecret, sessionKey, pool, region, currency, operatorSubjects = new Set(),
-  paymentConfig = {},
+  paymentConfig = {}, gatewayServiceToken = '', allowedGatewayVersions, fxRates = null, lagoConfig = {},
 }) {
   await migrateDatabase(pool, region, currency);
   const execution = [oidc.enableNonRepudiationChecks];
@@ -80,7 +83,10 @@ export async function buildApp({
   registerAppRoutes(app, pool, auth, write, isPlatformOperator);
   registerCommerceRoutes(app, pool, auth, write, isPlatformOperator, { region, currency });
   registerPaymentRoutes(app, pool, auth, write, { region, currency, paymentConfig });
-  registerBillingRoutes(app, pool, auth, write, isPlatformOperator, { region, currency });
+  registerBillingRoutes(app, pool, auth, write, isPlatformOperator, { region, currency, lagoConfig });
+  registerGatewayKeyRoutes(app, pool, auth, write, { region, currency });
+  registerGatewayBillingRoutes(app, pool, { region, currency, gatewayServiceToken, allowedGatewayVersions, fxRates });
+  registerAdminIntegrationRoutes(app, pool, auth, write, isPlatformOperator, { region, currency, lagoConfig });
 
   app.get('/', async (request, reply) => {
     const session = await readSession(pool, request.session.get('sessionId'));
