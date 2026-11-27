@@ -1,0 +1,19 @@
+{
+  "name": "unihub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@fastify/secure-session": "8.4.2",
+    "fastify": "5.12.8",
+    "openid-client": "6.9.1",
+    "pg": "8.23.1"
+  }
+}

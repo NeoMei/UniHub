@@ -1,0 +1,58 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  color: #14241e;
+  background: #eef4f0;
+}
+
+body {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  margin: 0;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.portal {
+  box-sizing: border-box;
+  width: min(100%, 420px);
+  padding: clamp(28px, 7vw, 48px);
+  border: 1px solid #c9d8cf;
+  border-radius: 20px;
+  background: #fff;
+}
+
+h1 { margin: 0 0 28px; font-size: clamp(36px, 8vw, 48px); letter-spacing: -0.05em; }
+.identity { margin: 0 0 20px; overflow-wrap: anywhere; }
+[role="alert"] { color: #8d2927; }
+.account-selector, .enterprise-create { margin-bottom: 20px; }
+.account-selector label, .enterprise-create label { display: block; margin-bottom: 8px; }
+.enterprise-create form { margin-top: 12px; }
+.account-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.account-controls select, .account-controls input {
+  flex: 1 1 140px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #97ad9f;
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+}
+
+.action, button {
+  display: inline-block;
+  padding: 12px 20px;
+  border: 0;
+  border-radius: 8px;
+  background: #17593d;
+  color: #fff;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.action:hover, button:hover { background: #12452f; }
+.action:focus-visible, button:focus-visible { outline: 3px solid #17593d; outline-offset: 4px; }
