@@ -1,4 +1,6 @@
 import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import secureSession from '@fastify/secure-session';
 import fastify from 'fastify';
 import * as oidc from 'openid-client';
@@ -12,10 +14,26 @@ import { registerAdminIntegrationRoutes } from './integrations/admin.js';
 import { registerPaymentRoutes } from './payments/index.js';
 import { migrateDatabase } from './database.js';
 import { createSession, readSession, revokeSession } from './identity.js';
-import { renderPortal } from './portal.js';
+import { renderPortal, renderPortalMain } from './portal.js';
 
 const loginLifetime = 10 * 60 * 1000;
 const sessionLifetime = 8 * 60 * 60;
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const webDistDir = path.join(rootDir, 'web', 'dist');
+const webPublicDir = path.join(rootDir, 'web', 'public');
+const mimeByExt = new Map([
+  ['.js', 'application/javascript; charset=utf-8'],
+  ['.mjs', 'application/javascript; charset=utf-8'],
+  ['.css', 'text/css; charset=utf-8'],
+  ['.png', 'image/png'],
+  ['.svg', 'image/svg+xml'],
+  ['.ico', 'image/x-icon'],
+  ['.json', 'application/json; charset=utf-8'],
+  ['.woff2', 'font/woff2'],
+]);
+function renderSsrFallbackShell(context, failed) {
+  return `<div id="root">${renderPortalMain(context, failed)}</div>`;
+}
 
 export async function buildApp({
   origin, issuer, clientId, clientSecret, sessionKey, pool, region, currency, operatorSubjects = new Set(),
@@ -59,7 +77,7 @@ export async function buildApp({
   app.addHook('onRequest', async (_request, reply) => {
     reply.headers({
       'cache-control': 'no-store',
-      'content-security-policy': "default-src 'none'; style-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
       'referrer-policy': 'no-referrer',
       'x-content-type-options': 'nosniff',
     });
@@ -79,7 +97,7 @@ export async function buildApp({
   const auth = { preHandler: requireSession };
   const write = { preHandler: [requireSession, verifyCsrf] };
   const isPlatformOperator = (session) => session.issuer === issuer.href && operatorSubjects.has(session.subject);
-  registerAccountRoutes(app, pool, auth, write);
+  registerAccountRoutes(app, pool, auth, write, { isPlatformOperator, region, currency });
   registerAppRoutes(app, pool, auth, write, isPlatformOperator);
   registerCommerceRoutes(app, pool, auth, write, isPlatformOperator, { region, currency });
   registerPaymentRoutes(app, pool, auth, write, { region, currency, paymentConfig });
@@ -88,14 +106,44 @@ export async function buildApp({
   registerGatewayBillingRoutes(app, pool, { region, currency, gatewayServiceToken, allowedGatewayVersions, fxRates });
   registerAdminIntegrationRoutes(app, pool, auth, write, isPlatformOperator, { region, currency, lagoConfig });
 
-  app.get('/', async (request, reply) => {
+  async function serveSpaOrPortal(request, reply) {
     const session = await readSession(pool, request.session.get('sessionId'));
     const context = session ? await accountContext(pool, session) : null;
-    const failed = request.query.login === 'failed';
-    return reply.type('text/html; charset=utf-8').send(renderPortal(context, failed));
+    const failed = request.query?.login === 'failed';
+    try {
+      const html = await readFile(path.join(webDistDir, 'index.html'), 'utf8');
+      const withShell = html.replace('<div id="root"></div>', renderSsrFallbackShell(context, failed));
+      return reply.type('text/html; charset=utf-8').send(withShell);
+    } catch {
+      return reply.type('text/html; charset=utf-8').send(renderPortal(context, failed));
+    }
+  }
+
+  app.get('/assets/*', async (request, reply) => {
+    const rel = String(request.params['*'] ?? '');
+    if (!rel || rel.includes('\0') || rel.includes('..')) return reply.code(404).send({ error: 'not_found' });
+    const ext = path.extname(rel).toLowerCase();
+    const contentType = mimeByExt.get(ext);
+    if (!contentType) return reply.code(404).send({ error: 'not_found' });
+    for (const baseDir of [path.join(webDistDir, 'assets'), path.join(webPublicDir, 'assets')]) {
+      const target = path.resolve(baseDir, rel);
+      if (!target.startsWith(baseDir + path.sep)) continue;
+      try {
+        const bytes = await readFile(target);
+        return reply.type(contentType).send(bytes);
+      } catch {
+        // Try next directory
+      }
+    }
+    return reply.code(404).send({ error: 'not_found' });
   });
+
+  app.get('/', serveSpaOrPortal);
+  for (const spaPath of ['/docs', '/about', '/brand', '/handoff', '/invite/:token', '/console', '/console/*', '/admin', '/admin/*']) {
+    app.get(spaPath, serveSpaOrPortal);
+  }
   app.get('/portal.css', async (_request, reply) => reply.type('text/css; charset=utf-8').send(stylesheet));
-  app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/health', async () => ({ status: 'ok', region, currency }));
 
   app.get('/login', async (request, reply) => {
     const appParameters = ['app_id', 'redirect_uri', 'state'].some((key) => Object.hasOwn(request.query, key));

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
+    "build:web": "npm --prefix web run build",
     "test": "node --test"
   },
   "dependencies": {
