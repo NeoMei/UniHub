@@ -164,7 +164,7 @@ test('区域配置只接受 CN/CNY 或 US/USD，迁移可重复运行并拒绝�
   const second = await buildApp(context.config);
   t.after(() => second.close());
   assert.equal((await second.inject('/health')).statusCode, 200);
-  assert.equal((await context.pool.query('SELECT count(*)::int AS count FROM schema_migrations')).rows[0].count, 2);
+  assert.equal((await context.pool.query('SELECT count(*)::int AS count FROM schema_migrations')).rows[0].count, 3);
   await assert.rejects(buildApp({ ...context.config, region: 'us', currency: 'USD' }), /region|currency/i);
 });
 

@@ -28,25 +28,38 @@ export async function resolveCatalogModels(pool, {
   const { rows: [appRow] } = await pool.query('SELECT id, name, enabled FROM apps WHERE id = $1', [appId]);
   if (!appRow || !appRow.enabled) return { error: 'app_unavailable' };
 
-  // Per-app seat check for enterprise accounts (uses Stage 2a seat contract, falling back cleanly if no contract rows exist yet)
+  // Per-app seat check for enterprise accounts: prefer Stage 2b active subscription seats,
+  // falling back to Stage 2a seat contracts / legacy flag when no active subscription exists.
   let hasAppSeat = true;
   if (accountKind === 'enterprise') {
-    const { rows: [seatCheck] } = await pool.query(`
-      SELECT
-        EXISTS (
-          SELECT 1 FROM enterprise_app_seat_contracts
-          WHERE account_id = $1 AND app_id = $2 AND user_id = $3 AND revoked_at IS NULL
-        ) AS "hasAppContractSeat",
-        EXISTS (
-          SELECT 1 FROM enterprise_app_seat_contracts
-          WHERE account_id = $1 AND app_id = $2
-        ) AS "appHasAnyContract",
-        COALESCE((
-          SELECT has_seat FROM enterprise_members
-          WHERE account_id = $1 AND user_id = $3
-        ), false) AS "legacyHasSeat"`,
-    [accountId, appId, userId]);
-    hasAppSeat = seatCheck.appHasAnyContract ? seatCheck.hasAppContractSeat : seatCheck.legacyHasSeat;
+    const { rows: [activeSub] } = await pool.query(`
+      SELECT id FROM app_subscriptions
+      WHERE account_id = $1 AND app_id = $2 AND status = 'active'
+      LIMIT 1`, [accountId, appId]);
+    if (activeSub) {
+      const { rowCount } = await pool.query(`
+        SELECT 1 FROM enterprise_app_seats
+        WHERE account_id = $1 AND app_id = $2 AND subscription_id = $3 AND user_id = $4`,
+      [accountId, appId, activeSub.id, userId]);
+      hasAppSeat = rowCount === 1;
+    } else {
+      const { rows: [seatCheck] } = await pool.query(`
+        SELECT
+          EXISTS (
+            SELECT 1 FROM enterprise_app_seat_contracts
+            WHERE account_id = $1 AND app_id = $2 AND user_id = $3 AND revoked_at IS NULL
+          ) AS "hasAppContractSeat",
+          EXISTS (
+            SELECT 1 FROM enterprise_app_seat_contracts
+            WHERE account_id = $1 AND app_id = $2
+          ) AS "appHasAnyContract",
+          COALESCE((
+            SELECT has_seat FROM enterprise_members
+            WHERE account_id = $1 AND user_id = $3
+          ), false) AS "legacyHasSeat"`,
+      [accountId, appId, userId]);
+      hasAppSeat = seatCheck.appHasAnyContract ? seatCheck.hasAppContractSeat : seatCheck.legacyHasSeat;
+    }
   }
 
   const pricingVersion = await resolveRoutePricingVersion(pool, { appId, accountKind, region, at });

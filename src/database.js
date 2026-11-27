@@ -40,5 +40,11 @@ export async function migrateDatabase(pool, region, currency) {
     if (bound.region !== region || bound.currency !== currency) {
       throw new Error('Database region and currency do not match the deployment configuration');
     }
+    if ((await connection.query("SELECT to_regclass('wallet_accounts') IS NOT NULL AS present")).rows[0].present) {
+      await connection.query(`
+        INSERT INTO wallet_accounts (account_id, region, currency)
+        SELECT id, $1, $2 FROM accounts
+        ON CONFLICT (account_id) DO NOTHING`, [region, currency]);
+    }
   });
 }
