@@ -103,7 +103,24 @@ export async function resolveModelKey(pool, rawKey, { region, currency }) {
   };
 }
 
-export function registerGatewayKeyRoutes(app, pool, auth, write, { region, currency }) {
+async function notifyRouterKeySync(routerAdminConfig, event) {
+  if (!routerAdminConfig?.baseUrl) return;
+  try {
+    const baseUrl = String(routerAdminConfig.baseUrl).replace(/\/+$/, '');
+    await fetch(`${baseUrl}/api/internal/unihub/keys/sync`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(routerAdminConfig.token ? { 'x-unihub-service-token': routerAdminConfig.token } : {}),
+      },
+      body: JSON.stringify(event),
+    });
+  } catch {
+    // Best-effort cache sync: authoritative verification runs via /internal/billing/v1/*.
+  }
+}
+
+export function registerGatewayKeyRoutes(app, pool, auth, write, { region, currency, routerAdminConfig = {} }) {
   app.get('/api/keys', auth, async (request, reply) => {
     try {
       const accountId = request.auth.activeAccountId;
@@ -146,7 +163,9 @@ export function registerGatewayKeyRoutes(app, pool, auth, write, { region, curre
         ]);
         return row;
       });
-      return reply.code(201).send({ key: mapKey(created), plaintextKey: material.plaintext });
+      const mapped = mapKey(created);
+      await notifyRouterKeySync(routerAdminConfig, { action: 'create', key: mapped });
+      return reply.code(201).send({ key: mapped, plaintextKey: material.plaintext });
     } catch (error) {
       return sendBillingError(reply, error);
     }
@@ -182,7 +201,9 @@ export function registerGatewayKeyRoutes(app, pool, auth, write, { region, curre
         ]);
         return row;
       });
-      return reply.code(201).send({ key: mapKey(created), plaintextKey: material.plaintext, rotatedFromId: keyId });
+      const mapped = mapKey(created);
+      await notifyRouterKeySync(routerAdminConfig, { action: 'rotate', rotatedFromId: keyId, key: mapped });
+      return reply.code(201).send({ key: mapped, plaintextKey: material.plaintext, rotatedFromId: keyId });
     } catch (error) {
       return sendBillingError(reply, error);
     }
@@ -197,6 +218,7 @@ export function registerGatewayKeyRoutes(app, pool, auth, write, { region, curre
         WHERE id = $1 AND account_id = $2 AND user_id = $3 AND status = 'active'`,
       [keyId, request.auth.activeAccountId, request.auth.userId]);
       if (rowCount === 0) return reply.code(404).send({ error: 'key_not_found' });
+      await notifyRouterKeySync(routerAdminConfig, { action: 'revoke', keyId });
       return reply.code(204).send();
     } catch (error) {
       return sendBillingError(reply, error);

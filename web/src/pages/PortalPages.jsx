@@ -123,6 +123,7 @@ export function WalletPage({ session, onNavigate }) {
   const [amountYuan, setAmountYuan] = useState('100');
   const [provider, setProvider] = useState(session.region === 'us' ? 'stripe' : 'wechat');
   const [statusMsg, setStatusMsg] = useState(null);
+  const [checkoutSession, setCheckoutSession] = useState(null);
   const [pendingCheckout, setPendingCheckout] = useState(null);
 
   async function refresh() {
@@ -146,12 +147,13 @@ export function WalletPage({ session, onNavigate }) {
     e.preventDefault();
     try {
       const amountMinor = Math.round(Number(amountYuan) * 100);
-      await apiRequest('/api/wallet/recharges', {
+      const res = await apiRequest('/api/wallet/recharges', {
         method: 'POST',
         csrf: session.csrf,
         body: { provider, amountMinor },
       });
-      setStatusMsg({ tone: 'info', text: '充值订单已生成，等待渠道支付回调确认。' });
+      setCheckoutSession(res.data.checkoutSession ?? null);
+      setStatusMsg({ tone: 'info', text: '充值订单已生成，请使用下方渠道收银台完成支付并等待回调确认。' });
       await refresh();
     } catch (err) {
       setStatusMsg({ tone: 'error', text: err.message });
@@ -196,6 +198,20 @@ export function WalletPage({ session, onNavigate }) {
     <div className="space-y-6">
       <h1 className="text-xl font-bold text-[#142B35]">现金钱包与充值</h1>
       {statusMsg && <StatusAlert message={statusMsg.text} tone={statusMsg.tone} onClose={() => setStatusMsg(null)} />}
+
+      {checkoutSession && (
+        <div className="rounded-2xl border border-[#087F8C] bg-white p-5 space-y-2">
+          <div className="text-sm font-bold text-[#142B35]">支付收银台会话已创建（{checkoutSession.provider}）</div>
+          {checkoutSession.codeUrl && (
+            <div className="rounded-xl bg-[#F3F8FA] p-3 font-mono text-xs break-all">微信扫码链接：{checkoutSession.codeUrl}</div>
+          )}
+          {checkoutSession.redirectUrl && (
+            <a href={checkoutSession.redirectUrl} target="_blank" rel="noreferrer" className="inline-block rounded-xl bg-[#087F8C] px-4 py-2 text-xs font-semibold text-white">
+              前往官方收银台完成付款
+            </a>
+          )}
+        </div>
+      )}
 
       {pendingCheckout && (
         <div className="rounded-2xl border-2 border-[#087F8C] bg-[#35C4A3]/10 p-5 flex flex-wrap items-center justify-between gap-4">
