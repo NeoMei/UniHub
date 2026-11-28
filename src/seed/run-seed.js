@@ -13,7 +13,7 @@ try {
 
   const operatorSubject = [...config.operatorSubjects][0] ?? 'bootstrap-operator';
   const { rows: [existingUser] } = await pool.query(
-    'SELECT user_id FROM user_identities WHERE issuer = $1 AND subject = $2',
+    'SELECT user_id FROM oidc_identities WHERE issuer = $1 AND subject = $2',
     [config.issuer.href, operatorSubject],
   );
   let operatorUserId = existingUser?.user_id;
@@ -24,7 +24,7 @@ try {
       [newId, 'Platform Seed Operator', 'seed@unihub.invalid'],
     );
     await pool.query(
-      'INSERT INTO user_identities (issuer, subject, user_id) VALUES ($1, $2, $3)',
+      'INSERT INTO oidc_identities (issuer, subject, user_id) VALUES ($1, $2, $3)',
       [config.issuer.href, operatorSubject, newId],
     );
     await pool.query(
