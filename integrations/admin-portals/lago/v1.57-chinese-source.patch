@@ -1,0 +1,377 @@
+diff --git a/.env.sh b/.env.sh
+index d5cf4a4ae..2dbaa62d4 100755
+--- a/.env.sh
++++ b/.env.sh
+@@ -54,3 +54,7 @@ echo "window.NANGO_PUBLIC_KEY = \"$nango_public_key\"" >> ./env-config.js
+ echo "window.SENTRY_DSN = \"$sentry_dsn_value\"" >> ./env-config.js
+ echo "window.LAGO_DISABLE_PDF_GENERATION = \"$lago_disable_pdf_generation\"" >> ./env-config.js
+ echo "window.LAGO_SUPERSET_URL = \"$lago_superset_url\"" >> ./env-config.js
++
++if [[ "${LAGO_DEFAULT_UI_LOCALE:-}" =~ ^[a-z]{2}(-[A-Z]{2})?$ ]]; then
++  echo "window.LAGO_DEFAULT_UI_LOCALE = \"$LAGO_DEFAULT_UI_LOCALE\"" >> ./env-config.js
++fi
+diff --git a/globals.d.ts b/globals.d.ts
+index be993193f..41b80d81e 100644
+--- a/globals.d.ts
++++ b/globals.d.ts
+@@ -15,6 +15,7 @@ declare var NANGO_PUBLIC_KEY: string
+ declare var SENTRY_DSN: string
+ declare var LAGO_DISABLE_PDF_GENERATION: string
+ declare var LAGO_SUPERSET_URL: string
++declare var LAGO_DEFAULT_UI_LOCALE: string | undefined
+ 
+ declare module '*.svg' {
+   const content: any
+diff --git a/src/core/apolloClient/reactiveVars/internationalizationVar.ts b/src/core/apolloClient/reactiveVars/internationalizationVar.ts
+index 9c138e19b..a87e7612e 100644
+--- a/src/core/apolloClient/reactiveVars/internationalizationVar.ts
++++ b/src/core/apolloClient/reactiveVars/internationalizationVar.ts
+@@ -1,40 +1,45 @@
+ import { makeVar, useReactiveVar } from '@apollo/client'
+ 
+-import { getTranslations, Locale, LocaleEnum } from '~/core/translations'
++import { getUiTranslations, isUiLocale, LocaleEnum, UiLocale } from '~/core/translations'
+ import { getItemFromLS, setItemFromLS } from '~/core/utils/localStorage'
+ 
+ const LOCALE_LS_KEY = 'locale'
+ 
+ interface InternationalizationVar {
+-  locale: Locale
++  locale: UiLocale
+   translations?: Record<string, string>
+ }
+ 
++const getInitialLocale = (): UiLocale => {
++  const savedLocale = getItemFromLS(LOCALE_LS_KEY)
++  if (isUiLocale(savedLocale)) return savedLocale
++
++  const defaultLocale = typeof window === 'undefined' ? undefined : window.LAGO_DEFAULT_UI_LOCALE
++  return isUiLocale(defaultLocale) ? defaultLocale : LocaleEnum.en
++}
++
+ const internationalizationVar = makeVar<InternationalizationVar>({
+-  locale: getItemFromLS(LOCALE_LS_KEY) ?? LocaleEnum.en,
++  locale: getInitialLocale(),
+   // `undefined` (not `{}`) is the "translations not loaded yet" sentinel so `translateKey`
+   // can detect it in O(1) without enumerating the multi-thousand-key translations object.
+   translations: undefined,
+ })
+ 
+-export const initializeTranslations = async () => {
+-  const { locale } = internationalizationVar()
+-  const translations = await getTranslations(locale)
++const loadTranslations = async (locale: UiLocale) => {
++  const translations = await getUiTranslations(locale)
+ 
++  if (typeof document !== 'undefined') document.documentElement.lang = locale
+   internationalizationVar({
+     locale,
+     translations,
+   })
+ }
+ 
+-export const updateIntlLocale = async (locale: Locale) => {
+-  setItemFromLS(LOCALE_LS_KEY, locale)
+-  const translations = await getTranslations(locale)
++export const initializeTranslations = () => loadTranslations(internationalizationVar().locale)
+ 
+-  internationalizationVar({
+-    locale,
+-    translations,
+-  })
++export const updateIntlLocale = (locale: UiLocale) => {
++  setItemFromLS(LOCALE_LS_KEY, locale)
++  return loadTranslations(locale)
+ }
+ 
+ export const useInternationalizationVar = () => useReactiveVar(internationalizationVar)
+diff --git a/src/core/translations/types.ts b/src/core/translations/types.ts
+index 383e46829..fed63897c 100644
+--- a/src/core/translations/types.ts
++++ b/src/core/translations/types.ts
+@@ -18,3 +18,8 @@ export enum LocaleEnum {
+   'zh-TW' = 'zh-TW', // Chinese (Traditional)
+ }
+ export type Locale = keyof typeof LocaleEnum
++
++export type UiLocale = Locale | 'zh-CN'
++
++export const isUiLocale = (value: unknown): value is UiLocale =>
++  value === 'zh-CN' || Object.values(LocaleEnum).some((locale) => locale === value)
+diff --git a/src/core/translations/utils.ts b/src/core/translations/utils.ts
+index 9b45a9bc0..ffa1eaf60 100644
+--- a/src/core/translations/utils.ts
++++ b/src/core/translations/utils.ts
+@@ -3,7 +3,7 @@ import { captureMessage } from '@sentry/react'
+ import { AppEnvEnum } from '~/core/constants/globalTypes'
+ import { isDevOrQaAppEnv, isProductionAppEnv } from '~/core/utils/appEnv'
+ 
+-import { Locale, LocaleEnum, TranslateData, Translation, Translations } from './types'
++import { Locale, LocaleEnum, TranslateData, Translation, Translations, UiLocale } from './types'
+ 
+ export const getTranslations: (locale: Locale) => Promise<Record<string, string>> = async (
+   locale,
+@@ -20,6 +20,17 @@ export const getTranslations: (locale: Locale) => Promise<Record<string, string>
+   return loadedTranslation
+ }
+ 
++export const getUiTranslations = async (locale: UiLocale): Promise<Translation> => {
++  if (locale !== 'zh-CN') return getTranslations(locale)
++
++  const [{ default: english }, { default: chinese }] = await Promise.all([
++    import('../../../translations/base.json'),
++    import('../../../translations/ui/zh-CN.json'),
++  ])
++
++  return { ...english, ...chinese }
++}
++
+ export function replaceDynamicVarInString(template: string, data: TranslateData) {
+   return template.replace(/\{\{(\w+)\}\}/g, (_, key) => String(data[key]))
+ }
+@@ -41,7 +52,7 @@ export function getPluralTranslation(template: string, plural: number) {
+ export const translateKey: (
+   context: {
+     translations: Translations
+-    locale: Locale
++    locale: UiLocale
+     appEnv: AppEnvEnum | undefined
+   },
+   key: string,
+diff --git a/src/hooks/core/useContextualLocale.ts b/src/hooks/core/useContextualLocale.ts
+index 799a81b77..1120fb5a9 100644
+--- a/src/hooks/core/useContextualLocale.ts
++++ b/src/hooks/core/useContextualLocale.ts
+@@ -4,11 +4,14 @@ import { envGlobalVar } from '~/core/apolloClient'
+ import {
+   getTranslations,
+   Locale,
++  LocaleEnum,
+   TranslateData,
+   translateKey,
+   Translation,
+ } from '~/core/translations'
+ 
++import type { TranslateFunc } from './useInternationalization'
++
+ const { appEnv } = envGlobalVar()
+ 
+ // Simple module-level cache for contextual translations
+@@ -26,6 +29,23 @@ export const preloadContextualLocale = async (locale: Locale): Promise<void> =>
+   contextualTranslationCache.set(locale, loadedTranslations)
+ }
+ 
++export const loadContextualTranslator = async (locale: Locale): Promise<TranslateFunc> => {
++  await preloadContextualLocale(locale)
++
++  if (locale !== LocaleEnum.en) await preloadContextualLocale(LocaleEnum.en)
++
++  const translations = contextualTranslationCache.get(locale)
++  const fallback = contextualTranslationCache.get(LocaleEnum.en)
++
++  return (key, data, plural = 0) =>
++    translateKey(
++      { translations: translations?.[key] ? translations : fallback, locale, appEnv },
++      key,
++      data,
++      plural,
++    )
++}
++
+ type UseContextualLocale = (locale: Locale) => {
+   translateWithContextualLocal: (key: string, data?: TranslateData, plural?: number) => string
+ }
+diff --git a/src/hooks/core/useInternationalization.ts b/src/hooks/core/useInternationalization.ts
+index f37e12e39..b63bb92d1 100644
+--- a/src/hooks/core/useInternationalization.ts
++++ b/src/hooks/core/useInternationalization.ts
+@@ -1,16 +1,16 @@
+ import { useCallback } from 'react'
+ 
+ import { envGlobalVar, updateIntlLocale, useInternationalizationVar } from '~/core/apolloClient'
+-import { Locale, TranslateData, translateKey } from '~/core/translations'
++import { TranslateData, translateKey, UiLocale } from '~/core/translations'
+ 
+ const { appEnv } = envGlobalVar()
+ 
+ export type TranslateFunc = (key: string, data?: TranslateData, plural?: number) => string
+ 
+ type UseInternationalization = () => {
+-  locale: Locale
++  locale: UiLocale
+   translate: TranslateFunc
+-  updateLocale: (locale: Locale) => void
++  updateLocale: (locale: UiLocale) => void
+ }
+ 
+ export const useInternationalization: UseInternationalization = () => {
+diff --git a/src/pages/quotes/editQuote/EditQuoteAside.tsx b/src/pages/quotes/editQuote/EditQuoteAside.tsx
+index 8101c4129..150612872 100644
+--- a/src/pages/quotes/editQuote/EditQuoteAside.tsx
++++ b/src/pages/quotes/editQuote/EditQuoteAside.tsx
+@@ -15,14 +15,12 @@ import {
+   type QuoteDetailItemFragment,
+   type UpdateQuoteVersionInput,
+ } from '~/generated/graphql'
++import { loadContextualTranslator } from '~/hooks/core/useContextualLocale'
+ import { useInternationalization } from '~/hooks/core/useInternationalization'
+ import { useAppForm } from '~/hooks/forms/useAppform'
+ import { useBillingEntitiesOptions } from '~/hooks/useBillingEntitiesOptions'
+ import { usePermissions } from '~/hooks/usePermissions'
+-import {
+-  buildQuotePreviewProps,
+-  type QuotePdfHeaderData,
+-} from '~/pages/quotes/common/buildQuotePreviewProps'
++import { buildQuotePreviewProps } from '~/pages/quotes/common/buildQuotePreviewProps'
+ import { useDownloadQuotePdf } from '~/pages/quotes/common/QuotePdfProvider'
+ import { useApproveQuote } from '~/pages/quotes/hooks/useApproveQuote'
+ import { useUpdateQuote } from '~/pages/quotes/hooks/useUpdateQuote'
+@@ -109,14 +107,6 @@ const EditQuoteAsideForm = ({
+   const { hasMultipleEntities } = useBillingEntitiesOptions({ includeInheritOption: true })
+ 
+   const canApprove = hasPermissions(['quotesApprove'])
+-  const pdfHeader: QuotePdfHeaderData = {
+-    documentNumber: quote.number,
+-    rows: [
+-      translate('text_17818008544903clzyy4ziu1', {
+-        quoteNumberWithVersion: `${quote.number} - v${quote.currentVersion.version}`,
+-      }),
+-    ],
+-  }
+ 
+   const isAmendment = quote.orderType === OrderTypeEnum.SubscriptionAmendment
+   const versionId = quote.currentVersion.id
+@@ -254,14 +244,27 @@ const EditQuoteAsideForm = ({
+   }
+ 
+   const handleDownloadPdf = () => {
+-    download(
+-      buildQuotePreviewProps({
+-        version: quote.currentVersion,
+-        customer: quote.customer,
+-        images: (quote.images ?? {}) as Record<string, string>,
+-        header: pdfHeader,
+-      }),
+-    ).catch(() => undefined)
++    const previewProps = buildQuotePreviewProps({
++      version: quote.currentVersion,
++      customer: quote.customer,
++      images: (quote.images ?? {}) as Record<string, string>,
++    })
++
++    void loadContextualTranslator(previewProps.customerLocale)
++      .then((translateDocument) =>
++        download({
++          ...previewProps,
++          header: {
++            documentNumber: quote.number,
++            rows: [
++              translateDocument('text_17818008544903clzyy4ziu1', {
++                quoteNumberWithVersion: `${quote.number} - v${quote.currentVersion.version}`,
++              }),
++            ],
++          },
++        }),
++      )
++      .catch(() => undefined)
+   }
+ 
+   return (
+diff --git a/src/pages/quotes/hooks/useOrderActions.ts b/src/pages/quotes/hooks/useOrderActions.ts
+index 2cbc3c0ec..55dac197a 100644
+--- a/src/pages/quotes/hooks/useOrderActions.ts
++++ b/src/pages/quotes/hooks/useOrderActions.ts
+@@ -3,6 +3,7 @@ import { generatePath } from 'react-router'
+ 
+ import { EDIT_ORDER_ROUTE, EXECUTE_ORDER_ROUTE } from '~/core/router'
+ import { OrderListItemFragment, OrderStatusEnum } from '~/generated/graphql'
++import { loadContextualTranslator } from '~/hooks/core/useContextualLocale'
+ import { useInternationalization } from '~/hooks/core/useInternationalization'
+ import { usePermissions } from '~/hooks/usePermissions'
+ import { buildOrderHeader } from '~/pages/quotes/common/buildOrderHeader'
+@@ -45,20 +46,21 @@ export const useOrderActions = () => {
+     const content = version?.content
+ 
+     if (content) {
+-      const header = buildOrderHeader(order, translate)
+-
+       actions.push({
+         icon: 'download',
+         label: translate('text_17797156485850t8yms6hf7z'),
+         onAction: () => {
+-          void download(
+-            buildQuotePreviewProps({
+-              version,
+-              customer: order.customer,
+-              images: (order.orderForm.quote.images ?? {}) as Record<string, string>,
+-              header,
+-            }),
+-          ).catch(() => undefined)
++          const props = buildQuotePreviewProps({
++            version,
++            customer: order.customer,
++            images: (order.orderForm.quote.images ?? {}) as Record<string, string>,
++          })
++
++          void loadContextualTranslator(props.customerLocale)
++            .then((translateDocument) =>
++              download({ ...props, header: buildOrderHeader(order, translateDocument) }),
++            )
++            .catch(() => undefined)
+         },
+       })
+     }
+diff --git a/src/pages/quotes/hooks/useOrderFormActions.ts b/src/pages/quotes/hooks/useOrderFormActions.ts
+index 9dce8b080..0a3b03639 100644
+--- a/src/pages/quotes/hooks/useOrderFormActions.ts
++++ b/src/pages/quotes/hooks/useOrderFormActions.ts
+@@ -3,6 +3,7 @@ import { generatePath } from 'react-router'
+ 
+ import { SIGN_ORDER_FORM_ROUTE, VOID_ORDER_FORM_ROUTE } from '~/core/router'
+ import { OrderFormListItemFragment, OrderFormStatusEnum } from '~/generated/graphql'
++import { loadContextualTranslator } from '~/hooks/core/useContextualLocale'
+ import { useInternationalization } from '~/hooks/core/useInternationalization'
+ import { useOrganizationInfos } from '~/hooks/useOrganizationInfos'
+ import { usePermissions } from '~/hooks/usePermissions'
+@@ -38,24 +39,27 @@ export const useOrderFormActions = () => {
+     }
+ 
+     if (content) {
+-      const header = buildOrderFormHeader(
+-        orderForm,
+-        translate,
+-        (iso) => intlFormatDateTimeOrgaTZ(iso).date,
+-      )
+-
+       actions.push({
+         icon: 'download',
+         label: translate('text_17797156485850t8yms6hf7z'),
+         onAction: () => {
+-          void download(
+-            buildQuotePreviewProps({
+-              version,
+-              customer: orderForm.customer,
+-              images: (orderForm.quote.images ?? {}) as Record<string, string>,
+-              header,
+-            }),
+-          ).catch(() => undefined)
++          const props = buildQuotePreviewProps({
++            version,
++            customer: orderForm.customer,
++            images: (orderForm.quote.images ?? {}) as Record<string, string>,
++          })
++
++          void loadContextualTranslator(props.customerLocale)
++            .then((translateDocument) => {
++              const header = buildOrderFormHeader(
++                orderForm,
++                translateDocument,
++                (iso) => intlFormatDateTimeOrgaTZ(iso).date,
++              )
++
++              return download({ ...props, header })
++            })
++            .catch(() => undefined)
+         },
+       })
+     }

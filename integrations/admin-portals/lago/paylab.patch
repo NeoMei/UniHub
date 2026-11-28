@@ -1,0 +1,407 @@
+diff --git a/index.html b/index.html
+index 2c77c5e7a..2120839f5 100644
+--- a/index.html
++++ b/index.html
+@@ -1,7 +1,7 @@
+ <!doctype html>
+ <html lang="en">
+   <head>
+-    <base href="/" />
++    <base href="<%- appBase %>" />
+     <meta charset="UTF-8" />
+     <meta name="viewport" content="minimum-scale=1, initial-scale=1, width=device-width" />
+     <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+diff --git a/src/App.tsx b/src/App.tsx
+index 7ebce1943..c7dfb24f6 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -1,3 +1,4 @@
++import { appPrefix } from '~/core/router/appBase'
+ import { ApolloClient, ApolloProvider, NormalizedCacheObject } from '@apollo/client'
+ import { loadDevMessages, loadErrorMessages } from '@apollo/client/dev'
+ import { Provider as NiceModalProvider } from '@ebay/nice-modal-react'
+@@ -127,7 +128,7 @@ const App = () => {
+                 <NiceModalProvider>
+                   <QuotePdfProvider>
+                     <PanelGroup direction="vertical" autoSaveId={DEVTOOL_AUTO_SAVE_ID}>
+-                      <BrowserRouter basename="/" useTransitions={false}>
++                      <BrowserRouter basename={appPrefix || '/'} useTransitions={false}>
+                         <Panel id="app-panel-group">
+                           <PanelGroup direction="horizontal">
+                             <Panel id="app-panel">
+diff --git a/src/components/RouteWrapper.tsx b/src/components/RouteWrapper.tsx
+index f9c1b7cb5..cc416e5ac 100644
+--- a/src/components/RouteWrapper.tsx
++++ b/src/components/RouteWrapper.tsx
+@@ -1,3 +1,4 @@
++import { browserPath } from '~/core/router/appBase'
+ import { ReactNode, Suspense, useEffect } from 'react'
+ import { RouteObject, useRoutes } from 'react-router'
+ 
+@@ -34,7 +35,7 @@ const PageWrapper = ({ children, routeConfig }: PageWrapperProps) => {
+       // Set the devtool param in the URL for the homepage
+       const url = new URL(window.location.href)
+ 
+-      url.pathname = '/'
++      url.pathname = browserPath('/')
+       // The search string is part of the devtools address, not decoration — see `EventKey`.
+       url.searchParams.set(DEVTOOL_TAB_PARAMS, `${location.pathname}${location.search}`)
+       window.location.replace(url.toString())
+diff --git a/src/components/UserIdentifier.tsx b/src/components/UserIdentifier.tsx
+index 30e519faa..edee27f48 100644
+--- a/src/components/UserIdentifier.tsx
++++ b/src/components/UserIdentifier.tsx
+@@ -1,3 +1,4 @@
++import { routerPath } from '~/core/router/appBase'
+ import { gql, useReactiveVar } from '@apollo/client'
+ import { getCurrentScope } from '@sentry/react'
+ import { Settings } from 'luxon'
+@@ -42,7 +43,7 @@ export const UserIdentifier = () => {
+   // If for some reason we constantly get null on the meQuery, avoid inifnite refetch
+   const refetchCountRef = useRef<number>(0)
+ 
+-  const slugFromPath = window.location.pathname.split('/')[1] ?? ''
++  const slugFromPath = routerPath(window.location.pathname).split('/')[1] ?? ''
+   const isOrgDataStale =
+     !!slugFromPath && !!data?.organization && data.organization.slug !== slugFromPath
+ 
+diff --git a/src/components/designSystem/Table/Table.tsx b/src/components/designSystem/Table/Table.tsx
+index 9317d638f..2d1200e13 100644
+--- a/src/components/designSystem/Table/Table.tsx
++++ b/src/components/designSystem/Table/Table.tsx
+@@ -1,3 +1,4 @@
++import { browserPath } from '~/core/router/appBase'
+ import MUITable from '@mui/material/Table'
+ import MUITableBody from '@mui/material/TableBody'
+ import { type TableCellProps } from '@mui/material/TableCell'
+@@ -483,7 +484,7 @@ export const Table = <T extends DataItem>({
+     const prefixedLink = prependOrgSlug(link, organizationSlug)
+ 
+     if (hasSideKeyPressed) {
+-      window.open(prefixedLink, '_blank')
++      window.open(browserPath(prefixedLink), '_blank')
+     } else {
+       navigate(link)
+     }
+diff --git a/src/components/designSystem/Typography.tsx b/src/components/designSystem/Typography.tsx
+index 37b17d283..49ca76614 100644
+--- a/src/components/designSystem/Typography.tsx
++++ b/src/components/designSystem/Typography.tsx
+@@ -1,3 +1,4 @@
++import { browserPath } from '~/core/router/appBase'
+ import MuiTypography, { type TypographyProps as MuiTypographyProps } from '@mui/material/Typography'
+ import _isEqual from 'lodash/isEqual'
+ import { ElementType, memo } from 'react'
+@@ -126,7 +127,8 @@ export const Typography = memo(
+                 text: INTERNAL_LINK_PLACEHOLDER,
+               }
+             }
+-            // For external links, don't change anything
++            // Plain anchors bypass the router. Keep their internal paths on this mount.
++            if (attribs.href) attribs.href = browserPath(attribs.href)
+             return { tagName, attribs }
+           },
+         },
+diff --git a/src/core/apolloClient/cachePersistor.ts b/src/core/apolloClient/cachePersistor.ts
+index 806ceb288..ac446aaff 100644
+--- a/src/core/apolloClient/cachePersistor.ts
++++ b/src/core/apolloClient/cachePersistor.ts
+@@ -1,3 +1,4 @@
++import { storageKey } from '~/core/router/appBase'
+ import { NormalizedCacheObject } from '@apollo/client'
+ import { CachePersistor, LocalForageWrapper } from 'apollo3-cache-persist'
+ import localForage from 'localforage'
+@@ -6,7 +7,7 @@ import { isCustomerPortalPath } from '~/core/router/utils/isCustomerPortalPath'
+ 
+ import { cache } from './cache'
+ 
+-const KEY_PREFIX = 'apollo-cache-persist-lago-'
++const KEY_PREFIX = storageKey('apollo-cache-persist-lago-')
+ 
+ let persistor: CachePersistor<NormalizedCacheObject> | null = null
+ let persistenceKey: string | undefined
+diff --git a/src/core/apolloClient/crossTabAuth.ts b/src/core/apolloClient/crossTabAuth.ts
+index 5f3e7268f..bc388ab8f 100644
+--- a/src/core/apolloClient/crossTabAuth.ts
++++ b/src/core/apolloClient/crossTabAuth.ts
+@@ -1,3 +1,4 @@
++import { browserPath, storageKey } from '~/core/router/appBase'
+ import { ApolloClient } from '@apollo/client'
+ 
+ import { isCustomerPortalPath } from '~/core/router/utils/isCustomerPortalPath'
+@@ -58,7 +59,7 @@ export const reconcileSession = (client: ApolloClient<object>): Promise<void> =>
+       // Not adopted in place: `client.stop()` left this tab's mounted queries
+       // dead, and its current organization belongs to the previous account.
+       if (sessionToken && latestToken) {
+-        window.location.assign('/')
++        window.location.assign(browserPath('/'))
+ 
+         return
+       }
+@@ -77,7 +78,7 @@ export const reconcileSession = (client: ApolloClient<object>): Promise<void> =>
+ // `localStorage.clear()` reports a null key, and `storage` never fires in the
+ // tab that wrote.
+ const isAuthTokenChange = (event: StorageEvent): boolean =>
+-  event.storageArea === localStorage && (event.key === null || event.key === AUTH_TOKEN_LS_KEY)
++  event.storageArea === localStorage && (event.key === null || event.key === storageKey(AUTH_TOKEN_LS_KEY))
+ 
+ export const listenToSessionChanges = (onChange: () => void): (() => void) => {
+   const handleStorage = (event: StorageEvent): void => {
+diff --git a/src/core/apolloClient/init.ts b/src/core/apolloClient/init.ts
+index e6a29ff40..52518e849 100644
+--- a/src/core/apolloClient/init.ts
++++ b/src/core/apolloClient/init.ts
+@@ -1,3 +1,4 @@
++import { appPrefix, browserPath } from '~/core/router/appBase'
+ import { ApolloClient, ApolloLink, Operation, split } from '@apollo/client'
+ import { onError } from '@apollo/client/link/error'
+ import { RetryLink } from '@apollo/client/link/retry'
+@@ -38,7 +39,8 @@ const SLOW_QUERY_THRESHOLD_MS = 8000 // threshold for considering a query as "sl
+ 
+ const { apiUrl, appVersion } = envGlobalVar()
+ 
+-const { cableUrl } = buildWebSocketUrl(apiUrl)
++const guiApiUrl = appPrefix ? window.location.origin + browserPath('/api') : apiUrl
++const { cableUrl } = buildWebSocketUrl(guiApiUrl)
+ const subscriptionLink = createCableLink(cableUrl)
+ 
+ const hasSubscriptionOperation = ({ query }: Operation) => {
+@@ -270,7 +272,7 @@ export const initializeApolloClient = async () => {
+   })
+ 
+   const httpLink = createUploadLink({
+-    uri: `${apiUrl}/graphql`,
++    uri: `${guiApiUrl}/graphql`,
+   })
+ 
+   const splitLink = split(hasSubscriptionOperation, subscriptionLink, httpLink)
+diff --git a/src/core/router/appBase.ts b/src/core/router/appBase.ts
+new file mode 100644
+index 000000000..e374d1ffa
+--- /dev/null
++++ b/src/core/router/appBase.ts
+@@ -0,0 +1,14 @@
++// Vite defines this only for the separately built UniHub entry. Keep root and Jest defaults.
++declare const LAGO_FRONT_BASE_PATH: string
++
++export const appBase = typeof LAGO_FRONT_BASE_PATH === 'string' ? LAGO_FRONT_BASE_PATH : '/'
++export const appPrefix = appBase.slice(0, -1)
++
++// React Router adds its basename to Links and navigate(). Use this only at browser URL boundaries.
++export const browserPath = (path: string): string =>
++  path.startsWith('/') && !path.startsWith('//') ? appPrefix + path : path
++
++export const routerPath = (pathname: string): string =>
++  pathname.startsWith(appBase) ? pathname.slice(appPrefix.length) : pathname
++
++export const storageKey = (key: string): string => appPrefix ? `${appPrefix}:${key}` : key
+diff --git a/src/core/router/utils/isCustomerPortalPath.ts b/src/core/router/utils/isCustomerPortalPath.ts
+index 1a724e056..a920c9928 100644
+--- a/src/core/router/utils/isCustomerPortalPath.ts
++++ b/src/core/router/utils/isCustomerPortalPath.ts
+@@ -1,6 +1,7 @@
++import { routerPath } from '~/core/router/appBase'
+ import { matchPath } from 'react-router'
+ 
+ import { CUSTOMER_PORTAL_ROUTE } from '~/core/router/paths/customerPortal'
+ 
+ export const isCustomerPortalPath = (pathname: string): boolean =>
+-  !!matchPath(`${CUSTOMER_PORTAL_ROUTE}/*`, pathname)
++  !!matchPath(`${CUSTOMER_PORTAL_ROUTE}/*`, routerPath(pathname))
+diff --git a/src/core/utils/featureFlags.ts b/src/core/utils/featureFlags.ts
+index 63326501c..2e9f49bf5 100644
+--- a/src/core/utils/featureFlags.ts
++++ b/src/core/utils/featureFlags.ts
+@@ -1,9 +1,10 @@
++import { storageKey } from '~/core/router/appBase'
+ export enum FeatureFlags {
+   SUPERSET_PERSISTENT_FILTERS = 'superset_persistent_filters',
+   REVENUE_RECOGNITION = 'revenue_recognition',
+ }
+ 
+-const FF_KEY = 'featureFlags'
++const FF_KEY = storageKey('featureFlags')
+ 
+ export const listFeatureFlags = (): FeatureFlags[] => {
+   return Object.values(FeatureFlags)
+diff --git a/src/core/utils/localStorage.ts b/src/core/utils/localStorage.ts
+index 1eaae7a83..73a2254e9 100644
+--- a/src/core/utils/localStorage.ts
++++ b/src/core/utils/localStorage.ts
+@@ -1,6 +1,8 @@
++import { storageKey } from '~/core/router/appBase'
++
+ /**
+  * Generic localStorage helpers — not Apollo-specific. Kept as a leaf module
+- * (zero imports) so reactive vars can use them at module-init time without
++ * so reactive vars can use them at module-init time without
+  * forming a `cacheUtils ↔ reactiveVars` import cycle through the Apollo
+  * module graph.
+  *
+@@ -21,7 +23,7 @@ export const getItemFromLS = (key: string) => {
+   let data: string | null
+ 
+   try {
+-    data = localStorage.getItem(key)
++    data = localStorage.getItem(storageKey(key))
+   } catch {
+     return undefined
+   }
+@@ -39,7 +41,7 @@ export const getItemFromLS = (key: string) => {
+ 
+ export const removeItemFromLS = (key: string): void => {
+   try {
+-    localStorage.removeItem(key)
++    localStorage.removeItem(storageKey(key))
+   } catch {
+     // Storage unavailable — nothing to remove, nothing to report.
+   }
+@@ -55,7 +57,7 @@ export const setItemFromLS = (key: string, value: unknown): void => {
+   try {
+     const stringify = typeof value !== 'string' ? JSON.stringify(value) : value
+ 
+-    localStorage.setItem(key, stringify)
++    localStorage.setItem(storageKey(key), stringify)
+   } catch {
+     // Storage unavailable or quota exceeded — the value stays in memory only.
+   }
+diff --git a/src/pages/Error404.tsx b/src/pages/Error404.tsx
+index e3730298d..d202b422b 100644
+--- a/src/pages/Error404.tsx
++++ b/src/pages/Error404.tsx
+@@ -1,3 +1,4 @@
++import { browserPath } from '~/core/router/appBase'
+ import { GenericPlaceholder } from '~/components/designSystem/GenericPlaceholder'
+ import { HOME_ROUTE } from '~/core/router'
+ import { useInternationalization } from '~/hooks/core/useInternationalization'
+@@ -23,7 +24,7 @@ const Error404 = () => {
+    * that changes route shapes.
+    */
+   const goHome = () => {
+-    window.location.href = HOME_ROUTE
++    window.location.href = browserPath(HOME_ROUTE)
+   }
+ 
+   return (
+diff --git a/src/pages/Invitation.tsx b/src/pages/Invitation.tsx
+index 46fac3661..246aebf68 100644
+--- a/src/pages/Invitation.tsx
++++ b/src/pages/Invitation.tsx
+@@ -1,3 +1,4 @@
++import { browserPath } from '~/core/router/appBase'
+ import { gql, useApolloClient } from '@apollo/client'
+ import Stack from '@mui/material/Stack'
+ import { useEffect, useMemo, useState } from 'react'
+@@ -584,7 +585,7 @@ const Invitation = () => {
+             fullWidth
+             variant="primary"
+             size="large"
+-            onClick={() => window.location.assign(LOGIN_ROUTE)}
++            onClick={() => window.location.assign(browserPath(LOGIN_ROUTE))}
+             className="mt-6"
+           >
+             {translate('text_620bc4d4269a55014d493f6d')}
+diff --git a/src/pages/settings/OrganizationGeneralSettings/dialogs/useEditOrganizationSlugDialog.tsx b/src/pages/settings/OrganizationGeneralSettings/dialogs/useEditOrganizationSlugDialog.tsx
+index 2608e4a7f..85a151be6 100644
+--- a/src/pages/settings/OrganizationGeneralSettings/dialogs/useEditOrganizationSlugDialog.tsx
++++ b/src/pages/settings/OrganizationGeneralSettings/dialogs/useEditOrganizationSlugDialog.tsx
+@@ -1,3 +1,4 @@
++import { appPrefix } from '~/core/router/appBase'
+ import { gql } from '@apollo/client'
+ import { revalidateLogic } from '@tanstack/react-form'
+ import { useRef } from 'react'
+@@ -145,7 +146,7 @@ export const useEditOrganizationSlugDialog = () => {
+               <form.Subscribe selector={(state) => state.values.slug}>
+                 {(slugValue) => (
+                   <span className="font-mono truncate text-sm text-grey-700">
+-                    {window.location.origin}
++                    {window.location.origin}{appPrefix}
+                     {'/'}
+                     {slugValue}
+                   </span>
+diff --git a/src/pages/settings/teamAndSecurity/members/MembersInvitationList.tsx b/src/pages/settings/teamAndSecurity/members/MembersInvitationList.tsx
+index bd5c6fd0f..25d636a58 100644
+--- a/src/pages/settings/teamAndSecurity/members/MembersInvitationList.tsx
++++ b/src/pages/settings/teamAndSecurity/members/MembersInvitationList.tsx
+@@ -1,3 +1,4 @@
++import { appPrefix } from '~/core/router/appBase'
+ import { useMemo, useState } from 'react'
+ import { generatePath, useSearchParams } from 'react-router'
+ 
+@@ -132,7 +133,7 @@ const MembersInvitationList = () => {
+             title: translate('text_63208b630aaf8df6bbfb265f'),
+             onAction: () => {
+               copyToClipboard(
+-                `${globalThis.location.origin}${generatePath(INVITATION_ROUTE, {
++                `${globalThis.location.origin}${appPrefix}${generatePath(INVITATION_ROUTE, {
+                   token: inviteToken,
+                 })}`,
+               )
+diff --git a/src/pages/settings/teamAndSecurity/members/dialogs/CopyInviteLink.tsx b/src/pages/settings/teamAndSecurity/members/dialogs/CopyInviteLink.tsx
+index a24d72420..e60414cfa 100644
+--- a/src/pages/settings/teamAndSecurity/members/dialogs/CopyInviteLink.tsx
++++ b/src/pages/settings/teamAndSecurity/members/dialogs/CopyInviteLink.tsx
+@@ -1,3 +1,4 @@
++import { appPrefix } from '~/core/router/appBase'
+ import { useMemo } from 'react'
+ import { generatePath } from 'react-router'
+ 
+@@ -20,7 +21,7 @@ const CopyInviteLink = ({ email, role, inviteToken }: CopyInviteLinkProps) => {
+   const { roles } = useRolesList()
+   const { translate } = useInternationalization()
+ 
+-  const invitationUrl = `${globalThis.location.origin}${generatePath(INVITATION_ROUTE, {
++  const invitationUrl = `${globalThis.location.origin}${appPrefix}${generatePath(INVITATION_ROUTE, {
+     token: inviteToken,
+   })}`
+ 
+diff --git a/src/pages/settings/teamAndSecurity/members/dialogs/CreateInviteDialog.tsx b/src/pages/settings/teamAndSecurity/members/dialogs/CreateInviteDialog.tsx
+index 057425169..ab6bb4d4b 100644
+--- a/src/pages/settings/teamAndSecurity/members/dialogs/CreateInviteDialog.tsx
++++ b/src/pages/settings/teamAndSecurity/members/dialogs/CreateInviteDialog.tsx
+@@ -1,3 +1,4 @@
++import { appPrefix } from '~/core/router/appBase'
+ import Stack from '@mui/material/Stack'
+ import { revalidateLogic } from '@tanstack/react-form'
+ import { useRef } from 'react'
+@@ -33,7 +34,7 @@ const initialValues: CreateInviteSingleRole = {
+ }
+ 
+ const generateInvitationUrl = (inviteToken: string) => {
+-  return `${globalThis.location.origin}${generatePath(INVITATION_ROUTE, {
++  return `${globalThis.location.origin}${appPrefix}${generatePath(INVITATION_ROUTE, {
+     token: inviteToken,
+   })}`
+ }
+diff --git a/vite.config.ts b/vite.config.ts
+index 2c2dd57ba..8fd42da41 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -30,6 +30,8 @@ const getPageTitle = (mode: string, env: Record<string, string>): string => {
+ 
+ export default defineConfig(({ mode }) => {
+   const env = loadEnv(mode, process.cwd(), '')
++  const appBase = env.LAGO_FRONT_BASE_PATH || '/'
++  if (!['/', '/paylab/'].includes(appBase)) throw new Error('Unsupported LAGO_FRONT_BASE_PATH')
+   const port = env.PORT ? parseInt(env.PORT) : 8080
+   const isProduction = mode === 'production'
+   const sentryAuthToken = env.SENTRY_AUTH_TOKEN
+@@ -54,6 +56,7 @@ export default defineConfig(({ mode }) => {
+     createHtmlPlugin({
+       inject: {
+         data: {
++          appBase,
+           title: getPageTitle(mode, env),
+           favicon: icons[env.APP_ENV] || icons.production,
+         },
+@@ -113,8 +116,10 @@ export default defineConfig(({ mode }) => {
+   }
+ 
+   return {
++    base: appBase,
+     plugins,
+     define: {
++      LAGO_FRONT_BASE_PATH: JSON.stringify(appBase),
+       APP_ENV: JSON.stringify(env.APP_ENV),
+       API_URL: JSON.stringify(env.API_URL),
+       DOMAIN: JSON.stringify(env.LAGO_DOMAIN),
