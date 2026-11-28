@@ -415,11 +415,12 @@ export function StorePage({ session, publicApps, onNavigate }) {
       apiRequest(`/api/storefront/products?appId=${encodeURIComponent(appId)}`),
       apiRequest('/api/billing/subscriptions'),
     ]);
-    setStorefront(sf.data);
+    setStorefront(sf.data.storefronts?.[0] ?? null);
     setSubs(subRes.data.subscriptions ?? []);
   }
 
   useEffect(() => {
+    setLowBalanceInfo(null);
     loadStore().catch((err) => setStatusMsg({ tone: 'error', text: err.message }));
   }, [appId, session.activeAccountId]);
 
@@ -432,7 +433,7 @@ export function StorePage({ session, publicApps, onNavigate }) {
       await apiRequest('/api/billing/checkout', {
         method: 'POST',
         csrf: session.csrf,
-        body: { appId, versionId: storefront.version.id, tierId: card.tierId, quantity: qty, orderType: card.productType === 'credit_pack' ? 'credit_pack' : 'subscribe' },
+        body: { appId, versionId: storefront.versionId, tierId: card.tierId, quantity: qty, orderType: card.productType === 'credit_pack' ? 'credit_pack' : 'subscribe' },
       });
       setStatusMsg({ tone: 'info', text: `已提交购买「${card.display.name}」，积分权益正在发放。` });
       await loadStore();
@@ -450,7 +451,7 @@ export function StorePage({ session, publicApps, onNavigate }) {
       const res = await apiRequest('/api/billing/upgrades/quote', {
         method: 'POST',
         csrf: session.csrf,
-        body: { appId, targetTierId: card.tierId, targetVersionId: storefront.version.id },
+        body: { appId, targetTierId: card.tierId, targetVersionId: storefront.versionId },
       });
       setUpgradeQuote({ card, quote: res.data });
     } catch (err) {
@@ -464,7 +465,7 @@ export function StorePage({ session, publicApps, onNavigate }) {
       const res = await apiRequest('/api/billing/upgrades', {
         method: 'POST',
         csrf: session.csrf,
-        body: { appId, targetTierId: upgradeQuote.card.tierId, targetVersionId: storefront.version.id },
+        body: { appId, targetTierId: upgradeQuote.card.tierId, targetVersionId: storefront.versionId },
       });
       setStatusMsg({
         tone: 'info',
@@ -730,6 +731,7 @@ export function KeysPage({ session, publicApps }) {
   useEffect(() => {
     setCreatedPlain('');
     setCopied(false);
+    setStatusMsg(null);
     loadKeys().catch((err) => setStatusMsg({ tone: 'error', text: err.message }));
   }, [appId, session.activeAccountId]);
 
@@ -878,7 +880,8 @@ export function OrdersPage({ session, publicApps = [] }) {
   async function openScheduleForm(sub) {
     try {
       const res = await apiRequest(`/api/storefront/products?appId=${encodeURIComponent(sub.appId)}`);
-      const memberships = (res.data.cards ?? []).filter((c) => c.productType === 'membership');
+      const cards = res.data.storefronts?.[0]?.cards ?? res.data.cards ?? [];
+      const memberships = cards.filter((c) => c.productType === 'membership');
       setScheduleSub(sub);
       setScheduleCards(memberships);
       setTargetTierId(memberships[0]?.tierId ?? sub.tierId);
