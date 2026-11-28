@@ -2,14 +2,45 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { firefox } = require('playwright');
 
+// Pin the original UI's public hostname to the local HTTPS fixture, preserving TLS name checks.
+async function startPublicFixtureProxy() {
+  const server = http.createServer((_req, res) => res.writeHead(403).end());
+  server.on('connect', (req, client, head) => {
+    if (req.url !== 'auth.quukk.com:443') {
+      client.destroy();
+      return;
+    }
+    const upstream = net.createConnection(49444, '127.0.0.1', () => {
+      client.write('HTTP/1.1 200 Connection established\r\n\r\n');
+      upstream.write(head);
+      client.pipe(upstream).pipe(client);
+    });
+    client.on('error', () => upstream.destroy());
+    upstream.on('error', () => client.destroy());
+    client.on('close', () => upstream.destroy());
+    upstream.on('close', () => client.destroy());
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  server.unref();
+  return server;
+}
+
 async function run() {
   const legacy = process.argv.includes('--legacy');
   const invalidPkce = process.argv.includes('--invalid-pkce');
+  const invalidSignature = process.argv.includes('--invalid-signature');
   const invalidIssuer = process.argv.includes('--invalid-issuer');
+  const crossIssuer = process.argv.includes('--cross-issuer');
+  const checkProfile = process.argv.includes('--profile');
   const origin = legacy ? 'http://localhost:13002' : 'https://localhost:49443';
   const prefix = legacy ? '' : '/auth';
   const issuer = origin + prefix + '/oidc';
@@ -20,12 +51,13 @@ async function run() {
   for (const name of ['cert9.db', 'key4.db']) {
     fs.copyFileSync(path.join(profileSource, name), path.join(profile, name));
   }
+  const publicProxy = legacy && await startPublicFixtureProxy();
   const context = await firefox.launchPersistentContext(profile, {
     headless: true,
     locale: 'en-US',
     // This loopback-only CONNECT proxy maps auth.quukk.com:443 to the fixture TLS
     // listener. The real public service must never see a fixture token.
-    ...(legacy && { proxy: { server: 'http://127.0.0.1:49445', bypass: 'localhost,127.0.0.1' } }),
+    ...(publicProxy && { proxy: { server: 'http://127.0.0.1:' + publicProxy.address().port, bypass: 'localhost,127.0.0.1' } }),
   });
   try {
     if (!legacy) {
@@ -34,7 +66,9 @@ async function run() {
     const page = await context.newPage();
     const escaped = [];
     let auth;
-    let exchanged = false;
+    let listAuthorization;
+    let checkedRefresh = false;
+    let modifiedSignature = false;
     let invalidGrant = false;
     let discoverySeen = false;
     let callbackState;
@@ -55,6 +89,9 @@ async function run() {
         escaped.push(url.origin + url.pathname);
         return route.abort();
       }
+      if ((crossIssuer || invalidSignature) && url.origin + url.pathname === userApi && request.method() === 'GET') {
+        listAuthorization = await request.headerValue('authorization');
+      }
       if (invalidIssuer && url.href === issuer + '/.well-known/openid-configuration') {
         const real = await route.fetch();
         const metadata = await real.json();
@@ -65,11 +102,39 @@ async function run() {
       if (url.href.split('?')[0] === callback) callbackState = url.searchParams.get('state');
       if (url.href === issuer + '/token' && request.method() === 'POST') {
         const body = new URLSearchParams(request.postData());
-        if (body.get('grant_type') === 'authorization_code') {
+        if (body.get('grant_type') === 'authorization_code' && body.get('client_id') === 'admin-console') {
           challengeMatches = crypto.createHash('sha256').update(body.get('code_verifier')).digest('base64url') === auth?.searchParams.get('code_challenge');
           if (invalidPkce) {
             body.set('code_verifier', crypto.randomBytes(48).toString('base64url'));
             return route.continue({ postData: body.toString() });
+          }
+          if (crossIssuer || invalidSignature) {
+            const issued = await route.fetch();
+            assert(issued.ok(), 'fixture token exchange failed');
+            const tokens = await issued.json();
+            if (invalidSignature) {
+              const parts = tokens.id_token.split('.');
+              const signature = Buffer.from(parts[2], 'base64url');
+              signature[0] ^= 1;
+              parts[2] = signature.toString('base64url');
+              modifiedSignature = true;
+              return route.fulfill({ response: issued, json: { ...tokens, id_token: parts.join('.') } });
+            }
+            // Test a fresh fixture refresh token before the SPA can use or rotate it.
+            const otherIssuer = legacy ? 'https://localhost:49443/auth/oidc' : 'http://localhost:13002/oidc';
+            assert(typeof tokens.refresh_token === 'string' && tokens.refresh_token.length > 0);
+            const refreshed = await fetch(otherIssuer + '/token', {
+              method: 'POST',
+              headers: legacy ? { Cookie: 'unihub_session=stage-operator' } : {},
+              redirect: 'error',
+              body: new URLSearchParams({
+                grant_type: 'refresh_token', client_id: 'admin-console', refresh_token: tokens.refresh_token,
+              }),
+            });
+            assert.equal(refreshed.status, 400);
+            assert.equal((await refreshed.json()).error, 'invalid_grant');
+            checkedRefresh = true;
+            return route.fulfill({ response: issued });
           }
         }
       }
@@ -79,7 +144,7 @@ async function run() {
     tokenResponse.catch(() => {});
     await page.goto(origin + prefix + '/console/users');
     if (invalidIssuer) {
-      await page.getByText(/unexpected portal issuer/i).first().waitFor({timeout:10000}).catch(() => {});
+      await page.getByText(/unexpected portal issuer/i).first().waitFor({timeout:10000});
       assert(discoverySeen && !auth && !callbackState);
       console.log('PASS mismatched issuer rejected before authorization');
       return;
@@ -102,8 +167,14 @@ async function run() {
       console.log('PASS native token endpoint rejected mismatched verifier');
       return;
     }
-    exchanged = response.ok();
-    assert(exchanged);
+    assert(response.ok());
+    if (invalidSignature) {
+      await page.getByText(/signature verification failed/i).first().waitFor({timeout:10000});
+      assert(modifiedSignature);
+      assert(!listAuthorization);
+      console.log('PASS SDK rejected invalid ID-token signature at callback');
+      return;
+    }
     const row = page.getByText('listfixture', { exact: true });
     await row.waitFor({timeout:30000});
     assert.equal(new URL(page.url()).pathname, prefix + '/console/users');
@@ -118,14 +189,53 @@ async function run() {
       await page.getByRole('button', { name: /^save(?: changes)?$/i }).click();
       assert((await updated).ok());
     }
-    await save(newName);
-    await page.reload();
-    await page.waitForFunction(v => document.querySelector('input[name=name]')?.value === v, newName);
-    await save(oldName);
+    try {
+      await save(newName);
+      await page.reload();
+      await page.waitForFunction(v => document.querySelector('input[name=name]')?.value === v, newName);
+    } finally {
+      await save(oldName);
+    }
+    if (crossIssuer) {
+      // Only fixed loopback test destinations receive disposable fixture credentials.
+      assert(checkedRefresh);
+      const otherApi = legacy ? 'https://localhost:49443/auth/management/api/users' : 'http://localhost:13001/api/users';
+      const headers = legacy ? { Cookie: 'unihub_session=stage-operator' } : {};
+      assert(listAuthorization?.startsWith('Bearer '));
+      const rejected = await fetch(otherApi, {
+        headers: { ...headers, Authorization: listAuthorization },
+        redirect: 'error',
+      });
+      assert.equal(rejected.status, 401);
+      console.log('PASS other admin issuer rejects refresh token and other Management API rejects user JWT');
+    }
+    if (checkProfile) {
+      const opened = context.waitForEvent('page');
+      opened.catch(() => {});
+      const profileResponse = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Profile API timeout')), 30000);
+        const observe = r => {
+          if (r.url() === origin + prefix + '/api/my-account' && r.ok()) {
+            clearTimeout(timer);
+            context.off('response', observe);
+            resolve();
+          }
+        };
+        context.on('response', observe);
+      });
+      profileResponse.catch(() => {});
+      await page.locator('div[class*="__topbar"] div[role="button"]').last().click();
+      await page.getByRole('menuitem', { name: 'Profile', exact: true }).click();
+      const profilePage = await opened;
+      await profileResponse;
+      await profilePage.waitForURL(u => u.pathname === prefix + '/account/profile');
+      console.log('PASS profile menu opens Account Center, completes its native login and reads account data');
+    }
     assert.deepEqual(escaped, []);
     console.log('PASS ' + (legacy ? 'original' : 'prefixed') + ' Console: native login, state, S256, users list, edit, reload, restore');
   } finally {
     await context.close();
+    if (publicProxy) publicProxy.close();
     fs.rmSync(profile, { recursive: true, force: true });
   }
 }

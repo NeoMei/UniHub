@@ -41,6 +41,36 @@ index 1ea9e1f5a..e94465a62 100644
          appId: accountCenterApplicationId,
          includeReservedScopes: false,
          scopes: [
+diff --git a/packages/account/src/Callback.tsx b/packages/account/src/Callback.tsx
+index 31209263b..9f3cdf929 100644
+--- a/packages/account/src/Callback.tsx
++++ b/packages/account/src/Callback.tsx
+@@ -1,13 +1,15 @@
+ import { useHandleSignInCallback } from '@logto/react';
+ import { useEffect } from 'react';
+ 
++import { accountCenterBasePath } from './utils/account-center-internal-route';
++
+ import GlobalLoading from './components/GlobalLoading';
+ import { completePendingStepUp, discardPendingStepUp } from './utils/step-up';
+ 
+ const Callback = () => {
+   const { error } = useHandleSignInCallback(() => {
+     completePendingStepUp();
+-    window.location.replace('/account');
++    window.location.replace(accountCenterBasePath);
+   });
+ 
+   useEffect(() => {
+@@ -25,7 +27,7 @@ const Callback = () => {
+         <button
+           type="button"
+           onClick={() => {
+-            window.location.replace('/account');
++            window.location.replace(accountCenterBasePath);
+           }}
+         >
+           Back to sign in
 diff --git a/packages/account/src/apis/account-center.ts b/packages/account/src/apis/account-center.ts
 index bcab40aa3..cbf71670b 100644
 --- a/packages/account/src/apis/account-center.ts
@@ -676,6 +706,19 @@ index d9f21ac74..576272ba3 100644
          unstable_enableCache
          config={{
            endpoint: adminTenantEndpoint.href,
+diff --git a/packages/console/src/components/OssTenantMfaBanner/index.tsx b/packages/console/src/components/OssTenantMfaBanner/index.tsx
+index a5415ac1e..f498ad29d 100644
+--- a/packages/console/src/components/OssTenantMfaBanner/index.tsx
++++ b/packages/console/src/components/OssTenantMfaBanner/index.tsx
+@@ -6,7 +6,7 @@ import useOssTenantMfa from '@/hooks/use-oss-tenant-mfa';
+ import styles from './index.module.scss';
+ 
+ /** The Account Center page where the signed-in user sets up MFA. */
+-const accountSecurityUrl = new URL('/account/security', adminTenantEndpoint).href;
++const accountSecurityUrl = new URL('account/security', adminTenantEndpoint).href;
+ 
+ /**
+  * Self-hosted only: tells a member who has no MFA while the tenant requires it to set it up now.
 diff --git a/packages/console/src/components/RedirectToAccountCenter/index.tsx b/packages/console/src/components/RedirectToAccountCenter/index.tsx
 index 8ec12fd2a..a39d7854b 100644
 --- a/packages/console/src/components/RedirectToAccountCenter/index.tsx
@@ -689,6 +732,19 @@ index 8ec12fd2a..a39d7854b 100644
      // eslint-disable-next-line @silverhand/fp/no-mutation
      window.location.href = accountUrl.toString();
    }, []);
+diff --git a/packages/console/src/components/Topbar/UserInfo/index.tsx b/packages/console/src/components/Topbar/UserInfo/index.tsx
+index ea53cd803..e00f662cf 100644
+--- a/packages/console/src/components/Topbar/UserInfo/index.tsx
++++ b/packages/console/src/components/Topbar/UserInfo/index.tsx
+@@ -119,7 +119,7 @@ function UserInfo() {
+           className={classNames(styles.dropdownItem, isLoading && styles.loading)}
+           icon={<Profile className={styles.icon} />}
+           onClick={() => {
+-            const accountUrl = new URL('/account/profile', adminTenantEndpoint.href);
++            const accountUrl = new URL('account/profile', adminTenantEndpoint.href);
+             window.open(accountUrl.toString(), '_blank', 'noopener,noreferrer');
+           }}
+         >
 diff --git a/packages/console/src/consts/env.ts b/packages/console/src/consts/env.ts
 index 7e602afd6..f6c6d9338 100644
 --- a/packages/console/src/consts/env.ts
@@ -724,6 +780,28 @@ index f273328c2..c059babbe 100644
    // Allow endpoint override for dev or testing
    if (adminEndpoint) {
      return new URL(adminEndpoint);
+diff --git a/packages/console/src/containers/TenantAccess/index.tsx b/packages/console/src/containers/TenantAccess/index.tsx
+index d821106ec..2da3cb20e 100644
+--- a/packages/console/src/containers/TenantAccess/index.tsx
++++ b/packages/console/src/containers/TenantAccess/index.tsx
+@@ -5,7 +5,7 @@ import { useSWRConfig } from 'swr';
+ 
+ // Used in the docs
+ 
+-import { isCloud } from '@/consts/env';
++import { adminBasePath, isCloud } from '@/consts/env';
+ import { reservedTenantIdWildcard, TenantsContext } from '@/contexts/TenantsProvider';
+ import useUserDefaultTenantId from '@/hooks/use-user-default-tenant-id';
+ 
+@@ -87,7 +87,7 @@ export default function TenantAccess() {
+       }
+ 
+       // eslint-disable-next-line @silverhand/fp/no-mutation
+-      window.location.href = '/';
++      window.location.href = adminBasePath + '/';
+     }
+   }, [currentTenant, currentTenantId, isAuthenticated, pathname, defaultTenantId]);
+ 
 diff --git a/packages/console/src/hooks/use-api.ts b/packages/console/src/hooks/use-api.ts
 index c48438e22..934c36a41 100644
 --- a/packages/console/src/hooks/use-api.ts
@@ -748,6 +826,24 @@ index c48438e22..934c36a41 100644
              resourceIndicator: getManagementApiResourceIndicator(currentTenantId),
            },
      [currentTenantId, tenantEndpoint]
+diff --git a/packages/console/src/utils/oss-upsell.ts b/packages/console/src/utils/oss-upsell.ts
+index db3253dce..4d4d7d5df 100644
+--- a/packages/console/src/utils/oss-upsell.ts
++++ b/packages/console/src/utils/oss-upsell.ts
+@@ -1,6 +1,7 @@
+ import { ossConsolePath } from '@logto/schemas';
+ import { joinPath } from '@silverhand/essentials';
+ 
++import { adminBasePath } from '@/consts/env';
+ import { logtoCloudConsoleLink } from '@/consts/external-links';
+ import { TenantSettingsTabs } from '@/consts/page-tabs';
+ 
+@@ -70,4 +71,4 @@ export const openCloudUpsell = ({ entry, target = '_blank' }: OpenOssUpsellOptio
+ 
+ /** Opens the License page in the same tab by default. */
+ export const openSelfHostedPlansUpsell = ({ entry, target = '_self' }: OpenOssUpsellOptions) =>
+-  openUpsellUrl(buildSelfHostedPlansUrl(entry), target);
++  openUpsellUrl(adminBasePath + buildSelfHostedPlansUrl(entry), target);
 diff --git a/packages/console/src/utils/storage.ts b/packages/console/src/utils/storage.ts
 index 65109981b..608eb4aa1 100644
 --- a/packages/console/src/utils/storage.ts
@@ -921,6 +1017,23 @@ index a65115816..8e4237449 100644
        logListening('admin');
      });
      adminServer.setTimeout(serverTimeout);
+diff --git a/packages/core/src/middleware/koa-auth/index.ts b/packages/core/src/middleware/koa-auth/index.ts
+index 98e1f42ff..6bee1fcb5 100644
+--- a/packages/core/src/middleware/koa-auth/index.ts
++++ b/packages/core/src/middleware/koa-auth/index.ts
+@@ -48,6 +48,12 @@ export const verifyBearerTokenFromRequest = async (
+ 
+     const adminSet = await getAdminTenantTokenValidationSet();
+ 
++    // The portal listener's default-tenant Management API serves the native admin SPA.
++    // Bind that audience to the configured admin issuer and its own signing keys.
++    if (process.env.ADMIN_CONSOLE_BASE_PATH && audience === defaultManagementApi.resource.indicator) {
++      return [adminSet.keys, adminSet.issuer];
++    }
++
+     return [
+       [...publicJwks, ...adminSet.keys],
+       [issuer, ...adminSet.issuer],
 diff --git a/packages/core/src/middleware/koa-console-redirect-proxy.ts b/packages/core/src/middleware/koa-console-redirect-proxy.ts
 index 9e3779136..6fbeca6d2 100644
 --- a/packages/core/src/middleware/koa-console-redirect-proxy.ts
@@ -1128,7 +1241,7 @@ index c7330a722..901f533cb 100644
        if (await consumeInstanceById(modelName, id)) {
          return;
 diff --git a/packages/core/src/oidc/init.ts b/packages/core/src/oidc/init.ts
-index 0e98c356d..ceddb15db 100644
+index 0e98c356d..9c3d44611 100644
 --- a/packages/core/src/oidc/init.ts
 +++ b/packages/core/src/oidc/init.ts
 @@ -1,6 +1,7 @@
@@ -1208,6 +1321,23 @@ index 0e98c356d..ceddb15db 100644
            }
  
            default: {
+@@ -603,12 +612,14 @@ export default function initOidc(
+     },
+     pkce: {
+       required: (ctx, client) => {
+-        return client.clientAuthMethod !== 'client_secret_basic';
++        return Boolean(prefix) || client.clientAuthMethod !== 'client_secret_basic';
+       },
+     },
+   });
+ 
+-  installWildcardRedirectUriMatching(oidc);
++  if (!prefix) {
++    installWildcardRedirectUriMatching(oidc);
++  }
+   addOidcEventListeners(tenantId, oidc, queries, libraries.hooks.triggerEvent);
+   registerGrants(oidc, envSet, queries, libraries);
+ 
 diff --git a/packages/core/src/routes-me/tenant-invitations.ts b/packages/core/src/routes-me/tenant-invitations.ts
 index edb2ec509..2e16ae4cb 100644
 --- a/packages/core/src/routes-me/tenant-invitations.ts
@@ -1665,6 +1795,27 @@ index c29543886..e655dc2ec 100644
          },
        };
  
+diff --git a/packages/experience/src/pages/SwitchAccount/index.tsx b/packages/experience/src/pages/SwitchAccount/index.tsx
+index d75d70027..dea511942 100644
+--- a/packages/experience/src/pages/SwitchAccount/index.tsx
++++ b/packages/experience/src/pages/SwitchAccount/index.tsx
+@@ -16,6 +16,7 @@ import Button from '@/shared/components/Button';
+ import DynamicT from '@/shared/components/DynamicT';
+ import LoadingLayer from '@/shared/components/LoadingLayer';
+ import PageMeta from '@/shared/components/PageMeta';
++import { experienceBasePath } from '@/shared/utils/base-path';
+ import { getBrandingLogoUrl } from '@/shared/utils/logo';
+ 
+ import styles from './index.module.scss';
+@@ -97,7 +98,7 @@ const SwitchAccount = () => {
+             text="action.back_to_current_account"
+             onClick={() => {
+               if (redirectUriOrigin) {
+-                window.location.assign(redirectUriOrigin);
++                window.location.assign(experienceBasePath || redirectUriOrigin);
+               }
+             }}
+           />
 diff --git a/packages/experience/src/shared/portal-oidc-client.ts b/packages/experience/src/shared/portal-oidc-client.ts
 new file mode 100644
 index 000000000..7c9b9af21

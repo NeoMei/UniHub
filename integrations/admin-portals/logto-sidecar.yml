@@ -24,8 +24,8 @@ services:
         - node
         - -e
         - >-
-          fetch('http://127.0.0.1:13003/auth/oidc/.well-known/openid-configuration',
-          {headers:{Host:'localhost:13003','X-Forwarded-Host':'unihub.quukk.com','X-Forwarded-Proto':'https'}})
+          fetch('http://localhost:13003/auth/oidc/.well-known/openid-configuration',
+          {headers:{'X-Forwarded-Host':'unihub.quukk.com','X-Forwarded-Proto':'https'}})
           .then(r=>r.json()).then(d=>process.exit(d.issuer==='https://unihub.quukk.com/auth/oidc'?0:1))
           .catch(()=>process.exit(1))
       interval: 15s
