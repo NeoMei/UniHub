@@ -431,6 +431,7 @@ export function AdminOperationsPage({ session }) {
       <nav aria-label="服务后台" className="flex flex-wrap gap-3">
         {[
           ['/llmrouter', '万流 LLMRouter'],
+          ['/auth', 'Logto 管理控制台'],
           ['/paylab', 'Lago 账单后台'],
         ].map(([href, label]) => (
           <a key={href} href={href} className="rounded-xl border border-[#DEE8EC] bg-white px-4 py-2 text-sm font-medium text-[#087F8C] hover:border-[#087F8C]">{label}</a>

@@ -1,0 +1,17 @@
+proxy_intercept_errors off;
+proxy_cache off;
+proxy_redirect off;
+proxy_pass_request_headers off;
+proxy_set_header Host localhost:13003;
+proxy_set_header X-Forwarded-Host unihub.quukk.com;
+proxy_set_header X-Forwarded-Proto https;
+proxy_set_header Accept $http_accept;
+proxy_set_header Accept-Language $http_accept_language;
+proxy_set_header User-Agent $http_user_agent;
+proxy_set_header Content-Type $http_content_type;
+proxy_set_header Origin $http_origin;
+proxy_set_header Logto-App-Id $http_logto_app_id;
+proxy_set_header Cookie $logto_native_cookie;
+proxy_pass http://127.0.0.1:13003;
+proxy_set_header Authorization $logto_bearer;
+proxy_set_header Logto-Verification-Id $http_logto_verification_id;
