@@ -56,6 +56,44 @@ function writeResult(reply, result, success = 200) {
 }
 
 export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator, { region, currency, lagoConfig = {} }) {
+  const lagoEnabled = Boolean(lagoConfig?.enabled && lagoConfig?.baseUrl);
+
+  async function sendInsufficientFundsRecovery(reply, request, error) {
+    const account = await activeAccount(pool, request.auth);
+    const pending = error.details.pendingCheckout;
+    const canRecharge = account.kind !== 'enterprise' || account.can_recharge;
+    if (!canRecharge) {
+      return reply.code(402).send({
+        error: error.code,
+        amountMinor: error.details.amountMinor,
+        availableMinor: error.details.availableMinor,
+        pendingCheckout: pending,
+        canRecharge: false,
+      });
+    }
+    const body = request.body ?? {};
+    const { createPaymentOrder } = await import('./wallet.js');
+    const payment = await createPaymentOrder(pool, {
+      accountId: account.id,
+      initiatorUserId: request.auth.userId,
+      region,
+      currency,
+      provider: body.provider ?? (region === 'us' ? 'stripe' : 'wechat'),
+      merchant: body.merchantId ?? `${region}-default-merchant`,
+      amountMinor: body.rechargeAmountMinor ?? error.details.amountMinor,
+      pendingCheckout: pending,
+      returnUrl: body.returnUrl ?? null,
+    });
+    return reply.code(402).send({
+      error: error.code,
+      amountMinor: error.details.amountMinor,
+      availableMinor: error.details.availableMinor,
+      pendingCheckout: pending,
+      canRecharge: true,
+      paymentOrder: serializePayment(payment),
+    });
+  }
+
   app.post('/api/billing/checkout', { ...write, bodyLimit: 65_536 }, async (request, reply) => {
     try {
       const account = await activeAccount(pool, request.auth);
@@ -65,33 +103,13 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
         region,
         currency,
         input: request.body,
-        lagoEnabled: Boolean(lagoConfig?.enabled && lagoConfig?.baseUrl),
+        lagoEnabled,
       });
       return writeResult(reply, result, 201);
     } catch (error) {
       if (error instanceof BillingError && error.code === 'insufficient_funds') {
         try {
-          const account = await activeAccount(pool, request.auth);
-          const pending = error.details.pendingCheckout;
-          const body = request.body ?? {};
-          const payment = await import('./wallet.js').then(({ createPaymentOrder }) => createPaymentOrder(pool, {
-            accountId: account.id,
-            initiatorUserId: request.auth.userId,
-            region,
-            currency,
-            provider: body.provider ?? (region === 'us' ? 'stripe' : 'wechat'),
-            merchant: body.merchantId ?? `${region}-default-merchant`,
-            amountMinor: body.rechargeAmountMinor ?? error.details.amountMinor,
-            pendingCheckout: pending,
-            returnUrl: body.returnUrl ?? null,
-          }));
-          return reply.code(402).send({
-            error: error.code,
-            amountMinor: error.details.amountMinor,
-            availableMinor: error.details.availableMinor,
-            pendingCheckout: pending,
-            paymentOrder: serializePayment(payment),
-          });
+          return await sendInsufficientFundsRecovery(reply, request, error);
         } catch (recoveryError) {
           return sendBillingError(reply, recoveryError);
         }
@@ -169,7 +187,12 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
   app.post('/api/billing/credits/holds/:holdId/settle', write, async (request, reply) => {
     try {
       if (!isUuid(request.params.holdId)) throw new BillingError('invalid_credit_hold', 400);
-      const result = await settleCredits(pool, { holdId: request.params.holdId, settledUnits: request.body?.settledUnits });
+      const accountId = isPlatformOperator(request.auth) ? null : (await activeAccount(pool, request.auth)).id;
+      const result = await settleCredits(pool, {
+        holdId: request.params.holdId,
+        settledUnits: request.body?.settledUnits,
+        accountId,
+      });
       return writeResult(reply, result);
     } catch (error) {
       return sendBillingError(reply, error);
@@ -178,7 +201,8 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
   app.post('/api/billing/credits/holds/:holdId/release', write, async (request, reply) => {
     try {
       if (!isUuid(request.params.holdId)) throw new BillingError('invalid_credit_hold', 400);
-      return writeResult(reply, await releaseCredits(pool, request.params.holdId));
+      const accountId = isPlatformOperator(request.auth) ? null : (await activeAccount(pool, request.auth)).id;
+      return writeResult(reply, await releaseCredits(pool, request.params.holdId, { accountId }));
     } catch (error) {
       return sendBillingError(reply, error);
     }
@@ -338,31 +362,12 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
         region,
         currency,
         autoRenew: body.autoRenew === true,
+        lagoEnabled,
       }));
     } catch (error) {
       if (error instanceof BillingError && error.code === 'insufficient_funds') {
         try {
-          const account = await activeAccount(pool, request.auth);
-          const body = request.body ?? {};
-          const { createPaymentOrder } = await import('./wallet.js');
-          const payment = await createPaymentOrder(pool, {
-            accountId: account.id,
-            initiatorUserId: request.auth.userId,
-            region,
-            currency,
-            provider: body.provider ?? (region === 'us' ? 'stripe' : 'wechat'),
-            merchant: body.merchantId ?? `${region}-default-merchant`,
-            amountMinor: body.rechargeAmountMinor ?? error.details.amountMinor,
-            pendingCheckout: error.details.pendingCheckout,
-            returnUrl: body.returnUrl ?? null,
-          });
-          return reply.code(402).send({
-            error: error.code,
-            amountMinor: error.details.amountMinor,
-            availableMinor: error.details.availableMinor,
-            pendingCheckout: error.details.pendingCheckout,
-            paymentOrder: serializePayment(payment),
-          });
+          return await sendInsufficientFundsRecovery(reply, request, error);
         } catch (innerError) {
           return sendBillingError(reply, innerError);
         }
@@ -394,6 +399,7 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
         deltaSeats: request.body?.deltaSeats,
         region,
         currency,
+        lagoEnabled,
       }));
     } catch (error) {
       return sendBillingError(reply, error);
@@ -448,7 +454,7 @@ export function registerBillingRoutes(app, pool, auth, write, isPlatformOperator
     if (!isPlatformOperator(request.auth)) return reply.code(403).send({ error: 'operator_required' });
     try {
       const now = request.body?.now ? new Date(request.body.now) : new Date();
-      return processRenewalCycle(pool, { now, region, currency });
+      return processRenewalCycle(pool, { now, region, currency, lagoEnabled });
     } catch (error) {
       return sendBillingError(reply, error);
     }

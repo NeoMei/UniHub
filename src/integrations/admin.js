@@ -66,6 +66,19 @@ export function registerAdminIntegrationRoutes(app, pool, auth, write, isPlatfor
     return { differences: rows };
   });
 
+  app.get('/api/admin/lago/failed', auth, async (request, reply) => {
+    if (!isPlatformOperator(request.auth)) return reply.code(403).send({ error: 'operator_required' });
+    const { rows } = await pool.query(`
+      SELECT o.id, o.order_no AS "orderNo", o.account_id AS "accountId", o.card_tier_id AS "cardTierId",
+        o.paid_minor::text AS "paidMinor", o.currency, o.created_at AS "createdAt",
+        r.last_error AS "lastError", r.updated_at AS "lastAttemptAt"
+      FROM commerce_orders o
+      LEFT JOIN lago_sync_records r ON r.order_id = o.id
+      WHERE o.lago_sync_status = 'failed'
+      ORDER BY o.created_at DESC LIMIT 100`);
+    return { orders: rows };
+  });
+
   app.post('/api/admin/lago/retry/:orderId', write, async (request, reply) => {
     if (!isPlatformOperator(request.auth)) return reply.code(403).send({ error: 'operator_required' });
     const { orderId } = request.params;

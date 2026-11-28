@@ -108,6 +108,21 @@ function unitsForCredits(value, quantity) {
   return BigInt(value) * BILLING_UNITS_PER_CREDIT * BigInt(quantity);
 }
 
+async function enqueueLagoInvoiceSync(connection, orderId, lagoEnabled) {
+  if (!lagoEnabled) return;
+  await connection.query(`
+    INSERT INTO billing_outbox (id, dedupe_key, topic, payload_json)
+    VALUES ($1, $2, 'lago_invoice_sync', $3::jsonb)`, [
+    randomUUID(), `lago_sync:${orderId}`, JSON.stringify({ orderId }),
+  ]);
+}
+
+async function clearPendingCheckout(connection, accountId) {
+  await connection.query(`
+    UPDATE payment_orders SET pending_checkout_json = NULL
+    WHERE account_id = $1 AND pending_checkout_json IS NOT NULL`, [accountId]);
+}
+
 async function insertCreditBatch(connection, {
   accountId, appId, sourceType, sourceOrderId, subscriptionId, grantCycleIndex,
   units, expiresAt, suffix,
@@ -318,18 +333,13 @@ export async function createCheckout(pool, {
       randomUUID(), accountId, region, currency, (-total).toString(), nextAvailable.toString(),
       wallet.arrears_minor, id, `purchase:${id}`,
     ]);
+    await clearPendingCheckout(connection, accountId);
     await connection.query(`
       INSERT INTO billing_outbox (id, dedupe_key, topic, payload_json)
       VALUES ($1, $2, 'grant_entitlement', $3::jsonb)`, [
       randomUUID(), `grant:${id}:cycle:0`, JSON.stringify({ orderId: id }),
     ]);
-    if (lagoEnabled) {
-      await connection.query(`
-        INSERT INTO billing_outbox (id, dedupe_key, topic, payload_json)
-        VALUES ($1, $2, 'lago_invoice_sync', $3::jsonb)`, [
-        randomUUID(), `lago_sync:${id}`, JSON.stringify({ orderId: id }),
-      ]);
-    }
+    await enqueueLagoInvoiceSync(connection, id, lagoEnabled);
     return { order: mapOrder(created), wallet: { availableMinor: nextAvailable.toString(), arrearsMinor: wallet.arrears_minor } };
   });
 }
@@ -407,4 +417,4 @@ export async function processPendingOutbox(pool, { limit = 20, lagoConfig = null
   return { processed, failed };
 }
 
-export { insertCreditBatch, mapOrder, mapSubscription, unitsForCredits };
+export { clearPendingCheckout, enqueueLagoInvoiceSync, insertCreditBatch, mapOrder, mapSubscription, unitsForCredits };

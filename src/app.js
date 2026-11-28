@@ -98,7 +98,12 @@ export async function buildApp({
   const auth = { preHandler: requireSession };
   const write = { preHandler: [requireSession, verifyCsrf] };
   const isPlatformOperator = (session) => session.issuer === issuer.href && operatorSubjects.has(session.subject);
-  registerAccountRoutes(app, pool, auth, write, { isPlatformOperator, region, currency });
+  registerAccountRoutes(app, pool, auth, write, {
+    isPlatformOperator,
+    region,
+    currency,
+    allowSandboxSettle: paymentConfig?.allowSandboxSettle !== false,
+  });
   registerAppRoutes(app, pool, auth, write, isPlatformOperator);
   registerCommerceRoutes(app, pool, auth, write, isPlatformOperator, { region, currency });
   registerPaymentRoutes(app, pool, auth, write, { region, currency, paymentConfig });

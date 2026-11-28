@@ -227,6 +227,16 @@ export function registerPaymentRoutes(app, pool, auth, write, { region, currency
   app.post('/api/wallet/payment-orders/:paymentOrderId/sandbox-settle', { ...write, bodyLimit: 65_536 }, settleSandbox);
   app.post('/api/billing/payment-orders/:paymentOrderId/sandbox-settle', { ...write, bodyLimit: 65_536 }, settleSandbox);
 
+  app.delete('/api/wallet/payment-orders/:paymentOrderId/pending-checkout', write, async (request, reply) => {
+    if (!isUuid(request.params.paymentOrderId)) return reply.code(400).send({ error: 'invalid_payment_order' });
+    const account = await activeAccount(pool, request.auth);
+    const { rowCount } = await pool.query(`
+      UPDATE payment_orders SET pending_checkout_json = NULL
+      WHERE id = $1 AND account_id = $2`, [request.params.paymentOrderId, account.id]);
+    if (rowCount === 0) return reply.code(404).send({ error: 'payment_order_not_found' });
+    return reply.code(204).send();
+  });
+
   app.post('/api/webhooks/payments/:provider', { bodyLimit: 65_536 }, async (request, reply) => {
     try {
       const provider = request.params.provider;

@@ -124,7 +124,13 @@ export function WalletPage({ session, onNavigate }) {
   const [provider, setProvider] = useState(session.region === 'us' ? 'stripe' : 'wechat');
   const [statusMsg, setStatusMsg] = useState(null);
   const [checkoutSession, setCheckoutSession] = useState(null);
-  const [pendingCheckout, setPendingCheckout] = useState(null);
+  const [pendingOrder, setPendingOrder] = useState(null);
+
+  const canRecharge = session.activeAccount?.kind !== 'enterprise' || Boolean(session.activeAccount?.canRecharge);
+
+  useEffect(() => {
+    setProvider(session.region === 'us' ? 'stripe' : 'wechat');
+  }, [session.region]);
 
   async function refresh() {
     const [w, po, l] = await Promise.all([
@@ -136,7 +142,7 @@ export function WalletPage({ session, onNavigate }) {
     setOrders(po.data.paymentOrders ?? []);
     setLedger(l.data.entries ?? []);
     const withPending = (po.data.paymentOrders ?? []).find((o) => o.pendingCheckout && o.status === 'succeeded');
-    setPendingCheckout(withPending?.pendingCheckout ?? null);
+    setPendingOrder(withPending ? { id: withPending.id, pendingCheckout: withPending.pendingCheckout } : null);
   }
 
   useEffect(() => {
@@ -145,8 +151,12 @@ export function WalletPage({ session, onNavigate }) {
 
   async function createRecharge(e) {
     e.preventDefault();
+    const numericYuan = Number(amountYuan);
+    if (!Number.isFinite(numericYuan) || numericYuan <= 0) {
+      return setStatusMsg({ tone: 'error', text: '请输入大于 0 的有效充值金额。' });
+    }
     try {
-      const amountMinor = Math.round(Number(amountYuan) * 100);
+      const amountMinor = Math.round(numericYuan * 100);
       const res = await apiRequest('/api/wallet/recharges', {
         method: 'POST',
         csrf: session.csrf,
@@ -175,6 +185,7 @@ export function WalletPage({ session, onNavigate }) {
   }
 
   async function resumePendingCheckout() {
+    const pendingCheckout = pendingOrder?.pendingCheckout;
     if (!pendingCheckout) return;
     try {
       const endpoint = pendingCheckout.orderType === 'upgrade' ? '/api/billing/upgrades' : '/api/billing/checkout';
@@ -183,7 +194,21 @@ export function WalletPage({ session, onNavigate }) {
         : pendingCheckout;
       await apiRequest(endpoint, { method: 'POST', csrf: session.csrf, body });
       setStatusMsg({ tone: 'info', text: '待购商品已二次确认购买并提交权益发放！' });
-      setPendingCheckout(null);
+      setPendingOrder(null);
+      await refresh();
+    } catch (err) {
+      setStatusMsg({ tone: 'error', text: err.message });
+    }
+  }
+
+  async function dismissPendingCheckout() {
+    if (!pendingOrder?.id) return;
+    try {
+      await apiRequest(`/api/wallet/payment-orders/${pendingOrder.id}/pending-checkout`, {
+        method: 'DELETE',
+        csrf: session.csrf,
+      });
+      setPendingOrder(null);
       await refresh();
     } catch (err) {
       setStatusMsg({ tone: 'error', text: err.message });
@@ -213,15 +238,15 @@ export function WalletPage({ session, onNavigate }) {
         </div>
       )}
 
-      {pendingCheckout && (
+      {pendingOrder?.pendingCheckout && (
         <div className="rounded-2xl border-2 border-[#087F8C] bg-[#35C4A3]/10 p-5 flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="text-sm font-bold text-[#142B35]">检测到余额不足跳充值前保留的待确认商品</div>
             <div className="text-xs text-[#142B35]/75">
-              套餐：<span className="font-mono">{pendingCheckout.tierId}</span> · 数量：{pendingCheckout.quantity} · 请确认从最新余额扣款完成购买
+              套餐：<span className="font-mono">{pendingOrder.pendingCheckout.tierId}</span> · 数量：{pendingOrder.pendingCheckout.quantity} · 请确认从最新余额扣款完成购买
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={resumePendingCheckout}
@@ -232,6 +257,13 @@ export function WalletPage({ session, onNavigate }) {
             <NavLink href="/console/store" onNavigate={onNavigate} className="rounded-xl border border-[#DEE8EC] bg-white px-4 py-2 text-sm text-[#142B35]">
               回商店
             </NavLink>
+            <button
+              type="button"
+              onClick={dismissPendingCheckout}
+              className="rounded-xl border border-[#DEE8EC] bg-white px-4 py-2 text-sm text-[#142B35]/75 hover:border-red-200 hover:text-red-700"
+            >
+              忽略
+            </button>
           </div>
         </div>
       )}
@@ -251,6 +283,11 @@ export function WalletPage({ session, onNavigate }) {
 
         <form onSubmit={createRecharge} className="rounded-2xl border border-[#DEE8EC] bg-white p-6 space-y-4">
           <div className="text-sm font-bold text-[#142B35]">发起充值</div>
+          {!canRecharge && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              当前企业账户未向您授予现金充值权限，请联系企业所有者或管理员为您授权。
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-xs text-[#142B35]/70">充值金额 ({session.currency})</label>
@@ -260,7 +297,8 @@ export function WalletPage({ session, onNavigate }) {
                 step="0.01"
                 value={amountYuan}
                 onChange={(e) => setAmountYuan(e.target.value)}
-                className="w-full rounded-xl border border-[#DEE8EC] px-3 py-2 text-sm"
+                disabled={!canRecharge}
+                className="w-full rounded-xl border border-[#DEE8EC] px-3 py-2 text-sm disabled:bg-[#F3F8FA]"
                 required
               />
             </div>
@@ -269,13 +307,18 @@ export function WalletPage({ session, onNavigate }) {
               <select
                 value={provider}
                 onChange={(e) => setProvider(e.target.value)}
-                className="w-full rounded-xl border border-[#DEE8EC] px-3 py-2 text-sm"
+                disabled={!canRecharge}
+                className="w-full rounded-xl border border-[#DEE8EC] px-3 py-2 text-sm disabled:bg-[#F3F8FA]"
               >
                 {providers.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
               </select>
             </div>
           </div>
-          <button type="submit" className="rounded-xl bg-[#087F8C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#066973]">
+          <button
+            type="submit"
+            disabled={!canRecharge}
+            className="rounded-xl bg-[#087F8C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#066973] disabled:cursor-not-allowed disabled:bg-[#DEE8EC] disabled:text-[#142B35]/50"
+          >
             创建充值单
           </button>
         </form>
@@ -302,7 +345,7 @@ export function WalletPage({ session, onNavigate }) {
                   <td className="py-2 pr-3 text-xs">{o.status}</td>
                   <td className="py-2 pr-3 text-xs text-[#142B35]/65">{formatDateTime(o.createdAt)}</td>
                   <td className="py-2">
-                    {o.status === 'pending' && (
+                    {o.status === 'pending' && (session.allowSandboxSettle ? (
                       <button
                         type="button"
                         onClick={() => sandboxConfirm(o.id)}
@@ -310,7 +353,11 @@ export function WalletPage({ session, onNavigate }) {
                       >
                         沙箱确认入账
                       </button>
-                    )}
+                    ) : (
+                      <span className="rounded-lg bg-[#F3F8FA] px-2.5 py-1 text-xs text-[#142B35]/70">
+                        等待回调确认
+                      </span>
+                    ))}
                   </td>
                 </tr>
               ))}
@@ -486,12 +533,14 @@ export function StorePage({ session, publicApps, onNavigate }) {
       {lowBalanceInfo && (
         <div className="rounded-2xl border border-amber-300 bg-amber-50 p-5 flex flex-wrap items-center justify-between gap-4">
           <div className="space-y-1 text-sm text-amber-900">
-            <div className="font-bold flex items-center gap-2"><AlertTriangle className="h-4 w-4" /> 余额不足，已保留待购上下文</div>
-            <div>需支付 {formatMoney(lowBalanceInfo.amountMinor, session.currency)}，当前可用 {formatMoney(lowBalanceInfo.availableMinor, session.currency)}。</div>
+            <div className="font-bold flex items-center gap-2"><AlertTriangle className="h-4 w-4" /> {lowBalanceInfo.canRecharge === false ? '企业账户余额不足' : '余额不足，已保留待购上下文'}</div>
+            <div>需支付 {formatMoney(lowBalanceInfo.amountMinor, session.currency)}，当前可用 {formatMoney(lowBalanceInfo.availableMinor, session.currency)}。{lowBalanceInfo.canRecharge === false ? '您当前无企业充值权限，请联系管理员充值后再试。' : ''}</div>
           </div>
-          <NavLink href="/console/wallet" onNavigate={onNavigate} className="rounded-xl bg-[#087F8C] px-4 py-2 text-sm font-semibold text-white">
-            前往充值后继续购买
-          </NavLink>
+          {lowBalanceInfo.canRecharge !== false && (
+            <NavLink href="/console/wallet" onNavigate={onNavigate} className="rounded-xl bg-[#087F8C] px-4 py-2 text-sm font-semibold text-white">
+              前往充值后继续购买
+            </NavLink>
+          )}
         </div>
       )}
 
@@ -665,6 +714,7 @@ export function KeysPage({ session, publicApps }) {
   const [keys, setKeys] = useState([]);
   const [keyName, setKeyName] = useState('工作流统一密钥');
   const [createdPlain, setCreatedPlain] = useState('');
+  const [copied, setCopied] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
   useEffect(() => {
@@ -678,6 +728,8 @@ export function KeysPage({ session, publicApps }) {
   }
 
   useEffect(() => {
+    setCreatedPlain('');
+    setCopied(false);
     loadKeys().catch((err) => setStatusMsg({ tone: 'error', text: err.message }));
   }, [appId, session.activeAccountId]);
 
@@ -686,6 +738,7 @@ export function KeysPage({ session, publicApps }) {
     try {
       const res = await apiRequest('/api/keys', { method: 'POST', csrf: session.csrf, body: { appId, name: keyName } });
       setCreatedPlain(res.data.plaintextKey);
+      setCopied(false);
       setStatusMsg({ tone: 'info', text: 'API Key 已签发，请立即复制保存完整明文（系统仅展示一次）。' });
       await loadKeys();
     } catch (err) {
@@ -697,10 +750,21 @@ export function KeysPage({ session, publicApps }) {
     try {
       const res = await apiRequest(`/api/keys/${keyId}/rotate`, { method: 'POST', csrf: session.csrf, body: {} });
       setCreatedPlain(res.data.plaintextKey);
+      setCopied(false);
       setStatusMsg({ tone: 'info', text: '旧密钥已吊销，新密钥即时生效。' });
       await loadKeys();
     } catch (err) {
       setStatusMsg({ tone: 'error', text: err.message });
+    }
+  }
+
+  async function copyPlaintext() {
+    if (!createdPlain) return;
+    try {
+      await navigator.clipboard?.writeText(createdPlain);
+      setCopied(true);
+    } catch {
+      setCopied(false);
     }
   }
 
@@ -726,15 +790,15 @@ export function KeysPage({ session, publicApps }) {
 
       {createdPlain && (
         <div className="rounded-2xl border-2 border-[#35C4A3] bg-white p-5 space-y-2">
-          <div className="text-xs font-semibold text-[#087F8C]">一次性明文 API Key（关闭后无法再次查看）</div>
+          <div className="text-xs font-semibold text-[#087F8C]">一次性明文 API Key（关闭或切换应用后无法再次查看）</div>
           <div className="flex items-center justify-between gap-3 rounded-xl bg-[#F3F8FA] p-3 font-mono text-xs break-all">
             <span>{createdPlain}</span>
             <button
               type="button"
-              onClick={() => navigator.clipboard?.writeText(createdPlain)}
+              onClick={copyPlaintext}
               className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#087F8C] px-2.5 py-1 text-white"
             >
-              <Copy className="h-3.5 w-3.5" /> 复制
+              <Copy className="h-3.5 w-3.5" /> {copied ? '已复制' : '复制'}
             </button>
           </div>
         </div>
@@ -751,46 +815,54 @@ export function KeysPage({ session, publicApps }) {
       </form>
 
       <div className="rounded-2xl border border-[#DEE8EC] bg-white p-5 overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="border-b border-[#DEE8EC] text-xs text-[#142B35]/60">
-              <th className="py-2 pr-3">名称</th>
-              <th className="py-2 pr-3">前缀</th>
-              <th className="py-2 pr-3">状态</th>
-              <th className="py-2">操作</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#DEE8EC]">
-            {keys.map((k) => (
-              <tr key={k.id}>
-                <td className="py-2.5 pr-3 font-medium">{k.name}</td>
-                <td className="py-2.5 pr-3 font-mono text-xs">{k.keyPrefix}...</td>
-                <td className="py-2.5 pr-3 text-xs">{k.status === 'active' ? '生效中' : '已吊销'}</td>
-                <td className="py-2.5 space-x-2">
-                  {k.status === 'active' && (
-                    <>
-                      <button type="button" onClick={() => rotateKey(k.id)} className="inline-flex items-center gap-1 rounded-lg border border-[#DEE8EC] px-2.5 py-1 text-xs hover:border-[#087F8C]">
-                        <RefreshCw className="h-3 w-3" /> 轮换
-                      </button>
-                      <button type="button" onClick={() => revokeKey(k.id)} className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50">
-                        <Trash2 className="h-3 w-3" /> 吊销
-                      </button>
-                    </>
-                  )}
-                </td>
+        {keys.length === 0 ? (
+          <div className="py-4 text-sm text-[#142B35]/65">当前应用尚未签发 API Key，请在上方创建首个密钥。</div>
+        ) : (
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-[#DEE8EC] text-xs text-[#142B35]/60">
+                <th className="py-2 pr-3">名称</th>
+                <th className="py-2 pr-3">前缀</th>
+                <th className="py-2 pr-3">状态</th>
+                <th className="py-2">操作</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody className="divide-y divide-[#DEE8EC]">
+              {keys.map((k) => (
+                <tr key={k.id}>
+                  <td className="py-2.5 pr-3 font-medium">{k.name}</td>
+                  <td className="py-2.5 pr-3 font-mono text-xs">{k.keyPrefix}...</td>
+                  <td className="py-2.5 pr-3 text-xs">{k.status === 'active' ? '生效中' : '已吊销'}</td>
+                  <td className="py-2.5 space-x-2">
+                    {k.status === 'active' && (
+                      <>
+                        <button type="button" onClick={() => rotateKey(k.id)} className="inline-flex items-center gap-1 rounded-lg border border-[#DEE8EC] px-2.5 py-1 text-xs hover:border-[#087F8C]">
+                          <RefreshCw className="h-3 w-3" /> 轮换
+                        </button>
+                        <button type="button" onClick={() => revokeKey(k.id)} className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50">
+                          <Trash2 className="h-3 w-3" /> 吊销
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
 }
 
-export function OrdersPage({ session }) {
+export function OrdersPage({ session, publicApps = [] }) {
   const [orders, setOrders] = useState([]);
   const [subs, setSubs] = useState([]);
   const [inspectOrder, setInspectOrder] = useState(null);
+  const [scheduleSub, setScheduleSub] = useState(null);
+  const [scheduleCards, setScheduleCards] = useState([]);
+  const [targetTierId, setTargetTierId] = useState('');
+  const [targetSeatCount, setTargetSeatCount] = useState(1);
   const [statusMsg, setStatusMsg] = useState(null);
 
   async function refresh() {
@@ -802,6 +874,39 @@ export function OrdersPage({ session }) {
   useEffect(() => {
     refresh().catch((err) => setStatusMsg({ tone: 'error', text: err.message }));
   }, [session.activeAccountId]);
+
+  async function openScheduleForm(sub) {
+    try {
+      const res = await apiRequest(`/api/storefront/products?appId=${encodeURIComponent(sub.appId)}`);
+      const memberships = (res.data.cards ?? []).filter((c) => c.productType === 'membership');
+      setScheduleSub(sub);
+      setScheduleCards(memberships);
+      setTargetTierId(memberships[0]?.tierId ?? sub.tierId);
+      setTargetSeatCount(sub.seatCount ?? 1);
+    } catch (err) {
+      setStatusMsg({ tone: 'error', text: err.message });
+    }
+  }
+
+  async function submitScheduledChange(e) {
+    e.preventDefault();
+    if (!scheduleSub) return;
+    try {
+      await apiRequest(`/api/billing/subscriptions/${scheduleSub.id}/scheduled-change`, {
+        method: 'PUT',
+        csrf: session.csrf,
+        body: {
+          targetTierId,
+          ...(session.activeAccount?.kind === 'enterprise' ? { targetSeatCount: Number(targetSeatCount) } : {}),
+        },
+      });
+      setStatusMsg({ tone: 'info', text: '下周期套餐/席位变更已预约。' });
+      setScheduleSub(null);
+      await refresh();
+    } catch (err) {
+      setStatusMsg({ tone: 'error', text: err.message });
+    }
+  }
 
   async function toggleAutoRenew(sub) {
     try {
@@ -825,6 +930,8 @@ export function OrdersPage({ session }) {
     }
   }
 
+  const appNameById = new Map((publicApps ?? []).map((a) => [a.id, a.name]));
+
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold text-[#142B35]">订单与订阅周期</h1>
@@ -834,29 +941,52 @@ export function OrdersPage({ session }) {
         <h2 className="text-sm font-bold text-[#142B35]">应用订阅列表</h2>
         <div className="space-y-3">
           {subs.map((sub) => (
-            <div key={sub.id} className="rounded-xl border border-[#DEE8EC] p-4 flex flex-wrap items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="text-sm font-bold">{sub.tierId} · {sub.status}</div>
-                <div className="text-xs text-[#142B35]/70">
-                  周期：{sub.billingCycle} · 席位：{sub.seatCount} · 到期：{formatDateTime(sub.periodEnd)}
+            <div key={sub.id} className="rounded-xl border border-[#DEE8EC] p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold">{appNameById.get(sub.appId) ?? '应用'} · {sub.tierId} · {sub.status}</div>
+                  <div className="text-xs text-[#142B35]/70">
+                    周期：{sub.billingCycle} · 席位：{sub.seatCount} · 到期：{formatDateTime(sub.periodEnd)}
+                  </div>
+                  {sub.scheduledChange && (
+                    <div className="text-xs font-medium text-[#087F8C]">
+                      已预约下周期变更为：{sub.scheduledChange.targetTierId}（{sub.scheduledChange.targetSeatCount} 席）
+                    </div>
+                  )}
                 </div>
-                {sub.scheduledChange && (
-                  <div className="text-xs font-medium text-[#087F8C]">
-                    已预约下周期变更为：{sub.scheduledChange.targetTierId}（{sub.scheduledChange.targetSeatCount} 席）
+                {sub.status === 'active' && (
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => toggleAutoRenew(sub)} className="rounded-lg border border-[#DEE8EC] px-3 py-1.5 text-xs font-medium hover:border-[#087F8C]">
+                      {sub.autoRenew ? '关闭自动续费' : '开启自动续费'}
+                    </button>
+                    <button type="button" onClick={() => openScheduleForm(sub)} className="rounded-lg border border-[#087F8C] px-3 py-1.5 text-xs font-medium text-[#087F8C] hover:bg-[#087F8C]/10">
+                      预约下周期变更
+                    </button>
+                    {sub.scheduledChange && (
+                      <button type="button" onClick={() => cancelScheduled(sub.id)} className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs text-amber-800">
+                        取消预约变更
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
-              {sub.status === 'active' && (
-                <div className="flex gap-2">
-                  <button type="button" onClick={() => toggleAutoRenew(sub)} className="rounded-lg border border-[#DEE8EC] px-3 py-1.5 text-xs font-medium hover:border-[#087F8C]">
-                    {sub.autoRenew ? '关闭自动续费' : '开启自动续费'}
-                  </button>
-                  {sub.scheduledChange && (
-                    <button type="button" onClick={() => cancelScheduled(sub.id)} className="rounded-lg border border-amber-300 px-3 py-1.5 text-xs text-amber-800">
-                      取消预约变更
-                    </button>
+              {scheduleSub?.id === sub.id && (
+                <form onSubmit={submitScheduledChange} className="flex flex-wrap items-end gap-3 rounded-xl bg-[#F3F8FA] p-3">
+                  <div>
+                    <label className="mb-1 block text-xs text-[#142B35]/70">下周期目标档位</label>
+                    <select value={targetTierId} onChange={(e) => setTargetTierId(e.target.value)} className="rounded-lg border border-[#DEE8EC] bg-white px-2.5 py-1.5 text-xs">
+                      {scheduleCards.map((c) => <option key={c.tierId} value={c.tierId}>{c.display?.name ?? c.tierId} ({c.tierId})</option>)}
+                    </select>
+                  </div>
+                  {session.activeAccount?.kind === 'enterprise' && (
+                    <div>
+                      <label className="mb-1 block text-xs text-[#142B35]/70">目标席位数</label>
+                      <input type="number" min="1" value={targetSeatCount} onChange={(e) => setTargetSeatCount(Math.max(1, Number(e.target.value) || 1))} className="w-24 rounded-lg border border-[#DEE8EC] bg-white px-2.5 py-1.5 text-xs" />
+                    </div>
                   )}
-                </div>
+                  <button type="submit" className="rounded-lg bg-[#087F8C] px-3 py-1.5 text-xs font-semibold text-white">确认预约</button>
+                  <button type="button" onClick={() => setScheduleSub(null)} className="rounded-lg border border-[#DEE8EC] bg-white px-3 py-1.5 text-xs">取消</button>
+                </form>
               )}
             </div>
           ))}
@@ -885,6 +1015,7 @@ export function OrdersPage({ session }) {
               <th className="py-2 pr-3">实付</th>
               <th className="py-2 pr-3">已退/折算</th>
               <th className="py-2 pr-3">状态</th>
+              <th className="py-2 pr-3">发票同步</th>
               <th className="py-2">快照</th>
             </tr>
           </thead>
@@ -896,6 +1027,7 @@ export function OrdersPage({ session }) {
                 <td className="py-2 pr-3 tabular-nums">{formatMoney(o.paidMinor, o.currency)}</td>
                 <td className="py-2 pr-3 tabular-nums">{formatMoney(o.refundedMinor, o.currency)}</td>
                 <td className="py-2 pr-3 text-xs">{o.status}</td>
+                <td className="py-2 pr-3 text-xs">{o.lagoSyncStatus}</td>
                 <td className="py-2">
                   <button type="button" onClick={() => setInspectOrder(o)} className="text-xs font-medium text-[#087F8C] hover:underline">查看快照</button>
                 </td>
@@ -915,9 +1047,12 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
   const [seats, setSeats] = useState([]);
   const [subs, setSubs] = useState([]);
   const [inviteUrl, setInviteUrl] = useState('');
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const [limitInputs, setLimitInputs] = useState({});
   const [statusMsg, setStatusMsg] = useState(null);
 
   const isEnt = session.activeAccount?.kind === 'enterprise';
+  const canManageEnt = isEnt && ['owner', 'admin'].includes(session.activeAccount?.role);
   const entId = session.activeAccountId;
 
   useEffect(() => {
@@ -925,22 +1060,26 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
   }, [publicApps, appId]);
 
   async function loadEnterprise() {
-    if (!isEnt) return;
+    if (!canManageEnt) {
+      setMembers([]);
+      setSeats([]);
+      return;
+    }
     const [mRes, subRes] = await Promise.all([
-      apiRequest(`/api/accounts/${entId}/members`).catch(() => ({ data: { members: [] } })),
+      apiRequest(`/api/accounts/${entId}/members`),
       apiRequest('/api/billing/subscriptions'),
     ]);
     setMembers(mRes.data.members ?? []);
     setSubs(subRes.data.subscriptions ?? []);
     if (appId) {
-      const sRes = await apiRequest(`/api/accounts/${entId}/apps/${appId}/seats`).catch(() => ({ data: { seats: [] } }));
+      const sRes = await apiRequest(`/api/accounts/${entId}/apps/${appId}/seats`);
       setSeats(sRes.data.seats ?? []);
     }
   }
 
   useEffect(() => {
-    loadEnterprise();
-  }, [entId, isEnt, appId]);
+    loadEnterprise().catch((err) => setStatusMsg({ tone: 'error', text: err.message }));
+  }, [entId, canManageEnt, appId]);
 
   async function createEnt(e) {
     e.preventDefault();
@@ -961,8 +1100,19 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
         method: 'POST', csrf: session.csrf, body: { role: 'member', expiresAt },
       });
       setInviteUrl(`${window.location.origin}/invite/${res.data.token}`);
+      setInviteCopied(false);
     } catch (err) {
       setStatusMsg({ tone: 'error', text: err.message });
+    }
+  }
+
+  async function copyInvite() {
+    if (!inviteUrl) return;
+    try {
+      await navigator.clipboard?.writeText(inviteUrl);
+      setInviteCopied(true);
+    } catch {
+      setInviteCopied(false);
     }
   }
 
@@ -991,6 +1141,49 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
     }
   }
 
+  async function togglePermission(member, field) {
+    try {
+      await apiRequest(`/api/accounts/${entId}/members/${member.id}`, {
+        method: 'PUT',
+        csrf: session.csrf,
+        body: {
+          role: member.role,
+          canRecharge: field === 'canRecharge' ? !member.canRecharge : Boolean(member.canRecharge),
+          canPurchase: field === 'canPurchase' ? !member.canPurchase : Boolean(member.canPurchase),
+          hasSeat: Boolean(member.hasSeat),
+        },
+      });
+      await loadEnterprise();
+    } catch (err) {
+      setStatusMsg({ tone: 'error', text: err.message });
+    }
+  }
+
+  async function removeMember(userId) {
+    try {
+      await apiRequest(`/api/accounts/${entId}/members/${userId}`, { method: 'DELETE', csrf: session.csrf });
+      setStatusMsg({ tone: 'info', text: '成员已移出企业并即时回收全部应用席位。' });
+      await loadEnterprise();
+    } catch (err) {
+      setStatusMsg({ tone: 'error', text: err.message });
+    }
+  }
+
+  async function saveMemberLimit(userId) {
+    const raw = (limitInputs[userId] ?? '').trim();
+    const cycleLimitUnits = raw === '' ? null : (BigInt(Math.round(Number(raw) * 1_000_000))).toString();
+    try {
+      await apiRequest(`/api/accounts/${entId}/apps/${appId}/members/${userId}/limit`, {
+        method: 'PUT',
+        csrf: session.csrf,
+        body: { cycleLimitUnits },
+      });
+      setStatusMsg({ tone: 'info', text: raw === '' ? '已清除成员周期消费上限。' : `已设置成员周期上限：${raw} 积分。` });
+    } catch (err) {
+      setStatusMsg({ tone: 'error', text: err.message });
+    }
+  }
+
   return (
     <div className="space-y-6">
       <h1 className="text-xl font-bold text-[#142B35]">企业成员与按应用席位管理</h1>
@@ -1006,7 +1199,14 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
         </button>
       </form>
 
-      {isEnt && (
+      {isEnt && !canManageEnt && (
+        <div className="rounded-2xl border border-[#DEE8EC] bg-white p-5 space-y-2 text-sm text-[#142B35]/80">
+          <div className="font-bold text-[#142B35]">当前身份：{ROLE_LABELS[session.activeAccount?.role] ?? '企业成员'}</div>
+          <p className="text-xs text-[#142B35]/70">企业成员仅可使用已获分配的应用席位及授权 API Key；成员邀请、权限及席位分配需由企业所有者或管理员操作。</p>
+        </div>
+      )}
+
+      {canManageEnt && (
         <>
           <div className="rounded-2xl border border-[#DEE8EC] bg-white p-5 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1017,7 +1217,12 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
               <button type="button" onClick={generateInvite} className="rounded-xl bg-[#087F8C] px-4 py-2 text-xs font-semibold text-white">生成 7 天邀请链接</button>
             </div>
             {inviteUrl && (
-              <div className="rounded-xl bg-[#F3F8FA] p-3 font-mono text-xs break-all">{inviteUrl}</div>
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-[#F3F8FA] p-3 font-mono text-xs break-all">
+                <span>{inviteUrl}</span>
+                <button type="button" onClick={copyInvite} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-[#087F8C] px-2.5 py-1 text-white">
+                  <Copy className="h-3.5 w-3.5" /> {inviteCopied ? '已复制' : '复制'}
+                </button>
+              </div>
             )}
           </div>
 
@@ -1034,8 +1239,10 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
                   <tr className="border-b border-[#DEE8EC] text-xs text-[#142B35]/60">
                     <th className="py-2 pr-3">成员</th>
                     <th className="py-2 pr-3">角色</th>
-                    <th className="py-2 pr-3">应用席位状态</th>
-                    <th className="py-2">席位操作</th>
+                    <th className="py-2 pr-3">财务权限</th>
+                    <th className="py-2 pr-3">应用席位</th>
+                    <th className="py-2 pr-3">周期积分上限</th>
+                    <th className="py-2">管理操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#DEE8EC]">
@@ -1045,8 +1252,21 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
                       <tr key={m.id}>
                         <td className="py-2.5 pr-3 font-medium">{m.name || m.id.slice(0, 8)}</td>
                         <td className="py-2.5 pr-3 text-xs">{ROLE_LABELS[m.role] ?? m.role}</td>
-                        <td className="py-2.5 pr-3 text-xs">{seat ? '已分配席位' : '未分配'}</td>
-                        <td className="py-2.5">
+                        <td className="py-2.5 pr-3 space-x-1.5 text-xs">
+                          {m.role === 'owner' ? (
+                            <span className="text-[#142B35]/65">全权限</span>
+                          ) : (
+                            <>
+                              <button type="button" onClick={() => togglePermission(m, 'canRecharge')} className={`rounded px-2 py-0.5 border ${m.canRecharge ? 'border-[#087F8C] text-[#087F8C]' : 'border-[#DEE8EC] text-[#142B35]/50'}`}>
+                                充值:{m.canRecharge ? '开' : '关'}
+                              </button>
+                              <button type="button" onClick={() => togglePermission(m, 'canPurchase')} className={`rounded px-2 py-0.5 border ${m.canPurchase ? 'border-[#087F8C] text-[#087F8C]' : 'border-[#DEE8EC] text-[#142B35]/50'}`}>
+                                购买:{m.canPurchase ? '开' : '关'}
+                              </button>
+                            </>
+                          )}
+                        </td>
+                        <td className="py-2.5 pr-3">
                           {seat ? (
                             <button type="button" onClick={() => revokeSeat(seat)} className="rounded-lg border border-red-200 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50">
                               收回席位
@@ -1054,6 +1274,28 @@ export function EnterprisePage({ session, publicApps, onRefreshSession }) {
                           ) : (
                             <button type="button" onClick={() => assignSeat(m.id)} className="rounded-lg border border-[#087F8C] px-2.5 py-1 text-xs text-[#087F8C] hover:bg-[#087F8C]/10">
                               分配席位
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min="0"
+                              placeholder="不限"
+                              value={limitInputs[m.id] ?? ''}
+                              onChange={(e) => setLimitInputs((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                              className="w-20 rounded-lg border border-[#DEE8EC] px-2 py-1 text-xs"
+                            />
+                            <button type="button" onClick={() => saveMemberLimit(m.id)} className="rounded-lg border border-[#DEE8EC] px-2 py-1 text-xs hover:border-[#087F8C]">
+                              设定
+                            </button>
+                          </div>
+                        </td>
+                        <td className="py-2.5">
+                          {m.role !== 'owner' && (
+                            <button type="button" onClick={() => removeMember(m.id)} className="rounded-lg border border-red-200 px-2.5 py-1 text-xs text-red-700 hover:bg-red-50">
+                              移除
                             </button>
                           )}
                         </td>
