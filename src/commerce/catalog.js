@@ -1,6 +1,7 @@
 import { isUuid } from '../database.js';
 import { LEDGER_UNITS_PER_CREDIT, parseEffectiveAt } from './validation.js';
 import { resolveRoutePricingVersion } from './versions.js';
+import { deepSeekProPrices } from './deepseek-pricing.js';
 
 function formatCreditsFromUnits(unitsBigInt) {
   const whole = unitsBigInt / LEDGER_UNITS_PER_CREDIT;
@@ -105,13 +106,18 @@ export async function resolveCatalogModels(pool, {
 
   const models = [];
   for (const [modelId, routes] of byModel.entries()) {
+    const pricing = [];
     const unitsByUnit = new Map();
     for (const r of routes) {
+      const componentPrices = deepSeekProPrices(r, pricingVersion);
+      if (componentPrices) {
+        pricing.push(...componentPrices);
+        continue;
+      }
       const u = BigInt(r.unitLedgerUnits);
       if (!unitsByUnit.has(r.unit)) unitsByUnit.set(r.unit, []);
       unitsByUnit.get(r.unit).push(u);
     }
-    const pricing = [];
     for (const [unit, values] of unitsByUnit.entries()) {
       values.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
       const min = values[0];
