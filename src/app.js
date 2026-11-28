@@ -10,6 +10,7 @@ import { registerCommerceRoutes } from './commerce/index.js';
 import { registerBillingRoutes } from './billing/index.js';
 import { registerGatewayBillingRoutes } from './gateway/billing-v1.js';
 import { registerGatewayKeyRoutes } from './gateway/keys.js';
+import { portalDestination, registerAdminPortals } from './integrations/admin-portals.js';
 import { registerAdminIntegrationRoutes } from './integrations/admin.js';
 import { registerPaymentRoutes } from './payments/index.js';
 import { migrateDatabase } from './database.js';
@@ -84,8 +85,9 @@ export async function buildApp({
     });
   });
 
+  const readUserSession = (request) => readSession(pool, request.session.get('sessionId'));
   async function requireSession(request, reply) {
-    request.auth = await readSession(pool, request.session.get('sessionId'));
+    request.auth = await readUserSession(request);
     if (!request.auth) return reply.code(401).send({ error: 'login_required' });
   }
 
@@ -98,6 +100,7 @@ export async function buildApp({
   const auth = { preHandler: requireSession };
   const write = { preHandler: [requireSession, verifyCsrf] };
   const isPlatformOperator = (session) => session.issuer === issuer.href && operatorSubjects.has(session.subject);
+  registerAdminPortals(app, auth, readUserSession, isPlatformOperator);
   registerAccountRoutes(app, pool, auth, write, {
     isPlatformOperator,
     region,
@@ -152,13 +155,14 @@ export async function buildApp({
   app.get('/health', async () => ({ status: 'ok', region, currency }));
 
   app.get('/login', async (request, reply) => {
+    const returnTo = portalDestination(request.query.portal);
     const appParameters = ['app_id', 'redirect_uri', 'state'].some((key) => Object.hasOwn(request.query, key));
     const handoff = appParameters ? await readAppLogin(pool, request.query) : null;
     if (appParameters && !handoff) return reply.code(400).send({ error: 'invalid_app_login' });
 
     const session = await readSession(pool, request.session.get('sessionId'));
     if (session) {
-      if (!handoff) return reply.redirect('/');
+      if (!handoff) return reply.redirect(returnTo);
       const target = await issueAppLogin(pool, session.id, handoff);
       return target ? reply.redirect(target, 303) : reply.code(400).send({ error: 'invalid_app_login' });
     }
@@ -176,7 +180,7 @@ export async function buildApp({
       nonce,
     });
     request.session.regenerate();
-    request.session.set('login', { verifier, state, nonce, handoff, expiresAt: Date.now() + loginLifetime });
+    request.session.set('login', { verifier, state, nonce, handoff, returnTo, expiresAt: Date.now() + loginLifetime });
     return reply.redirect(authorization.href);
   });
 
@@ -214,7 +218,7 @@ export async function buildApp({
       lifetime: sessionLifetime,
     });
     request.session.set('sessionId', sessionId);
-    if (!attempt.handoff) return reply.redirect('/', 303);
+    if (!attempt.handoff) return reply.redirect(attempt.returnTo ?? '/', 303);
     const target = await issueAppLogin(pool, sessionId, attempt.handoff);
     return target ? reply.redirect(target, 303) : reply.redirect('/?login=failed', 303);
   });

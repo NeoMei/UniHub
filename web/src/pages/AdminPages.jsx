@@ -428,6 +428,16 @@ export function AdminOperationsPage({ session }) {
       <h1 className="text-xl font-bold text-[#142B35]">平台对账、运维调度与非密钥配置</h1>
       {msg && <div className="rounded-xl border border-[#35C4A3] bg-[#35C4A3]/10 p-3 text-sm">{msg}</div>}
 
+      <nav aria-label="服务后台" className="flex flex-wrap gap-3">
+        {[
+          ['/llmrouter', '万流 LLMRouter'],
+          ['/auth', 'Logto 管理控制台'],
+          ['/paylab', 'Lago 账单后台'],
+        ].map(([href, label]) => (
+          <a key={href} href={href} className="rounded-xl border border-[#DEE8EC] bg-white px-4 py-2 text-sm font-medium text-[#087F8C] hover:border-[#087F8C]">{label}</a>
+        ))}
+      </nav>
+
       <div className="grid gap-4 sm:grid-cols-4">
         <div className="rounded-2xl border border-[#DEE8EC] bg-white p-4"><div className="text-xs text-[#142B35]/65">现金/积分守恒状态</div><div className="mt-1 text-lg font-bold text-[#087F8C]">{recon?.ok ? '100% 守恒一致' : '异常待核'}</div></div>
         <div className="rounded-2xl border border-[#DEE8EC] bg-white p-4"><div className="text-xs text-[#142B35]/65">生效订阅数</div><div className="mt-1 text-lg font-bold">{overview?.activeSubscriptionsCount ?? '--'}</div></div>

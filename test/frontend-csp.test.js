@@ -97,9 +97,9 @@ test('Stage 4: SPA 静态产物严格 CSP 托管、白标公开接口与多角�
   assert.equal((await app.inject('/assets/..%2fpackage.json')).statusCode, 404);
 
   // 3. Sign in as operator vs normal user -> verify /api/session & /api/apps/public white-label boundary
-  async function signIn(userSubject) {
+  async function signIn(userSubject, portal = '') {
     subject = userSubject;
-    const loginRes = await app.inject('/login');
+    const loginRes = await app.inject('/login?portal=' + encodeURIComponent(portal));
     attempt = new URL(loginRes.headers.location);
     const state = attempt.searchParams.get('state');
     const loginCookie = loginRes.cookies[0];
@@ -110,10 +110,28 @@ test('Stage 4: SPA 静态产物严格 CSP 托管、白标公开接口与多角�
     const sessionCookie = cbRes.cookies[0];
     const cookies = { [sessionCookie.name]: sessionCookie.value };
     const sessionRes = await app.inject({ url: '/api/session', cookies });
-    return { cookies, ...sessionRes.json() };
+    return { cookies, returnTo: cbRes.headers.location, ...sessionRes.json() };
   }
 
-  const op = await signIn('operator');
+  const op = await signIn('operator', 'paylab');
+  assert.equal(op.returnTo, '/paylab');
+  assert.equal((await app.inject('/internal/portals/operator')).statusCode, 401);
+  assert.equal((await app.inject({ url: '/internal/portals/operator', cookies: op.cookies })).statusCode, 204);
+  const frame = await app.inject({ url: '/llmrouter', cookies: op.cookies });
+  assert.equal(frame.statusCode, 200);
+  assert.match(frame.body, /src="https:\/\/llmrouter\.quukk\.com\/dashboard"/);
+  assert.match(frame.headers['content-security-policy'], /frame-src https:\/\/llmrouter\.quukk\.com;/);
+  assert.equal((await app.inject({ url: '/login?portal=auth', cookies: op.cookies })).headers.location, '/auth');
+  const anonymous = await app.inject({
+    url: '/llmrouter', headers: { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' },
+  });
+  assert.equal(anonymous.statusCode, 401);
+  assert.match(anonymous.body, /href="\/login\?portal=llmrouter"/);
+  const apiDenied = await app.inject({
+    url: '/internal/portals/login', headers: { 'x-original-uri': '/paylab/graphql' },
+  });
+  assert.equal(apiDenied.statusCode, 401);
+  assert.equal(apiDenied.json().error, 'login_required');
   assert.equal(op.isPlatformOperator, true);
   assert.equal(op.region, 'cn');
   assert.equal(op.currency, 'CNY');
@@ -129,7 +147,10 @@ test('Stage 4: SPA 静态产物严格 CSP 托管、白标公开接口与多角�
   assert.equal(pubApps.json().apps[0].clientSecret, undefined);
   assert.equal(pubApps.json().apps[0].redirectUris, undefined);
 
-  const member = await signIn('end-user');
+  const member = await signIn('end-user', '//untrusted.example');
+  assert.equal(member.returnTo, '/');
+  assert.equal((await app.inject({ url: '/internal/portals/operator', cookies: member.cookies })).statusCode, 403);
+  assert.equal((await app.inject({ url: '/llmrouter', cookies: member.cookies })).statusCode, 403);
   assert.equal(member.isPlatformOperator, false);
   assert.deepEqual(member.operatorApps, []);
 
