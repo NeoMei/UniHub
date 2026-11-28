@@ -1,0 +1,38 @@
+# Start as a separate Compose project on the Logto host.
+name: unihub-logto-console
+services:
+  portal:
+    extends:
+      file: /opt/logto/compose.yaml
+      service: app
+    image: ${LOGTO_PORTAL_IMAGE:?Set to the locally built Logto portal image}
+    pull_policy: never
+    depends_on: !reset {}
+    ports: !override
+      - '127.0.0.1:13003:13003'
+      - '127.0.0.1:13004:13004'
+    environment:
+      ADMIN_CONSOLE_BASE_PATH: /auth
+      ADMIN_ENDPOINT: https://unihub.quukk.com/auth/
+      ADMIN_PORT: '13003'
+      PORT: '13004'
+      ENDPOINT: https://auth.quukk.com
+      TRUST_PROXY_HEADER: '1'
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://localhost:13003/auth/oidc/.well-known/openid-configuration',
+          {headers:{'X-Forwarded-Host':'unihub.quukk.com','X-Forwarded-Proto':'https'}})
+          .then(r=>r.json()).then(d=>process.exit(d.issuer==='https://unihub.quukk.com/auth/oidc'?0:1))
+          .catch(()=>process.exit(1))
+      interval: 15s
+      timeout: 6s
+      retries: 4
+      start_period: 30s
+networks:
+  default:
+    external: true
+    name: logto-oss_default

@@ -1,0 +1,1949 @@
+diff --git a/Dockerfile b/Dockerfile
+index b4e2388a2..d514ef1d1 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -31,6 +31,15 @@ ENV LOGTO_OSS_SURVEY_ENDPOINT=${logto_oss_survey_endpoint}
+ 
+ RUN pnpm -r build
+ 
++# This separate image serves the portal. Public Experience and Account Center bundles
++# stay at their original base in dist/. The admin tenant alone selects dist-admin/.
++ARG admin_console_base_path
++RUN if [ -n "$admin_console_base_path" ]; then \
++      ADMIN_CONSOLE_BASE_PATH="$admin_console_base_path" pnpm --filter @logto/console build && \
++      ADMIN_EXPERIENCE_BASE_PATH="$admin_console_base_path" pnpm --filter @logto/experience build && \
++      ADMIN_ACCOUNT_BASE_PATH="$admin_console_base_path" pnpm --filter @logto/account build; \
++    fi
++
+ ### Add official connectors ###
+ ARG additional_connector_args
+ ENV ADDITIONAL_CONNECTOR_ARGS=${additional_connector_args}
+diff --git a/packages/account/src/App.tsx b/packages/account/src/App.tsx
+index 1ea9e1f5a..e94465a62 100644
+--- a/packages/account/src/App.tsx
++++ b/packages/account/src/App.tsx
+@@ -1,3 +1,7 @@
++import PortalOidcClient from '@experience/shared/portal-oidc-client';
++
++import { tenantBasePath } from '@ac/utils/account-center-internal-route';
++
+ import LogtoSignature from '@experience/shared/components/LogtoSignature';
+ import { ReservedScope, UserScope } from '@logto/core-kit';
+ import { LogtoProvider, useLogto } from '@logto/react';
+@@ -288,8 +292,9 @@ const Layout = () => {
+ const App = () => (
+   <BrowserRouter basename={accountCenterBasePath}>
+     <LogtoProvider
++      LogtoClientClass={tenantBasePath ? PortalOidcClient : undefined}
+       config={{
+-        endpoint: window.location.origin,
++        endpoint: window.location.origin + tenantBasePath,
+         appId: accountCenterApplicationId,
+         includeReservedScopes: false,
+         scopes: [
+diff --git a/packages/account/src/Callback.tsx b/packages/account/src/Callback.tsx
+index 31209263b..9f3cdf929 100644
+--- a/packages/account/src/Callback.tsx
++++ b/packages/account/src/Callback.tsx
+@@ -1,13 +1,15 @@
+ import { useHandleSignInCallback } from '@logto/react';
+ import { useEffect } from 'react';
+ 
++import { accountCenterBasePath } from './utils/account-center-internal-route';
++
+ import GlobalLoading from './components/GlobalLoading';
+ import { completePendingStepUp, discardPendingStepUp } from './utils/step-up';
+ 
+ const Callback = () => {
+   const { error } = useHandleSignInCallback(() => {
+     completePendingStepUp();
+-    window.location.replace('/account');
++    window.location.replace(accountCenterBasePath);
+   });
+ 
+   useEffect(() => {
+@@ -25,7 +27,7 @@ const Callback = () => {
+         <button
+           type="button"
+           onClick={() => {
+-            window.location.replace('/account');
++            window.location.replace(accountCenterBasePath);
+           }}
+         >
+           Back to sign in
+diff --git a/packages/account/src/apis/account-center.ts b/packages/account/src/apis/account-center.ts
+index bcab40aa3..cbf71670b 100644
+--- a/packages/account/src/apis/account-center.ts
++++ b/packages/account/src/apis/account-center.ts
+@@ -1,6 +1,8 @@
++import { tenantBasePath } from '@ac/utils/account-center-internal-route';
++
+ import type { AccountCenter } from '@logto/schemas';
+ import ky from 'ky';
+ 
+ export const getAccountCenterSettings = async (): Promise<AccountCenter> => {
+-  return ky.get('/api/.well-known/account-center').json<AccountCenter>();
++  return ky.get(tenantBasePath + '/api/.well-known/account-center').json<AccountCenter>();
+ };
+diff --git a/packages/account/src/apis/account.ts b/packages/account/src/apis/account.ts
+index 9978f7796..ee6401fe3 100644
+--- a/packages/account/src/apis/account.ts
++++ b/packages/account/src/apis/account.ts
+@@ -7,7 +7,7 @@ export const updatePrimaryEmail = async (
+   accessToken: string,
+   payload: { email: string; newIdentifierVerificationRecordId: string }
+ ) => {
+-  await createAuthenticatedKy(accessToken).post('/api/my-account/primary-email', {
++  await createAuthenticatedKy(accessToken).post('api/my-account/primary-email', {
+     json: payload,
+   });
+ };
+@@ -16,57 +16,57 @@ export const updatePrimaryPhone = async (
+   accessToken: string,
+   payload: { phone: string; newIdentifierVerificationRecordId: string }
+ ) => {
+-  await createAuthenticatedKy(accessToken).post('/api/my-account/primary-phone', {
++  await createAuthenticatedKy(accessToken).post('api/my-account/primary-phone', {
+     json: payload,
+   });
+ };
+ 
+ export const updateUsername = async (accessToken: string, payload: { username: string }) => {
+-  await createAuthenticatedKy(accessToken).patch('/api/my-account', {
++  await createAuthenticatedKy(accessToken).patch('api/my-account', {
+     json: payload,
+   });
+ };
+ 
+ export const deleteUsername = async (accessToken: string) => {
+-  await createAuthenticatedKy(accessToken).patch('/api/my-account', {
++  await createAuthenticatedKy(accessToken).patch('api/my-account', {
+     json: { username: null },
+   });
+ };
+ 
+ export const updateName = async (accessToken: string, payload: { name: Nullable<string> }) => {
+-  await createAuthenticatedKy(accessToken).patch('/api/my-account', {
++  await createAuthenticatedKy(accessToken).patch('api/my-account', {
+     json: payload,
+   });
+ };
+ 
+ export const updateAvatar = async (accessToken: string, payload: { avatar: Nullable<string> }) => {
+-  await createAuthenticatedKy(accessToken).patch('/api/my-account', {
++  await createAuthenticatedKy(accessToken).patch('api/my-account', {
+     json: payload,
+   });
+ };
+ 
+ export const updateProfile = async (accessToken: string, payload: UserProfile) => {
+-  await createAuthenticatedKy(accessToken).patch('/api/my-account/profile', {
++  await createAuthenticatedKy(accessToken).patch('api/my-account/profile', {
+     json: payload,
+   });
+ };
+ 
+ export const updateCustomData = async (accessToken: string, payload: JsonObject) => {
+-  await createAuthenticatedKy(accessToken).patch('/api/my-account', {
++  await createAuthenticatedKy(accessToken).patch('api/my-account', {
+     json: { customData: payload },
+   });
+ };
+ 
+ export const deletePrimaryEmail = async (accessToken: string) => {
+-  await createAuthenticatedKy(accessToken).delete('/api/my-account/primary-email');
++  await createAuthenticatedKy(accessToken).delete('api/my-account/primary-email');
+ };
+ 
+ export const deletePrimaryPhone = async (accessToken: string) => {
+-  await createAuthenticatedKy(accessToken).delete('/api/my-account/primary-phone');
++  await createAuthenticatedKy(accessToken).delete('api/my-account/primary-phone');
+ };
+ 
+ export const updatePassword = async (accessToken: string, payload: { password: string }) => {
+-  await createAuthenticatedKy(accessToken).post('/api/my-account/password', {
++  await createAuthenticatedKy(accessToken).post('api/my-account/password', {
+     json: payload,
+   });
+ };
+diff --git a/packages/account/src/apis/avatar.ts b/packages/account/src/apis/avatar.ts
+index 943c4841b..4bf2897f6 100644
+--- a/packages/account/src/apis/avatar.ts
++++ b/packages/account/src/apis/avatar.ts
+@@ -11,7 +11,7 @@ export const uploadAccountAvatar = async (
+   formData.append('file', file);
+ 
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/my-account/user-assets/avatar', {
++    .post('api/my-account/user-assets/avatar', {
+       body: formData,
+       signal: options?.signal,
+     })
+diff --git a/packages/account/src/apis/base-ky.ts b/packages/account/src/apis/base-ky.ts
+index 2e0266689..6eac50d15 100644
+--- a/packages/account/src/apis/base-ky.ts
++++ b/packages/account/src/apis/base-ky.ts
+@@ -1,7 +1,10 @@
+ import ky from 'ky';
+ 
++import { tenantBasePath } from '@ac/utils/account-center-internal-route';
++
+ export const createAuthenticatedKy = (accessToken: string) =>
+   ky.create({
++    prefixUrl: tenantBasePath + '/',
+     hooks: {
+       beforeRequest: [
+         (request) => {
+diff --git a/packages/account/src/apis/logto-config.ts b/packages/account/src/apis/logto-config.ts
+index 2bb88eff4..3af1a2370 100644
+--- a/packages/account/src/apis/logto-config.ts
++++ b/packages/account/src/apis/logto-config.ts
+@@ -15,7 +15,7 @@ export type UserLogtoConfigResponse = {
+ 
+ export const getLogtoConfig = async (accessToken: string): Promise<UserLogtoConfigResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account/logto-configs')
++    .get('api/my-account/logto-configs')
+     .json<UserLogtoConfigResponse>();
+ };
+ 
+@@ -24,7 +24,7 @@ export const updateLogtoConfig = async (
+   payload: { mfa?: Omit<UserMfaData, 'required'>; passkeySignIn?: UserPasskeySignInData }
+ ): Promise<UserLogtoConfigResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .patch('/api/my-account/logto-configs', {
++    .patch('api/my-account/logto-configs', {
+       json: payload,
+     })
+     .json<UserLogtoConfigResponse>();
+diff --git a/packages/account/src/apis/mfa.ts b/packages/account/src/apis/mfa.ts
+index 3aeb63245..a576bf6c3 100644
+--- a/packages/account/src/apis/mfa.ts
++++ b/packages/account/src/apis/mfa.ts
+@@ -29,25 +29,25 @@ export const getMfaVerifications = async (
+   accessToken: string
+ ): Promise<UserMfaVerificationResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account/mfa-verifications')
++    .get('api/my-account/mfa-verifications')
+     .json<UserMfaVerificationResponse>();
+ };
+ 
+ export const generateTotpSecret = async (accessToken: string): Promise<TotpSecretResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/my-account/mfa-verifications/totp-secret/generate')
++    .post('api/my-account/mfa-verifications/totp-secret/generate')
+     .json<TotpSecretResponse>();
+ };
+ 
+ export const generateBackupCodes = async (accessToken: string): Promise<BackupCodesResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/my-account/mfa-verifications/backup-codes/generate')
++    .post('api/my-account/mfa-verifications/backup-codes/generate')
+     .json<BackupCodesResponse>();
+ };
+ 
+ export const getBackupCodesList = async (accessToken: string): Promise<BackupCodesListResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account/mfa-verifications/backup-codes')
++    .get('api/my-account/mfa-verifications/backup-codes')
+     .json<BackupCodesListResponse>();
+ };
+ 
+@@ -55,7 +55,7 @@ export const addTotpMfa = async (
+   accessToken: string,
+   payload: { secret: string; code?: string }
+ ) => {
+-  await createAuthenticatedKy(accessToken).post('/api/my-account/mfa-verifications', {
++  await createAuthenticatedKy(accessToken).post('api/my-account/mfa-verifications', {
+     json: { type: MfaFactor.TOTP, ...payload },
+   });
+ };
+@@ -64,13 +64,13 @@ export const createOrReplaceTotpMfa = async (
+   accessToken: string,
+   payload: { secret: string; code: string }
+ ) => {
+-  await createAuthenticatedKy(accessToken).put('/api/my-account/mfa-verifications/totp', {
++  await createAuthenticatedKy(accessToken).put('api/my-account/mfa-verifications/totp', {
+     json: payload,
+   });
+ };
+ 
+ export const addBackupCodeMfa = async (accessToken: string, payload: { codes: string[] }) => {
+-  await createAuthenticatedKy(accessToken).post('/api/my-account/mfa-verifications', {
++  await createAuthenticatedKy(accessToken).post('api/my-account/mfa-verifications', {
+     json: { type: MfaFactor.BackupCode, ...payload },
+   });
+ };
+@@ -80,7 +80,7 @@ export const deleteMfaVerification = async (
+   mfaVerificationId: string
+ ): Promise<void> => {
+   await createAuthenticatedKy(accessToken).delete(
+-    `/api/my-account/mfa-verifications/${mfaVerificationId}`
++    `api/my-account/mfa-verifications/${mfaVerificationId}`
+   );
+ };
+ 
+@@ -94,7 +94,7 @@ export const createWebAuthnRegistration = async (
+   accessToken: string
+ ): Promise<WebAuthnRegistrationResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/verifications/web-authn/registration')
++    .post('api/verifications/web-authn/registration')
+     .json<WebAuthnRegistrationResponse>();
+ };
+ 
+@@ -104,7 +104,7 @@ export const verifyWebAuthnRegistration = async (
+   payload: BindWebAuthnPayload
+ ): Promise<{ verificationRecordId: string }> => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/verifications/web-authn/registration/verify', {
++    .post('api/verifications/web-authn/registration/verify', {
+       json: { verificationRecordId, payload },
+     })
+     .json<{ verificationRecordId: string }>();
+@@ -114,7 +114,7 @@ export const addWebAuthnMfa = async (
+   accessToken: string,
+   payload: { newIdentifierVerificationRecordId: string; name?: string }
+ ) => {
+-  await createAuthenticatedKy(accessToken).post('/api/my-account/mfa-verifications', {
++  await createAuthenticatedKy(accessToken).post('api/my-account/mfa-verifications', {
+     json: { type: MfaFactor.WebAuthn, ...payload },
+   });
+ };
+@@ -125,7 +125,7 @@ export const updateWebAuthnName = async (
+   name: string
+ ) => {
+   await createAuthenticatedKy(accessToken).patch(
+-    `/api/my-account/mfa-verifications/${mfaVerificationId}/name`,
++    `api/my-account/mfa-verifications/${mfaVerificationId}/name`,
+     {
+       json: { name },
+     }
+@@ -134,7 +134,7 @@ export const updateWebAuthnName = async (
+ 
+ export const getMfaSettings = async (accessToken: string): Promise<UserMfaSettingsResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account/mfa-settings')
++    .get('api/my-account/mfa-settings')
+     .json<UserMfaSettingsResponse>();
+ };
+ 
+@@ -143,7 +143,7 @@ export const updateMfaSettings = async (
+   payload: { skipMfaOnSignIn: boolean; enabled?: boolean }
+ ): Promise<UserMfaSettingsResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .patch('/api/my-account/mfa-settings', {
++    .patch('api/my-account/mfa-settings', {
+       json: payload,
+     })
+     .json<UserMfaSettingsResponse>();
+diff --git a/packages/account/src/apis/personal-access-tokens.ts b/packages/account/src/apis/personal-access-tokens.ts
+index 707cb2ff0..071ec6c53 100644
+--- a/packages/account/src/apis/personal-access-tokens.ts
++++ b/packages/account/src/apis/personal-access-tokens.ts
+@@ -9,7 +9,7 @@ export const getPersonalAccessTokens = async (
+   accessToken: string
+ ): Promise<AccountPersonalAccessTokenResponse[]> => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account/personal-access-tokens')
++    .get('api/my-account/personal-access-tokens')
+     .json<AccountPersonalAccessTokenResponse[]>();
+ };
+ 
+@@ -18,7 +18,7 @@ export const createPersonalAccessToken = async (
+   payload: { name: string; expiresAt: number }
+ ): Promise<AccountCreatedPersonalAccessTokenResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/my-account/personal-access-tokens', {
++    .post('api/my-account/personal-access-tokens', {
+       json: payload,
+     })
+     .json<AccountCreatedPersonalAccessTokenResponse>();
+@@ -29,7 +29,7 @@ export const renamePersonalAccessToken = async (
+   payload: { currentName: string; name: string }
+ ): Promise<AccountPersonalAccessTokenResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .patch('/api/my-account/personal-access-tokens', {
++    .patch('api/my-account/personal-access-tokens', {
+       json: payload,
+     })
+     .json<AccountPersonalAccessTokenResponse>();
+@@ -39,7 +39,7 @@ export const revokePersonalAccessToken = async (
+   accessToken: string,
+   name: string
+ ): Promise<void> => {
+-  await createAuthenticatedKy(accessToken).post('/api/my-account/personal-access-tokens/delete', {
++  await createAuthenticatedKy(accessToken).post('api/my-account/personal-access-tokens/delete', {
+     json: { name },
+   });
+ };
+diff --git a/packages/account/src/apis/phrases.ts b/packages/account/src/apis/phrases.ts
+index 63cebd082..104413da8 100644
+--- a/packages/account/src/apis/phrases.ts
++++ b/packages/account/src/apis/phrases.ts
+@@ -1,3 +1,5 @@
++import { tenantBasePath } from '@ac/utils/account-center-internal-route';
++
+ import { conditional } from '@silverhand/essentials';
+ import ky from 'ky';
+ 
+@@ -28,7 +30,7 @@ export const getPhrases = async ({
+         ],
+       },
+     })
+-    .get('/api/.well-known/phrases', {
++    .get(tenantBasePath + '/api/.well-known/phrases', {
+       searchParams: buildSearchParameters({
+         lng: language,
+       }),
+diff --git a/packages/account/src/apis/sessions.ts b/packages/account/src/apis/sessions.ts
+index f37fb54dc..6970d7343 100644
+--- a/packages/account/src/apis/sessions.ts
++++ b/packages/account/src/apis/sessions.ts
+@@ -7,24 +7,24 @@ import { createAuthenticatedKy } from './base-ky';
+ 
+ export const getSessions = async (accessToken: string): Promise<GetAccountUserSessionsResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account/sessions')
++    .get('api/my-account/sessions')
+     .json<GetAccountUserSessionsResponse>();
+ };
+ 
+ export const revokeSession = async (accessToken: string, sessionId: string): Promise<void> => {
+-  await createAuthenticatedKy(accessToken).delete(`/api/my-account/sessions/${sessionId}`, {
++  await createAuthenticatedKy(accessToken).delete(`api/my-account/sessions/${sessionId}`, {
+     searchParams: { revokeGrantsTarget: 'all' },
+   });
+ };
+ 
+ export const getGrants = async (accessToken: string): Promise<GetUserApplicationGrantsResponse> => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account/grants', {
++    .get('api/my-account/grants', {
+       searchParams: { appType: 'thirdParty' },
+     })
+     .json<GetUserApplicationGrantsResponse>();
+ };
+ 
+ export const revokeGrant = async (accessToken: string, grantId: string): Promise<void> => {
+-  await createAuthenticatedKy(accessToken).delete(`/api/my-account/grants/${grantId}`);
++  await createAuthenticatedKy(accessToken).delete(`api/my-account/grants/${grantId}`);
+ };
+diff --git a/packages/account/src/apis/sign-in-experience.ts b/packages/account/src/apis/sign-in-experience.ts
+index 315e0927b..42e2de2d4 100644
+--- a/packages/account/src/apis/sign-in-experience.ts
++++ b/packages/account/src/apis/sign-in-experience.ts
+@@ -1,6 +1,8 @@
++import { tenantBasePath } from '@ac/utils/account-center-internal-route';
++
+ import type { SignInExperienceResponse } from '@experience/shared/types';
+ import ky from 'ky';
+ 
+ export const getSignInExperienceSettings = async (): Promise<SignInExperienceResponse> => {
+-  return ky.get('/api/.well-known/sign-in-exp').json<SignInExperienceResponse>();
++  return ky.get(tenantBasePath + '/api/.well-known/sign-in-exp').json<SignInExperienceResponse>();
+ };
+diff --git a/packages/account/src/apis/social.ts b/packages/account/src/apis/social.ts
+index 112119f24..f0e702928 100644
+--- a/packages/account/src/apis/social.ts
++++ b/packages/account/src/apis/social.ts
+@@ -10,7 +10,7 @@ export const createSocialVerification = async (
+   }
+ ) => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/verifications/social', {
++    .post('api/verifications/social', {
+       json: payload,
+     })
+     .json<{
+@@ -28,7 +28,7 @@ export const verifySocialVerification = async (
+   }
+ ) => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/verifications/social/verify', {
++    .post('api/verifications/social/verify', {
+       json: payload,
+     })
+     .json<{
+@@ -40,7 +40,7 @@ export const linkSocialIdentity = async (
+   accessToken: string,
+   socialVerificationRecordId: string
+ ) => {
+-  await createAuthenticatedKy(accessToken).post('/api/my-account/identities', {
++  await createAuthenticatedKy(accessToken).post('api/my-account/identities', {
+     json: {
+       newIdentifierVerificationRecordId: socialVerificationRecordId,
+     },
+@@ -48,14 +48,14 @@ export const linkSocialIdentity = async (
+ };
+ 
+ export const deleteSocialIdentity = async (accessToken: string, target: string) => {
+-  await createAuthenticatedKy(accessToken).delete(`/api/my-account/identities/${target}`);
++  await createAuthenticatedKy(accessToken).delete(`api/my-account/identities/${target}`);
+ };
+ 
+ export const replaceSocialIdentity = async (
+   accessToken: string,
+   socialVerificationRecordId: string
+ ): Promise<void> => {
+-  await createAuthenticatedKy(accessToken).put('/api/my-account/identities', {
++  await createAuthenticatedKy(accessToken).put('api/my-account/identities', {
+     json: {
+       newIdentifierVerificationRecordId: socialVerificationRecordId,
+     },
+diff --git a/packages/account/src/apis/trusted-devices.ts b/packages/account/src/apis/trusted-devices.ts
+index 9928ea90d..84a8132ee 100644
+--- a/packages/account/src/apis/trusted-devices.ts
++++ b/packages/account/src/apis/trusted-devices.ts
+@@ -6,7 +6,7 @@ export const getTrustedDevices = async (
+   accessToken: string
+ ): Promise<AccountTrustedDeviceResponse[]> => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account/trusted-devices')
++    .get('api/my-account/trusted-devices')
+     .json<AccountTrustedDeviceResponse[]>();
+ };
+ 
+@@ -15,6 +15,6 @@ export const removeTrustedDevice = async (
+   trustedDeviceId: string
+ ): Promise<void> => {
+   await createAuthenticatedKy(accessToken).delete(
+-    `/api/my-account/trusted-devices/${trustedDeviceId}`
++    `api/my-account/trusted-devices/${trustedDeviceId}`
+   );
+ };
+diff --git a/packages/account/src/apis/user.ts b/packages/account/src/apis/user.ts
+index cc7641e33..3c0bcc087 100644
+--- a/packages/account/src/apis/user.ts
++++ b/packages/account/src/apis/user.ts
+@@ -4,6 +4,6 @@ import { createAuthenticatedKy } from './base-ky';
+ 
+ export const getUserInfo = async (accessToken: string) => {
+   return createAuthenticatedKy(accessToken)
+-    .get('/api/my-account')
++    .get('api/my-account')
+     .json<Partial<UserProfileResponse>>();
+ };
+diff --git a/packages/account/src/apis/verification.ts b/packages/account/src/apis/verification.ts
+index 411abf47a..5599f632f 100644
+--- a/packages/account/src/apis/verification.ts
++++ b/packages/account/src/apis/verification.ts
+@@ -4,7 +4,7 @@ import { createAuthenticatedKy } from './base-ky';
+ 
+ export const sendEmailVerificationCode = async (accessToken: string, email: string) => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/verifications/verification-code', {
++    .post('api/verifications/verification-code', {
+       json: {
+         identifier: {
+           type: SignInIdentifier.Email,
+@@ -20,7 +20,7 @@ export const sendEmailVerificationCode = async (accessToken: string, email: stri
+ 
+ export const sendPhoneVerificationCode = async (accessToken: string, phone: string) => {
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/verifications/verification-code', {
++    .post('api/verifications/verification-code', {
+       json: {
+         identifier: {
+           type: SignInIdentifier.Phone,
+@@ -45,7 +45,7 @@ export const verifyEmailVerificationCode = async (
+   const { verificationRecordId, code, email } = payload;
+ 
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/verifications/verification-code/verify', {
++    .post('api/verifications/verification-code/verify', {
+       json: {
+         identifier: {
+           type: SignInIdentifier.Email,
+@@ -71,7 +71,7 @@ export const verifyPhoneVerificationCode = async (
+   const { verificationRecordId, code, phone } = payload;
+ 
+   return createAuthenticatedKy(accessToken)
+-    .post('/api/verifications/verification-code/verify', {
++    .post('api/verifications/verification-code/verify', {
+       json: {
+         identifier: {
+           type: SignInIdentifier.Phone,
+diff --git a/packages/account/src/pages/SocialCallback/index.tsx b/packages/account/src/pages/SocialCallback/index.tsx
+index 7f36c315a..33cf952ec 100644
+--- a/packages/account/src/pages/SocialCallback/index.tsx
++++ b/packages/account/src/pages/SocialCallback/index.tsx
+@@ -1,3 +1,5 @@
++import { tenantBasePath } from '@ac/utils/account-center-internal-route';
++
+ import { AccountCenterControlValue, type ExperienceSocialConnector } from '@logto/schemas';
+ import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+ import { useTranslation } from 'react-i18next';
+@@ -148,7 +150,7 @@ const SocialCallback = () => {
+     };
+ 
+     const completeCallback = async () => {
+-      const redirectUri = `${window.location.origin}/callback/${connectorId}`;
++      const redirectUri = `${window.location.origin}${tenantBasePath}/callback/${connectorId}`;
+       const [verifyError] = await verifySocialVerificationRequest({
+         verificationRecordId: storedSocialFlow.verificationRecordId,
+         connectorData: {
+diff --git a/packages/account/src/pages/SocialFlow/index.tsx b/packages/account/src/pages/SocialFlow/index.tsx
+index 552fc75d3..fdb12ac8a 100644
+--- a/packages/account/src/pages/SocialFlow/index.tsx
++++ b/packages/account/src/pages/SocialFlow/index.tsx
+@@ -1,3 +1,5 @@
++import { tenantBasePath } from '@ac/utils/account-center-internal-route';
++
+ import {
+   AccountCenterControlValue,
+   accountCenterSocialStatePrefix,
+@@ -173,7 +175,7 @@ const SocialFlow = ({ mode }: Props) => {
+       }
+ 
+       const state = generateState();
+-      const redirectUri = `${window.location.origin}/callback/${connectorId}`;
++      const redirectUri = `${window.location.origin}${tenantBasePath}/callback/${connectorId}`;
+       const [error, result] = await createSocialVerificationRequest({
+         connectorId,
+         state,
+@@ -223,7 +225,7 @@ const SocialFlow = ({ mode }: Props) => {
+ 
+       // Pre-OAuth phase: start add flow to replace existing identity
+       const state = generateState();
+-      const redirectUri = `${window.location.origin}/callback/${connectorId}`;
++      const redirectUri = `${window.location.origin}${tenantBasePath}/callback/${connectorId}`;
+       const [error, result] = await createSocialVerificationRequest({
+         connectorId,
+         state,
+diff --git a/packages/account/src/utils/account-center-internal-route.ts b/packages/account/src/utils/account-center-internal-route.ts
+index c25362ac9..d695bd2f3 100644
+--- a/packages/account/src/utils/account-center-internal-route.ts
++++ b/packages/account/src/utils/account-center-internal-route.ts
+@@ -1,4 +1,5 @@
+-export const accountCenterBasePath = '/account';
++export const tenantBasePath: string = import.meta.env.ADMIN_ACCOUNT_BASE_PATH ?? '';
++export const accountCenterBasePath = tenantBasePath + '/account';
+ 
+ const getCurrentOrigin = () => {
+   if (typeof window === 'undefined') {
+diff --git a/packages/account/vite.config.ts b/packages/account/vite.config.ts
+index b781a75d3..50fe0d74f 100644
+--- a/packages/account/vite.config.ts
++++ b/packages/account/vite.config.ts
+@@ -34,7 +34,8 @@ const experienceAliasPlugin = (): Plugin => ({
+ });
+ 
+ const buildConfig = (mode: string): UserConfig => ({
+-  base: '/account',
++  base: (process.env.ADMIN_ACCOUNT_BASE_PATH ?? '') + '/account/',
++  build: { outDir: process.env.ADMIN_ACCOUNT_BASE_PATH ? 'dist-admin' : 'dist' },
+   server: {
+     port: 5004,
+     hmr: {
+@@ -64,6 +65,12 @@ const buildConfig = (mode: string): UserConfig => ({
+     viteCompression({ disable: mode === 'development', algorithm: 'brotliCompress' }),
+   ],
+   define: {
++    'process.env.ADMIN_EXPERIENCE_BASE_PATH': JSON.stringify(
++      process.env.ADMIN_ACCOUNT_BASE_PATH ?? ''
++    ),
++    'import.meta.env.ADMIN_ACCOUNT_BASE_PATH': JSON.stringify(
++      process.env.ADMIN_ACCOUNT_BASE_PATH ?? ''
++    ),
+     'import.meta.env.DEV_FEATURES_ENABLED': JSON.stringify(process.env.DEV_FEATURES_ENABLED),
+   },
+ });
+diff --git a/packages/console/src/App.tsx b/packages/console/src/App.tsx
+index d9f21ac74..576272ba3 100644
+--- a/packages/console/src/App.tsx
++++ b/packages/console/src/App.tsx
+@@ -24,10 +24,12 @@ import 'react-day-picker/dist/style.css';
+ 
+ import CloudAppRoutes from '@/cloud/AppRoutes';
+ import AppLoading from '@/components/AppLoading';
+-import { isCloud, postHogHost, postHogUiHost, postHogKey } from '@/consts/env';
++import { adminBasePath, isCloud, postHogHost, postHogUiHost, postHogKey } from '@/consts/env';
+ import { cloudApi, getManagementApi, meApi } from '@/consts/resources';
+ import { ConsoleRoutes } from '@/containers/ConsoleRoutes';
+ 
++import PortalOidcClient from '../../experience/src/shared/portal-oidc-client';
++
+ import { GlobalScripts } from './components/Conversion';
+ import { adminTenantEndpoint, mainTitle } from './consts';
+ import ErrorBoundary from './containers/ErrorBoundary';
+@@ -50,16 +52,19 @@ void initI18n();
+  * get the current tenant ID from the URL.
+  */
+ function App() {
+-  const router = createBrowserRouter([
+-    {
+-      path: '*',
+-      element: (
+-        <TenantsProvider>
+-          <Providers />
+-        </TenantsProvider>
+-      ),
+-    },
+-  ]);
++  const router = createBrowserRouter(
++    [
++      {
++        path: '*',
++        element: (
++          <TenantsProvider>
++            <Providers />
++          </TenantsProvider>
++        ),
++      },
++    ],
++    { basename: adminBasePath || '/' }
++  );
+ 
+   return <RouterProvider router={router} />;
+ }
+@@ -116,6 +121,7 @@ function Providers() {
+       }}
+     >
+       <LogtoProvider
++        LogtoClientClass={adminBasePath ? PortalOidcClient : undefined}
+         unstable_enableCache
+         config={{
+           endpoint: adminTenantEndpoint.href,
+diff --git a/packages/console/src/components/OssTenantMfaBanner/index.tsx b/packages/console/src/components/OssTenantMfaBanner/index.tsx
+index a5415ac1e..f498ad29d 100644
+--- a/packages/console/src/components/OssTenantMfaBanner/index.tsx
++++ b/packages/console/src/components/OssTenantMfaBanner/index.tsx
+@@ -6,7 +6,7 @@ import useOssTenantMfa from '@/hooks/use-oss-tenant-mfa';
+ import styles from './index.module.scss';
+ 
+ /** The Account Center page where the signed-in user sets up MFA. */
+-const accountSecurityUrl = new URL('/account/security', adminTenantEndpoint).href;
++const accountSecurityUrl = new URL('account/security', adminTenantEndpoint).href;
+ 
+ /**
+  * Self-hosted only: tells a member who has no MFA while the tenant requires it to set it up now.
+diff --git a/packages/console/src/components/RedirectToAccountCenter/index.tsx b/packages/console/src/components/RedirectToAccountCenter/index.tsx
+index 8ec12fd2a..a39d7854b 100644
+--- a/packages/console/src/components/RedirectToAccountCenter/index.tsx
++++ b/packages/console/src/components/RedirectToAccountCenter/index.tsx
+@@ -7,7 +7,7 @@ import { adminTenantEndpoint } from '@/consts';
+  */
+ function RedirectToAccountCenter() {
+   useEffect(() => {
+-    const accountUrl = new URL('/account/profile', adminTenantEndpoint.href);
++    const accountUrl = new URL('account/profile', adminTenantEndpoint.href);
+     // eslint-disable-next-line @silverhand/fp/no-mutation
+     window.location.href = accountUrl.toString();
+   }, []);
+diff --git a/packages/console/src/components/Topbar/UserInfo/index.tsx b/packages/console/src/components/Topbar/UserInfo/index.tsx
+index ea53cd803..e00f662cf 100644
+--- a/packages/console/src/components/Topbar/UserInfo/index.tsx
++++ b/packages/console/src/components/Topbar/UserInfo/index.tsx
+@@ -119,7 +119,7 @@ function UserInfo() {
+           className={classNames(styles.dropdownItem, isLoading && styles.loading)}
+           icon={<Profile className={styles.icon} />}
+           onClick={() => {
+-            const accountUrl = new URL('/account/profile', adminTenantEndpoint.href);
++            const accountUrl = new URL('account/profile', adminTenantEndpoint.href);
+             window.open(accountUrl.toString(), '_blank', 'noopener,noreferrer');
+           }}
+         >
+diff --git a/packages/console/src/consts/env.ts b/packages/console/src/consts/env.ts
+index 7e602afd6..f6c6d9338 100644
+--- a/packages/console/src/consts/env.ts
++++ b/packages/console/src/consts/env.ts
+@@ -10,6 +10,7 @@ export const isCloud = yes(normalizeEnv(import.meta.env.IS_CLOUD));
+ export const isProtectedAppLocalDevEnabled =
+   !isProduction && yes(normalizeEnv(import.meta.env.PROTECTED_APP_LOCAL_DEV));
+ export const isProtectedAppEnabled = isCloud || isProtectedAppLocalDevEnabled;
++export const adminBasePath = normalizeEnv(import.meta.env.ADMIN_CONSOLE_BASE_PATH) ?? '';
+ export const adminEndpoint = normalizeEnv(import.meta.env.ADMIN_ENDPOINT);
+ 
+ export const isDevFeaturesEnabled =
+diff --git a/packages/console/src/consts/tenants.ts b/packages/console/src/consts/tenants.ts
+index f273328c2..c059babbe 100644
+--- a/packages/console/src/consts/tenants.ts
++++ b/packages/console/src/consts/tenants.ts
+@@ -10,7 +10,7 @@ import {
+ import { defaultRegionName } from '@/components/Region';
+ import { LogtoSkuType } from '@/types/skus';
+ 
+-import { adminEndpoint, isCloud } from './env';
++import { adminBasePath, adminEndpoint, isCloud } from './env';
+ 
+ const { tenantId, indicator } = defaultManagementApi.resource;
+ 
+@@ -159,6 +159,9 @@ export const defaultSubscriptionUsage: SubscriptionCountBasedUsage = {
+ };
+ 
+ const getAdminTenantEndpoint = () => {
++  if (adminBasePath) {
++    return new URL(adminBasePath + '/', window.location.origin);
++  }
+   // Allow endpoint override for dev or testing
+   if (adminEndpoint) {
+     return new URL(adminEndpoint);
+diff --git a/packages/console/src/containers/TenantAccess/index.tsx b/packages/console/src/containers/TenantAccess/index.tsx
+index d821106ec..2da3cb20e 100644
+--- a/packages/console/src/containers/TenantAccess/index.tsx
++++ b/packages/console/src/containers/TenantAccess/index.tsx
+@@ -5,7 +5,7 @@ import { useSWRConfig } from 'swr';
+ 
+ // Used in the docs
+ 
+-import { isCloud } from '@/consts/env';
++import { adminBasePath, isCloud } from '@/consts/env';
+ import { reservedTenantIdWildcard, TenantsContext } from '@/contexts/TenantsProvider';
+ import useUserDefaultTenantId from '@/hooks/use-user-default-tenant-id';
+ 
+@@ -87,7 +87,7 @@ export default function TenantAccess() {
+       }
+ 
+       // eslint-disable-next-line @silverhand/fp/no-mutation
+-      window.location.href = '/';
++      window.location.href = adminBasePath + '/';
+     }
+   }, [currentTenant, currentTenantId, isAuthenticated, pathname, defaultTenantId]);
+ 
+diff --git a/packages/console/src/hooks/use-api.ts b/packages/console/src/hooks/use-api.ts
+index c48438e22..934c36a41 100644
+--- a/packages/console/src/hooks/use-api.ts
++++ b/packages/console/src/hooks/use-api.ts
+@@ -20,7 +20,7 @@ import { toast } from 'react-hot-toast';
+ import { useTranslation } from 'react-i18next';
+ 
+ import { requestTimeout, contactEmailLink } from '@/consts';
+-import { isCloud } from '@/consts/env';
++import { adminBasePath, isCloud } from '@/consts/env';
+ import { AppDataContext } from '@/contexts/AppDataProvider';
+ import { SubscriptionDataContext } from '@/contexts/SubscriptionDataProvider';
+ import { TenantsContext } from '@/contexts/TenantsProvider';
+@@ -218,7 +218,9 @@ const useApi = (props: Omit<StaticApiProps, 'prefixUrl' | 'resourceIndicator'> =
+             resourceIndicator: buildOrganizationUrn(getTenantOrganizationId(currentTenantId)),
+           }
+         : {
+-            prefixUrl: tenantEndpoint,
++            prefixUrl: adminBasePath
++              ? new URL(adminBasePath + '/management/', window.location.origin)
++              : tenantEndpoint,
+             resourceIndicator: getManagementApiResourceIndicator(currentTenantId),
+           },
+     [currentTenantId, tenantEndpoint]
+diff --git a/packages/console/src/utils/oss-upsell.ts b/packages/console/src/utils/oss-upsell.ts
+index db3253dce..4d4d7d5df 100644
+--- a/packages/console/src/utils/oss-upsell.ts
++++ b/packages/console/src/utils/oss-upsell.ts
+@@ -1,6 +1,7 @@
+ import { ossConsolePath } from '@logto/schemas';
+ import { joinPath } from '@silverhand/essentials';
+ 
++import { adminBasePath } from '@/consts/env';
+ import { logtoCloudConsoleLink } from '@/consts/external-links';
+ import { TenantSettingsTabs } from '@/consts/page-tabs';
+ 
+@@ -70,4 +71,4 @@ export const openCloudUpsell = ({ entry, target = '_blank' }: OpenOssUpsellOptio
+ 
+ /** Opens the License page in the same tab by default. */
+ export const openSelfHostedPlansUpsell = ({ entry, target = '_self' }: OpenOssUpsellOptions) =>
+-  openUpsellUrl(buildSelfHostedPlansUrl(entry), target);
++  openUpsellUrl(adminBasePath + buildSelfHostedPlansUrl(entry), target);
+diff --git a/packages/console/src/utils/storage.ts b/packages/console/src/utils/storage.ts
+index 65109981b..608eb4aa1 100644
+--- a/packages/console/src/utils/storage.ts
++++ b/packages/console/src/utils/storage.ts
+@@ -2,6 +2,7 @@ import { trySafe } from '@silverhand/essentials';
+ import { type Path } from 'react-router-dom';
+ import { z } from 'zod';
+ 
++import { adminBasePath } from '@/consts/env';
+ import { storageKeys } from '@/consts';
+ 
+ /** Save the current url to session storage so that we can redirect to it after sign in. */
+@@ -10,7 +11,14 @@ export const saveRedirect = (target?: URL) => {
+   const { pathname, search, hash } = isValidTarget ? target : window.location;
+   sessionStorage.setItem(
+     storageKeys.redirectAfterSignIn,
+-    JSON.stringify({ pathname, search, hash })
++    JSON.stringify({
++      pathname:
++        adminBasePath && pathname.startsWith(adminBasePath + '/')
++          ? pathname.slice(adminBasePath.length)
++          : pathname,
++      search,
++      hash,
++    })
+   );
+ };
+ 
+diff --git a/packages/console/vite.config.ts b/packages/console/vite.config.ts
+index c9681085f..e6dd78194 100644
+--- a/packages/console/vite.config.ts
++++ b/packages/console/vite.config.ts
+@@ -16,7 +16,9 @@ import { defaultConfig, manualChunks } from '../../vite.shared.config';
+ dotenv.config({ path: await findUp('.env', {}) });
+ 
+ const buildConfig = (mode: string): UserConfig => ({
+-  base: `${process.env.CONSOLE_PUBLIC_URL ?? '/console'}`,
++  base: process.env.ADMIN_CONSOLE_BASE_PATH
++    ? process.env.ADMIN_CONSOLE_BASE_PATH + '/console/'
++    : (process.env.CONSOLE_PUBLIC_URL ?? '/console'),
+   envDir: '../../',
+   server: {
+     port: 5002,
+@@ -46,6 +48,9 @@ const buildConfig = (mode: string): UserConfig => ({
+   define: {
+     'import.meta.env.IS_CLOUD': JSON.stringify(process.env.IS_CLOUD),
+     'import.meta.env.PROTECTED_APP_LOCAL_DEV': JSON.stringify(process.env.PROTECTED_APP_LOCAL_DEV),
++    'import.meta.env.ADMIN_CONSOLE_BASE_PATH': JSON.stringify(
++      process.env.ADMIN_CONSOLE_BASE_PATH ?? ''
++    ),
+     'import.meta.env.ADMIN_ENDPOINT': JSON.stringify(process.env.ADMIN_ENDPOINT),
+     'import.meta.env.DEV_FEATURES_ENABLED': JSON.stringify(process.env.DEV_FEATURES_ENABLED),
+     'import.meta.env.INTEGRATION_TEST': JSON.stringify(process.env.INTEGRATION_TEST),
+diff --git a/packages/core/src/app/init.ts b/packages/core/src/app/init.ts
+index a65115816..8e4237449 100644
+--- a/packages/core/src/app/init.ts
++++ b/packages/core/src/app/init.ts
+@@ -6,7 +6,9 @@ import { appInsights } from '@logto/app-insights/node';
+ import { ConsoleLog } from '@logto/shared';
+ import { toTitle, trySafe } from '@silverhand/essentials';
+ import chalk from 'chalk';
+-import type Koa from 'koa';
++import { adminTenantId } from '@logto/schemas';
++import Koa from 'koa';
++import compose from 'koa-compose';
+ import koaLogger from 'koa-logger';
+ import { nanoid } from 'nanoid';
+ 
+@@ -28,6 +30,25 @@ const logListening = (type: 'core' | 'admin' = 'core') => {
+ const serverTimeout = 120_000;
+ 
+ export default async function initApp(app: Koa): Promise<void> {
++  const { adminUrlSet } = EnvSet.values;
++  const prefix = process.env.ADMIN_CONSOLE_BASE_PATH;
++  const endpoint = prefix ? adminUrlSet.endpoint : undefined;
++  if (
++    prefix &&
++    (!/^\/[a-z][a-z0-9-]*$/.test(prefix) ||
++      endpoint?.protocol !== 'https:' ||
++      endpoint.pathname !== prefix + '/' ||
++      endpoint.username ||
++      endpoint.password ||
++      endpoint.search ||
++      endpoint.hash ||
++      adminUrlSet.isLocalhostDisabled ||
++      EnvSet.values.isMultiTenancy)
++  ) {
++    throw new Error(
++      'Prefixed OSS Console requires a dedicated admin listener and an HTTPS ADMIN_ENDPOINT ending in ADMIN_CONSOLE_BASE_PATH + "/".'
++    );
++  }
+   app.use(async (ctx, next) => {
+     const requestId = nanoid(16);
+     const consoleLog = new ConsoleLog(chalk.blue(requestId));
+@@ -40,7 +61,9 @@ export default async function initApp(app: Koa): Promise<void> {
+         if (!EnvSet.values.isProduction && path.basename(requestPath).includes('.')) {
+           return;
+         }
+-        consoleLog.plain(string);
++        consoleLog.plain(
++          prefix ? string.replace(requestPath, requestPath.split('?')[0] ?? '') : string
++        );
+       },
+     })(ctx, next);
+ 
+@@ -57,7 +80,10 @@ export default async function initApp(app: Koa): Promise<void> {
+ 
+     const [tenantId, isCustomDomain] = await getTenantId(ctx.URL);
+ 
+-    if (!tenantId) {
++    if (
++      !tenantId ||
++      (prefix && tenantId === adminTenantId && ctx.req.socket.localPort !== adminUrlSet.port)
++    ) {
+       ctx.status = 404;
+ 
+       return next();
+@@ -90,13 +116,34 @@ export default async function initApp(app: Koa): Promise<void> {
+     }
+   });
+ 
+-  const { isHttpsEnabled, httpsCert, httpsKey, urlSet, adminUrlSet } = EnvSet.values;
++  // Only the dedicated admin listener trusts the TLS terminator. Check its fixed
++  // transport Host and both canonical forwarded values before constructing any tenant context.
++  const adminApp = prefix && endpoint ? new Koa({ proxy: true }) : app;
++  if (adminApp !== app && endpoint) {
++    adminApp.use(async (ctx, next) => {
++      if (
++        ctx.req.headers.host !== adminUrlSet.localhostUrl.host ||
++        ctx.get('X-Forwarded-Host') !== endpoint.host ||
++        ctx.get('X-Forwarded-Proto') !== 'https' ||
++        !ctx.originalUrl.startsWith('/') ||
++        ctx.originalUrl.startsWith('//') ||
++        !(ctx.path === prefix || ctx.path.startsWith(prefix + '/')) ||
++        ctx.path === prefix + '/callback'
++      ) {
++        ctx.status = 404;
++        return;
++      }
++      await next();
++    });
++    adminApp.use(compose(app.middleware));
++  }
++  const { isHttpsEnabled, httpsCert, httpsKey, urlSet } = EnvSet.values;
+ 
+   if (isHttpsEnabled && httpsCert && httpsKey) {
+-    const createHttp2Server = async () =>
++    const createHttp2Server = async (listener = app) =>
+       http2.createSecureServer(
+         { cert: await fs.readFile(httpsCert), key: await fs.readFile(httpsKey), allowHTTP1: true },
+-        app.callback()
++        listener.callback()
+       );
+ 
+     const coreServer = await createHttp2Server();
+@@ -107,7 +154,7 @@ export default async function initApp(app: Koa): Promise<void> {
+ 
+     // Create another server if admin localhost enabled
+     if (!adminUrlSet.isLocalhostDisabled) {
+-      const adminServer = await createHttp2Server();
++      const adminServer = await createHttp2Server(adminApp);
+       adminServer.listen(adminUrlSet.port, () => {
+         logListening('admin');
+       });
+@@ -125,7 +172,7 @@ export default async function initApp(app: Koa): Promise<void> {
+ 
+   // Create another server if admin localhost enabled
+   if (!adminUrlSet.isLocalhostDisabled) {
+-    const adminServer = app.listen(adminUrlSet.port, () => {
++    const adminServer = adminApp.listen(adminUrlSet.port, () => {
+       logListening('admin');
+     });
+     adminServer.setTimeout(serverTimeout);
+diff --git a/packages/core/src/middleware/koa-auth/index.ts b/packages/core/src/middleware/koa-auth/index.ts
+index 98e1f42ff..6bee1fcb5 100644
+--- a/packages/core/src/middleware/koa-auth/index.ts
++++ b/packages/core/src/middleware/koa-auth/index.ts
+@@ -48,6 +48,12 @@ export const verifyBearerTokenFromRequest = async (
+ 
+     const adminSet = await getAdminTenantTokenValidationSet();
+ 
++    // The portal listener's default-tenant Management API serves the native admin SPA.
++    // Bind that audience to the configured admin issuer and its own signing keys.
++    if (process.env.ADMIN_CONSOLE_BASE_PATH && audience === defaultManagementApi.resource.indicator) {
++      return [adminSet.keys, adminSet.issuer];
++    }
++
+     return [
+       [...publicJwks, ...adminSet.keys],
+       [issuer, ...adminSet.issuer],
+diff --git a/packages/core/src/middleware/koa-console-redirect-proxy.ts b/packages/core/src/middleware/koa-console-redirect-proxy.ts
+index 9e3779136..6fbeca6d2 100644
+--- a/packages/core/src/middleware/koa-console-redirect-proxy.ts
++++ b/packages/core/src/middleware/koa-console-redirect-proxy.ts
+@@ -10,20 +10,20 @@ export default function koaConsoleRedirectProxy<
+   StateT,
+   ContextT extends IRouterParamContext,
+   ResponseBodyT,
+->(queries: Queries): MiddlewareType<StateT, ContextT, ResponseBodyT> {
++>(queries: Queries, prefix = ''): MiddlewareType<StateT, ContextT, ResponseBodyT> {
+   const { hasActiveUsers } = queries.users;
+ 
+   return async (ctx, next) => {
+     const hasUser = await hasActiveUsers();
+ 
+     if ((ctx.path === '/' || ctx.path === ossConsolePath) && !hasUser) {
+-      ctx.redirect(path.join(ossConsolePath, '/welcome'));
++      ctx.redirect(path.join(prefix, ossConsolePath, '/welcome'));
+ 
+       return;
+     }
+ 
+     if ((ctx.path === '/' || ctx.path === path.join(ossConsolePath, '/welcome')) && hasUser) {
+-      ctx.redirect(ossConsolePath);
++      ctx.redirect(prefix + ossConsolePath);
+ 
+       return;
+     }
+diff --git a/packages/core/src/middleware/koa-spa-proxy.ts b/packages/core/src/middleware/koa-spa-proxy.ts
+index df7f3b31d..b8903175b 100644
+--- a/packages/core/src/middleware/koa-spa-proxy.ts
++++ b/packages/core/src/middleware/koa-spa-proxy.ts
+@@ -16,6 +16,7 @@ type Properties = {
+   readonly mountedApps: string[];
+   readonly queries: Queries;
+   readonly packagePath?: string;
++  readonly distribution?: string;
+   readonly port?: number;
+   readonly prefix?: string;
+ };
+@@ -23,13 +24,14 @@ type Properties = {
+ export default function koaSpaProxy<StateT, ContextT extends IRouterParamContext, ResponseBodyT>({
+   mountedApps,
+   packagePath = 'experience',
++  distribution = 'dist',
+   port = 5001,
+   prefix = '',
+   queries,
+ }: Properties): MiddlewareType<StateT, ContextT, ResponseBodyT> {
+   type Middleware = MiddlewareType<StateT, ContextT, ResponseBodyT>;
+ 
+-  const distributionPath = path.join('node_modules/@logto', packagePath, 'dist');
++  const distributionPath = path.join('node_modules/@logto', packagePath, distribution);
+ 
+   const spaProxy: Middleware = EnvSet.values.isProduction
+     ? serveStatic(distributionPath)
+diff --git a/packages/core/src/middleware/koa-spa-session-guard.ts b/packages/core/src/middleware/koa-spa-session-guard.ts
+index ff90b7618..a9a68c2ea 100644
+--- a/packages/core/src/middleware/koa-spa-session-guard.ts
++++ b/packages/core/src/middleware/koa-spa-session-guard.ts
+@@ -25,7 +25,11 @@ export default function koaSpaSessionGuard<
+   StateT,
+   ContextT extends IRouterParamContext,
+   ResponseBodyT,
+->(provider: Provider, queries: Queries): MiddlewareType<StateT, ContextT, ResponseBodyT> {
++>(
++  provider: Provider,
++  queries: Queries,
++  mountedTenantId?: string
++): MiddlewareType<StateT, ContextT, ResponseBodyT> {
+   return async (ctx, next) => {
+     const requestPath = ctx.request.path;
+     const isPreview = ctx.request.URL.searchParams.get('preview');
+@@ -64,7 +68,7 @@ export default function koaSpaSessionGuard<
+         }
+ 
+         // Redirect to the tenant's own session not found page
+-        const [tenantId] = await getTenantId(ctx.URL);
++        const tenantId = mountedTenantId ?? (await getTenantId(ctx.URL))[0];
+ 
+         if (!tenantId) {
+           throw new RequestError({ code: 'session.not_found', status: 404 });
+diff --git a/packages/core/src/oidc/adapter.ts b/packages/core/src/oidc/adapter.ts
+index c7330a722..901f533cb 100644
+--- a/packages/core/src/oidc/adapter.ts
++++ b/packages/core/src/oidc/adapter.ts
+@@ -3,6 +3,7 @@ import {
+   ApplicationType,
+   accountCenterApplicationId,
+   adminConsoleApplicationId,
++  adminTenantId,
+   demoAppApplicationId,
+   deviceDemoAppApplicationId,
+ } from '@logto/schemas';
+@@ -24,13 +25,27 @@ import { getConstantClientMetadata } from './utils.js';
+  * Append `redirect_uris` and `post_logout_redirect_uris` for Admin Console
+  * as Admin Console is attached to the admin tenant in OSS and its endpoints are dynamic (from env variable).
+  */
+-const transpileMetadata = (clientId: string, data: AllClientMetadata): AllClientMetadata => {
++const transpileMetadata = (
++  clientId: string,
++  data: AllClientMetadata,
++  portalIssuer?: string
++): AllClientMetadata => {
+   if (clientId !== adminConsoleApplicationId) {
+     return data;
+   }
+ 
+   const { adminUrlSet, cloudUrlSet } = EnvSet.values;
+ 
++  // The transport alias is not a browser redirect target for a mounted Console.
++  if (portalIssuer) {
++    const consoleUrl = appendPath(adminUrlSet.endpoint, '/console');
++    return {
++      ...data,
++      redirect_uris: [appendPath(consoleUrl, '/callback').href],
++      post_logout_redirect_uris: [consoleUrl.href],
++    };
++  }
++
+   const urls = [
+     ...adminUrlSet.deduplicated().map((url) => appendPath(url, '/console')),
+     ...cloudUrlSet.deduplicated(),
+@@ -82,9 +97,11 @@ const buildDeviceDemoAppClientMetadata = (envSet: EnvSet): AllClientMetadata =>
+ };
+ 
+ const buildAccountCenterClientMetadata = (envSet: EnvSet): AllClientMetadata => {
+-  const urlStrings = getTenantUrls(envSet.tenantId, EnvSet.values, envSet.endpoint).map(
+-    (url) => appendPath(url, '/account').href
+-  );
++  const urls =
++    envSet.tenantId === adminTenantId && process.env.ADMIN_CONSOLE_BASE_PATH
++      ? [envSet.endpoint]
++      : getTenantUrls(envSet.tenantId, EnvSet.values, envSet.endpoint);
++  const urlStrings = urls.map((url) => appendPath(url, '/account').href);
+ 
+   return {
+     ...getConstantClientMetadata(envSet, ApplicationType.SPA),
+@@ -146,6 +163,11 @@ export default function postgresAdapter(
+     },
+   } = queries;
+ 
++  const portalIssuer =
++    envSet.tenantId === adminTenantId && process.env.ADMIN_CONSOLE_BASE_PATH
++      ? envSet.oidc.issuer
++      : undefined;
++
+   if (modelName === 'Client') {
+     const reject = async () => {
+       throw new Error('Not implemented');
+@@ -168,7 +190,7 @@ export default function postgresAdapter(
+       client_name,
+       [appLevelAccessControlMetadataKey]: appLevelAccessControlEnabled,
+       ...getConstantClientMetadata(envSet, type, customClientMetadata),
+-      ...transpileMetadata(client_id, snakecaseKeys(oidcClientMetadata)),
++      ...transpileMetadata(client_id, snakecaseKeys(oidcClientMetadata), portalIssuer),
+       // `node-oidc-provider` won't camelCase custom parameter keys, so we need to keep the keys camelCased
+       ...customClientMetadata,
+       /* Third-party client scopes are restricted to the app-level enabled user scopes. */
+@@ -178,6 +200,9 @@ export default function postgresAdapter(
+     return {
+       upsert: reject,
+       find: async (id) => {
++        if (portalIssuer && id !== adminConsoleApplicationId && id !== accountCenterApplicationId) {
++          return;
++        }
+         if (id === demoAppApplicationId) {
+           return buildDemoAppClientMetadata(envSet);
+         }
+@@ -217,17 +242,32 @@ export default function postgresAdapter(
+     };
+   }
+ 
++  // Keep normal tenant-wide revocation, expiry, and grant/session indexes. The pinned provider
++  // rejects unknown storage formats in opaque.verify(). Only this exact issuer may unwrap its
++  // opaque artifacts, including on secondary UID and user-code lookups.
++  const format = portalIssuer && 'logto-admin-portal:' + portalIssuer;
++  const read = async (lookup: ReturnType<typeof findPayloadById>) => {
++    const payload = await lookup;
++    if (!format || !payload) {
++      return payload;
++    }
++    if (payload.format !== format) {
++      return;
++    }
++    const { format: _format, ...nativePayload } = payload;
++    return nativePayload;
++  };
+   return {
+     upsert: async (id, payload, expiresIn) =>
+       upsertInstance({
+         modelName,
+         id,
+-        payload,
++        payload: format ? { ...payload, format } : payload,
+         expiresAt: addSeconds(Date.now(), expiresIn).valueOf(),
+       }),
+-    find: async (id) => findPayloadById(modelName, id),
+-    findByUserCode: async (userCode) => findPayloadByUserCode(modelName, userCode),
+-    findByUid: async (uid) => findPayloadByUid(modelName, uid),
++    find: async (id) => read(findPayloadById(modelName, id)),
++    findByUserCode: async (userCode) => read(findPayloadByUserCode(modelName, userCode)),
++    findByUid: async (uid) => read(findPayloadByUid(modelName, uid)),
+     consume: async (id) => {
+       if (await consumeInstanceById(modelName, id)) {
+         return;
+diff --git a/packages/core/src/oidc/init.ts b/packages/core/src/oidc/init.ts
+index 0e98c356d..9c3d44611 100644
+--- a/packages/core/src/oidc/init.ts
++++ b/packages/core/src/oidc/init.ts
+@@ -1,6 +1,7 @@
+ /* eslint-disable max-lines */
+ /* istanbul ignore file */
+ import assert from 'node:assert';
++import { createHmac } from 'node:crypto';
+ import { readFileSync } from 'node:fs';
+ import querystring from 'node:querystring';
+ 
+@@ -8,6 +9,7 @@ import { logtoGoogleOneTapCookieKey } from '@logto/connector-kit';
+ import { userClaims } from '@logto/core-kit';
+ import type { I18nKey } from '@logto/phrases';
+ import {
++  adminTenantId,
+   customClientMetadataDefault,
+   extraParamsObjectGuard,
+   inSeconds,
+@@ -102,9 +104,10 @@ export default function initOidc(
+   const logoutSource = readFileSync('static/html/logout.html', 'utf8');
+   const logoutSuccessSource = readFileSync('static/html/post-logout/index.html', 'utf8');
+ 
++  const prefix = tenantId === adminTenantId ? (process.env.ADMIN_CONSOLE_BASE_PATH ?? '') : '';
+   const cookieConfig = Object.freeze({
+     sameSite: 'lax',
+-    path: '/',
++    path: prefix || '/',
+     signed: true,
+     overwrite: true,
+   } as const);
+@@ -184,7 +187,11 @@ export default function initOidc(
+       ctx.body = out;
+     },
+     cookies: {
+-      keys: envSet.oidc.cookieKeys,
++      keys: prefix
++        ? envSet.oidc.cookieKeys.map((key) =>
++            createHmac('sha256', key).update(envSet.oidc.issuer).digest('base64url')
++          )
++        : envSet.oidc.cookieKeys,
+       long: cookieConfig,
+       short: cookieConfig,
+     },
+@@ -223,8 +230,8 @@ export default function initOidc(
+        */
+       dPoP: { enabled: false },
+       backchannelLogout: { enabled: true },
+-      deviceFlow: deviceFlowConfig,
+-      ...buildClientIdMetadataDocumentFeature(envSet, queries.cimd),
++      deviceFlow: prefix ? { enabled: false } : deviceFlowConfig,
++      ...(prefix ? {} : buildClientIdMetadataDocumentFeature(envSet, queries.cimd)),
+       rpInitiatedLogout: {
+         logoutSource: (ctx, form) => {
+           // eslint-disable-next-line no-template-curly-in-string
+@@ -308,6 +315,7 @@ export default function initOidc(
+             ...(isLoginPrompt && { isStepUp: isStepUpPrompt(prompt.details) }),
+           }),
+           {
++            path: prefix || '/',
+             sameSite: 'lax',
+             overwrite: true,
+             httpOnly: false,
+@@ -340,6 +348,7 @@ export default function initOidc(
+               (await isThirdPartyApplication(queries, resolvedAppId));
+ 
+             return (
++              prefix +
+               '/' +
+               buildLoginPromptUrl(
+                 shouldDropConfirmRedirect ? rest : params,
+@@ -350,7 +359,7 @@ export default function initOidc(
+           }
+ 
+           case 'consent': {
+-            return '/' + buildConsentPromptUrl(appId);
++            return prefix + '/' + buildConsentPromptUrl(appId);
+           }
+ 
+           default: {
+@@ -603,12 +612,14 @@ export default function initOidc(
+     },
+     pkce: {
+       required: (ctx, client) => {
+-        return client.clientAuthMethod !== 'client_secret_basic';
++        return Boolean(prefix) || client.clientAuthMethod !== 'client_secret_basic';
+       },
+     },
+   });
+ 
+-  installWildcardRedirectUriMatching(oidc);
++  if (!prefix) {
++    installWildcardRedirectUriMatching(oidc);
++  }
+   addOidcEventListeners(tenantId, oidc, queries, libraries.hooks.triggerEvent);
+   registerGrants(oidc, envSet, queries, libraries);
+ 
+diff --git a/packages/core/src/routes-me/tenant-invitations.ts b/packages/core/src/routes-me/tenant-invitations.ts
+index edb2ec509..2e16ae4cb 100644
+--- a/packages/core/src/routes-me/tenant-invitations.ts
++++ b/packages/core/src/routes-me/tenant-invitations.ts
+@@ -117,7 +117,10 @@ export default function tenantInvitationRoutes<T extends AuthedMeRouter>(
+       token: generateStandardSecret(),
+       expiresAt,
+     });
+-    const link = new URL(`${ossConsolePath}/accept/${id}`, EnvSet.values.adminUrlSet.endpoint);
++    const link = new URL(
++      `${process.env.ADMIN_CONSOLE_BASE_PATH ?? ''}${ossConsolePath}/accept/${id}`,
++      EnvSet.values.adminUrlSet.endpoint
++    );
+     link.searchParams.set('one_time_token', oneTimeToken.token);
+     link.searchParams.set('email', email);
+ 
+diff --git a/packages/core/src/routes/callback.ts b/packages/core/src/routes/callback.ts
+index 3349df11b..488b7fcb5 100644
+--- a/packages/core/src/routes/callback.ts
++++ b/packages/core/src/routes/callback.ts
+@@ -22,7 +22,7 @@ const parseCallbackBody = (body: unknown) =>
+     new RequestError('oidc.invalid_request')
+   );
+ 
+-function callbackRoutes<T extends Router>(router: T) {
++function callbackRoutes<T extends Router>(router: T, prefix: string) {
+   /**
+    * Sign-in Experience and Account Center share the same social callback URI, so that connectors
+    * allowing only one redirect URI (e.g. QQ) can serve both. Route by the `state` prefix, and
+@@ -35,7 +35,10 @@ function callbackRoutes<T extends Router>(router: T) {
+ 
+     if (state?.startsWith(accountCenterSocialStatePrefix)) {
+       ctx.status = 303;
+-      ctx.set('Location', getAccountCenterCallbackLocation(ctx.params.connectorId, searchParams));
++      ctx.set(
++        'Location',
++        prefix + getAccountCenterCallbackLocation(ctx.params.connectorId, searchParams)
++      );
+       return;
+     }
+ 
+@@ -48,23 +51,26 @@ function callbackRoutes<T extends Router>(router: T) {
+ 
+     ctx.status = 303;
+     if (state?.startsWith(accountCenterSocialStatePrefix)) {
+-      ctx.set('Location', getAccountCenterCallbackLocation(ctx.params.connectorId, searchParams));
++      ctx.set(
++        'Location',
++        prefix + getAccountCenterCallbackLocation(ctx.params.connectorId, searchParams)
++      );
+       return;
+     }
+ 
+-    ctx.set('Location', ctx.request.path + '?' + searchParams);
++    ctx.set('Location', prefix + ctx.request.path + '?' + searchParams);
+   });
+   router.post('/account/callback/social/:connectorId', koaBody(), async (ctx) => {
+     const data = parseCallbackBody(ctx.request.body);
+ 
+     ctx.status = 303;
+-    ctx.set('Location', ctx.request.path + '?' + new URLSearchParams(data).toString());
++    ctx.set('Location', prefix + ctx.request.path + '?' + new URLSearchParams(data).toString());
+   });
+ }
+ 
+-export const mountCallbackRouter = (app: Koa) => {
++export const mountCallbackRouter = (app: Koa, prefix = '') => {
+   const router = new Router();
+-  callbackRoutes(router);
++  callbackRoutes(router, prefix);
+ 
+   app.use(router.routes());
+ };
+diff --git a/packages/core/src/tenants/Tenant.ts b/packages/core/src/tenants/Tenant.ts
+index e2e6f02e6..1c27b035b 100644
+--- a/packages/core/src/tenants/Tenant.ts
++++ b/packages/core/src/tenants/Tenant.ts
+@@ -142,6 +142,7 @@ export default class Tenant implements TenantContext {
+     public readonly sentinel = new BasicSentinel(envSet.pool, queries)
+   ) {
+     const isAdminTenant = id === adminTenantId;
++    const adminPrefix = isAdminTenant ? (process.env.ADMIN_CONSOLE_BASE_PATH ?? '') : '';
+     const mountedApps = [
+       ...Object.values(UserApps),
+       ...(isAdminTenant ? Object.values(AdminApps) : []),
+@@ -163,8 +164,21 @@ export default class Tenant implements TenantContext {
+     // Mount OIDC
+     const provider = initOidc(id, envSet, queries, libraries, logtoConfigs, subscription);
+ 
+-    app.use(koaDeviceFlowShortcut());
+-    app.use(mount('/oidc', provider));
++    if (!adminPrefix) {
++      app.use(koaDeviceFlowShortcut());
++    }
++    // oidc-provider uses the innermost koa-mount path to generate absolute URLs.
++    if (adminPrefix) {
++      const handle = compose(provider.middleware);
++      app.use(
++        mount('/oidc', async (ctx, next) => {
++          ctx.mountPath = adminPrefix + '/oidc';
++          return handle(ctx, next);
++        })
++      );
++    } else {
++      app.use(mount('/oidc', provider));
++    }
+ 
+     const tenantContext: TenantContext = {
+       id,
+@@ -184,7 +198,7 @@ export default class Tenant implements TenantContext {
+     };
+ 
+     // Sign-in experience callback via form submission
+-    mountCallbackRouter(app);
++    mountCallbackRouter(app, adminPrefix);
+ 
+     // Mount global well-known APIs
+     app.use(mount('/.well-known', initPublicWellKnownApis(tenantContext)));
+@@ -207,7 +221,7 @@ export default class Tenant implements TenantContext {
+       // Mount Admin Console when needed
+       // Skip in multi-tenancy mode since Logto Cloud serves Admin Console in this case
+       if (!isMultiTenancy) {
+-        app.use(koaConsoleRedirectProxy(queries));
++        app.use(koaConsoleRedirectProxy(queries, adminPrefix));
+         app.use(
+           mount(
+             '/' + AdminApps.Console,
+@@ -267,6 +281,7 @@ export default class Tenant implements TenantContext {
+             mountedApps,
+             queries,
+             packagePath: UserApps.AccountCenter,
++            distribution: adminPrefix ? 'dist-admin' : 'dist',
+             port: 5004,
+             prefix: UserApps.AccountCenter,
+           }),
+@@ -279,7 +294,7 @@ export default class Tenant implements TenantContext {
+       compose([
+         koaExperienceSecurityHeaders(id, queries, mountedApps),
+         koaExperienceSsr(libraries, queries),
+-        koaSpaSessionGuard(provider, queries),
++        koaSpaSessionGuard(provider, queries, adminPrefix ? id : undefined),
+         mount(
+           `/${experience.routes.consent}`,
+           compose([
+@@ -288,7 +303,7 @@ export default class Tenant implements TenantContext {
+             koaAutoConsent(provider, envSet, queries, libraries),
+           ])
+         ),
+-        koaSpaProxy({ mountedApps, queries }),
++        koaSpaProxy({ mountedApps, queries, distribution: adminPrefix ? 'dist-admin' : 'dist' }),
+       ])
+     );
+ 
+@@ -302,7 +317,7 @@ export default class Tenant implements TenantContext {
+       // If admin URL Set is specified, consider that URL first
+       !(adminUrlSet.deduplicated().length > 0 && this.id === adminTenantId)
+         ? mount('/' + this.id, this.app)
+-        : mount(this.app);
++        : mount(adminPrefix || '/', this.app);
+   }
+ 
+   /**
+diff --git a/packages/experience/package.json b/packages/experience/package.json
+index 5ed6ddfbf..5185088d2 100644
+--- a/packages/experience/package.json
++++ b/packages/experience/package.json
+@@ -20,6 +20,7 @@
+     "test": "jest"
+   },
+   "devDependencies": {
++    "@logto/browser": "3.1.2",
+     "@cap.js/wasm": "0.0.7",
+     "@jest/types": "^29.5.0",
+     "@logto/connector-kit": "workspace:^",
+diff --git a/packages/experience/src/App.tsx b/packages/experience/src/App.tsx
+index 3b33ecf42..91866a25b 100644
+--- a/packages/experience/src/App.tsx
++++ b/packages/experience/src/App.tsx
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { MfaFactor, experience } from '@logto/schemas';
+ import { Route, Routes, BrowserRouter } from 'react-router-dom';
+ 
+@@ -73,7 +75,7 @@ handleSearchParametersData();
+ 
+ const App = () => {
+   return (
+-    <BrowserRouter>
++    <BrowserRouter basename={experienceBasePath || '/'}>
+       <PageContextProvider>
+         <SettingsProvider>
+           <UserInteractionContextProvider>
+diff --git a/packages/experience/src/apis/consent.ts b/packages/experience/src/apis/consent.ts
+index 4eb8b6fef..f7b3a48ef 100644
+--- a/packages/experience/src/apis/consent.ts
++++ b/packages/experience/src/apis/consent.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { type ConsentInfoResponse } from '@logto/schemas';
+ 
+ import api from './api';
+@@ -8,7 +10,7 @@ export const consent = async (organizationId?: string) => {
+   };
+ 
+   return api
+-    .post('/api/interaction/consent', {
++    .post(experienceBasePath + '/api/interaction/consent', {
+       json: {
+         organizationIds: organizationId && [organizationId],
+       },
+@@ -17,5 +19,5 @@ export const consent = async (organizationId?: string) => {
+ };
+ 
+ export const getConsentInfo = async () => {
+-  return api.get('/api/interaction/consent').json<ConsentInfoResponse>();
++  return api.get(experienceBasePath + '/api/interaction/consent').json<ConsentInfoResponse>();
+ };
+diff --git a/packages/experience/src/apis/experience/const.ts b/packages/experience/src/apis/experience/const.ts
+index d86b69ea1..546365034 100644
+--- a/packages/experience/src/apis/experience/const.ts
++++ b/packages/experience/src/apis/experience/const.ts
+@@ -1,4 +1,6 @@
+-export const prefix = '/api/experience';
++import { experienceBasePath } from '@/shared/utils/base-path';
++
++export const prefix = experienceBasePath + '/api/experience';
+ 
+ export const experienceApiRoutes = Object.freeze({
+   prefix,
+diff --git a/packages/experience/src/apis/settings.ts b/packages/experience/src/apis/settings.ts
+index 333dd6b37..b2f27fa2f 100644
+--- a/packages/experience/src/apis/settings.ts
++++ b/packages/experience/src/apis/settings.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ /**
+  * Used to get and general sign-in experience settings.
+  * The API will be deprecated in the future once SSR is implemented.
+@@ -27,7 +29,7 @@ const camelCase = (string: string): string =>
+ 
+ export const getSignInExperience = async <T extends SignInExperienceResponse>(): Promise<T> => {
+   return ky
+-    .get('/api/.well-known/sign-in-exp', {
++    .get(experienceBasePath + '/api/.well-known/sign-in-exp', {
+       searchParams: buildSearchParameters(
+         Object.fromEntries(
+           Object.values(searchKeys).map((key) => [camelCase(key), sessionStorage.getItem(key)])
+@@ -56,7 +58,7 @@ export const getPhrases = async ({
+         ],
+       },
+     })
+-    .get('/api/.well-known/phrases', {
++    .get(experienceBasePath + '/api/.well-known/phrases', {
+       searchParams: buildSearchParameters({
+         lng: language,
+       }),
+diff --git a/packages/experience/src/components/GoogleOneTap/index.tsx b/packages/experience/src/components/GoogleOneTap/index.tsx
+index 8a736cb09..69dffe129 100644
+--- a/packages/experience/src/components/GoogleOneTap/index.tsx
++++ b/packages/experience/src/components/GoogleOneTap/index.tsx
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { useContext } from 'react';
+ import { createPortal } from 'react-dom';
+ import { Helmet } from 'react-helmet';
+@@ -29,7 +31,7 @@ const GoogleOneTap = ({ context }: Props) => {
+           id="g_id_onload"
+           data-client_id={experienceSettings.googleOneTap.clientId}
+           data-context={context}
+-          data-login_uri={`${window.location.origin}/callback/${experienceSettings.googleOneTap.connectorId}`}
++          data-login_uri={`${window.location.origin}${experienceBasePath}/callback/${experienceSettings.googleOneTap.connectorId}`}
+           data-auto_select={Boolean(experienceSettings.googleOneTap.autoSelect)}
+           data-cancel_on_tap_outside={Boolean(experienceSettings.googleOneTap.closeOnTapOutside)}
+           data-itp_support={Boolean(experienceSettings.googleOneTap.itpSupport)}
+diff --git a/packages/experience/src/containers/SocialSignInList/use-social.ts b/packages/experience/src/containers/SocialSignInList/use-social.ts
+index 57f2d7486..f5277d0a9 100644
+--- a/packages/experience/src/containers/SocialSignInList/use-social.ts
++++ b/packages/experience/src/containers/SocialSignInList/use-social.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { SiweConnector } from '@logto/connector-kit';
+ import {
+   AgreeToTermsPolicy,
+@@ -220,7 +222,7 @@ const useSocial = () => {
+           : redirectTo;
+ 
+       getLogtoNativeSdk()?.getPostMessage()({
+-        callbackUri: `${window.location.origin}/callback/social/${connectorId}`,
++        callbackUri: `${window.location.origin}${experienceBasePath}/callback/social/${connectorId}`,
+         redirectTo: redirectUri,
+       });
+     },
+@@ -256,7 +258,7 @@ const useSocial = () => {
+       const [error, result] = await asyncInvokeSocialSignIn(
+         connectorId,
+         state,
+-        `${window.location.origin}/callback/${connectorId}`
++        `${window.location.origin}${experienceBasePath}/callback/${connectorId}`
+       );
+ 
+       if (error) {
+diff --git a/packages/experience/src/hooks/use-single-sign-on.ts b/packages/experience/src/hooks/use-single-sign-on.ts
+index 9859242c6..490a5adfd 100644
+--- a/packages/experience/src/hooks/use-single-sign-on.ts
++++ b/packages/experience/src/hooks/use-single-sign-on.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { InteractionEvent, VerificationType } from '@logto/schemas';
+ import { useCallback, useContext } from 'react';
+ 
+@@ -52,7 +54,7 @@ const useSingleSignOn = () => {
+     ).toString();
+ 
+     getLogtoNativeSdk()?.getPostMessage()({
+-      callbackUri: `${window.location.origin}/callback/social/${connectorId}`,
++      callbackUri: `${window.location.origin}${experienceBasePath}/callback/social/${connectorId}`,
+       redirectTo: redirectUri,
+     });
+   }, []);
+@@ -68,7 +70,7 @@ const useSingleSignOn = () => {
+ 
+       const [error, result] = await asyncInvokeSingleSignOn(connectorId, {
+         state,
+-        redirectUri: `${window.location.origin}/callback/${connectorId}`,
++        redirectUri: `${window.location.origin}${experienceBasePath}/callback/${connectorId}`,
+       });
+ 
+       if (error) {
+diff --git a/packages/experience/src/pages/Consent/index.tsx b/packages/experience/src/pages/Consent/index.tsx
+index a1de58b8d..6e647b696 100644
+--- a/packages/experience/src/pages/Consent/index.tsx
++++ b/packages/experience/src/pages/Consent/index.tsx
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { ReservedResource } from '@logto/core-kit';
+ import { type ConsentInfoResponse, isCimdClientId } from '@logto/schemas';
+ import { useCallback, useEffect, useMemo, useState } from 'react';
+@@ -74,7 +76,7 @@ const Consent = () => {
+     const applicationId =
+       new URLSearchParams(window.location.search).get(searchKeys.appId) ??
+       consentData?.application.id;
+-    const signOutUrl = new URL('/oidc/session/end', window.location.origin);
++    const signOutUrl = new URL(experienceBasePath + '/oidc/session/end', window.location.origin);
+ 
+     if (applicationId) {
+       signOutUrl.searchParams.set('client_id', applicationId);
+diff --git a/packages/experience/src/pages/Device/utils.ts b/packages/experience/src/pages/Device/utils.ts
+index 227783993..9c0b96238 100644
+--- a/packages/experience/src/pages/Device/utils.ts
++++ b/packages/experience/src/pages/Device/utils.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { deviceFlowXsrfCookieKey, oidcRoutes } from '@logto/schemas';
+ import type { To } from 'react-router-dom';
+ import { getCookie } from 'tiny-cookie';
+@@ -69,7 +71,7 @@ export const createDeviceFlowRequestBody = ({
+  * at app startup — the same mechanism login pages use.
+  */
+ const buildDeviceFlowSubmitUrl = (): string => {
+-  const url = new URL(deviceFlowSubmitPath, window.location.origin);
++  const url = new URL(experienceBasePath + deviceFlowSubmitPath, window.location.origin);
+ 
+   for (const snakeKey of Object.values(searchKeys)) {
+     const value = sessionStorage.getItem(snakeKey);
+diff --git a/packages/experience/src/pages/DirectSignIn/index.tsx b/packages/experience/src/pages/DirectSignIn/index.tsx
+index 641fd9c3c..0907304c2 100644
+--- a/packages/experience/src/pages/DirectSignIn/index.tsx
++++ b/packages/experience/src/pages/DirectSignIn/index.tsx
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { GoogleConnector } from '@logto/connector-kit';
+ import { useContext, useEffect, useRef } from 'react';
+ import { useParams } from 'react-router-dom';
+@@ -38,7 +40,7 @@ const DirectSignIn = () => {
+         // Redirect to the Google One Tap callback page if the social connector is Google and the logtoGoogleOneTapCookie is present (external Google One Tap).
+         if (social.target === GoogleConnector.target && logtoGoogleOneTapCookie) {
+           // eslint-disable-next-line @silverhand/fp/no-mutation
+-          window.location.href = `${window.location.origin}/callback/${experienceSettings?.googleOneTap?.connectorId}`;
++          window.location.href = `${window.location.origin}${experienceBasePath}/callback/${experienceSettings?.googleOneTap?.connectorId}`;
+           return;
+         }
+ 
+@@ -56,7 +58,7 @@ const DirectSignIn = () => {
+       }
+     }
+ 
+-    window.location.replace('/' + fallback);
++    window.location.replace(experienceBasePath + '/' + fallback);
+   }, [
+     fallback,
+     invokeSocialSignIn,
+diff --git a/packages/experience/src/pages/SocialSignInWebCallback/use-single-sign-on-listener.ts b/packages/experience/src/pages/SocialSignInWebCallback/use-single-sign-on-listener.ts
+index 3cfdc06b0..91f430b10 100644
+--- a/packages/experience/src/pages/SocialSignInWebCallback/use-single-sign-on-listener.ts
++++ b/packages/experience/src/pages/SocialSignInWebCallback/use-single-sign-on-listener.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { AgreeToTermsPolicy, SignInMode, VerificationType } from '@logto/schemas';
+ import { useCallback, useEffect, useState } from 'react';
+ import { useTranslation } from 'react-i18next';
+@@ -104,7 +106,7 @@ const useSingleSignOnListener = (connectorId: string) => {
+         connectorData: {
+           ...data,
+           // For connector validation use
+-          redirectUri: `${window.location.origin}/callback/${connectorId}`,
++          redirectUri: `${window.location.origin}${experienceBasePath}/callback/${connectorId}`,
+         },
+       });
+ 
+diff --git a/packages/experience/src/pages/SocialSignInWebCallback/use-social-sign-in-listener.ts b/packages/experience/src/pages/SocialSignInWebCallback/use-social-sign-in-listener.ts
+index 289e2a69e..b261162c6 100644
+--- a/packages/experience/src/pages/SocialSignInWebCallback/use-social-sign-in-listener.ts
++++ b/packages/experience/src/pages/SocialSignInWebCallback/use-social-sign-in-listener.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import {
+   isExternalGoogleOneTap as isExternalGoogleOneTapChecker,
+   isGoogleOneTap as isGoogleOneTapChecker,
+@@ -142,7 +144,7 @@ const useSocialSignInListener = (connectorId: string) => {
+         verificationId: verificationIdRef.current,
+         connectorData: {
+           // For validation use only
+-          redirectUri: `${window.location.origin}/callback/${connectorId}`,
++          redirectUri: `${window.location.origin}${experienceBasePath}/callback/${connectorId}`,
+           ...data,
+         },
+       });
+diff --git a/packages/experience/src/pages/SocialSignInWebCallback/use-subject-proof-callback.ts b/packages/experience/src/pages/SocialSignInWebCallback/use-subject-proof-callback.ts
+index c29543886..e655dc2ec 100644
+--- a/packages/experience/src/pages/SocialSignInWebCallback/use-subject-proof-callback.ts
++++ b/packages/experience/src/pages/SocialSignInWebCallback/use-subject-proof-callback.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { VerificationType } from '@logto/schemas';
+ import { useEffect, useState } from 'react';
+ import { useTranslation } from 'react-i18next';
+@@ -54,7 +56,7 @@ const useSubjectProofCallback = (connectorId: string, type: 'social' | 'sso') =>
+         verificationId: result.verificationId,
+         connectorData: {
+           ...rest,
+-          redirectUri: `${window.location.origin}/callback/${connectorId}`,
++          redirectUri: `${window.location.origin}${experienceBasePath}/callback/${connectorId}`,
+         },
+       };
+ 
+diff --git a/packages/experience/src/pages/SwitchAccount/index.tsx b/packages/experience/src/pages/SwitchAccount/index.tsx
+index d75d70027..dea511942 100644
+--- a/packages/experience/src/pages/SwitchAccount/index.tsx
++++ b/packages/experience/src/pages/SwitchAccount/index.tsx
+@@ -16,6 +16,7 @@ import Button from '@/shared/components/Button';
+ import DynamicT from '@/shared/components/DynamicT';
+ import LoadingLayer from '@/shared/components/LoadingLayer';
+ import PageMeta from '@/shared/components/PageMeta';
++import { experienceBasePath } from '@/shared/utils/base-path';
+ import { getBrandingLogoUrl } from '@/shared/utils/logo';
+ 
+ import styles from './index.module.scss';
+@@ -97,7 +98,7 @@ const SwitchAccount = () => {
+             text="action.back_to_current_account"
+             onClick={() => {
+               if (redirectUriOrigin) {
+-                window.location.assign(redirectUriOrigin);
++                window.location.assign(experienceBasePath || redirectUriOrigin);
+               }
+             }}
+           />
+diff --git a/packages/experience/src/shared/portal-oidc-client.ts b/packages/experience/src/shared/portal-oidc-client.ts
+new file mode 100644
+index 000000000..7c9b9af21
+--- /dev/null
++++ b/packages/experience/src/shared/portal-oidc-client.ts
+@@ -0,0 +1,41 @@
++import BrowserClient from '@logto/browser';
++
++/** Validate discovery before the native SDK uses an endpoint or verifies the ID token. */
++export default class PortalOidcClient extends BrowserClient {
++  override readonly getOidcConfig = this.withPinnedIssuer();
++
++  private withPinnedIssuer(): BrowserClient['getOidcConfig'] {
++    const discover = this.getOidcConfig.bind(this);
++    const issuer = new URL(this.logtoConfig.endpoint.replace(/\/$/, '') + '/oidc');
++    if (issuer.protocol !== 'https:' || issuer.origin !== window.location.origin) {
++      throw new Error('Invalid portal issuer');
++    }
++    return async () => {
++      const metadata = await discover();
++      if (metadata.issuer !== issuer.href) {
++        throw new Error('Unexpected portal issuer');
++      }
++      for (const value of [
++        metadata.jwksUri,
++        metadata.authorizationEndpoint,
++        metadata.tokenEndpoint,
++        metadata.revocationEndpoint,
++        metadata.userinfoEndpoint,
++        metadata.endSessionEndpoint,
++      ]) {
++        const url = new URL(value);
++        if (
++          url.origin !== issuer.origin ||
++          !url.pathname.startsWith(issuer.pathname + '/') ||
++          url.username ||
++          url.password ||
++          url.hash ||
++          url.search
++        ) {
++          throw new Error('Unexpected portal OIDC endpoint');
++        }
++      }
++      return metadata;
++    };
++  }
++}
+diff --git a/packages/experience/src/shared/utils/base-path.ts b/packages/experience/src/shared/utils/base-path.ts
+new file mode 100644
+index 000000000..e6616fa46
+--- /dev/null
++++ b/packages/experience/src/shared/utils/base-path.ts
+@@ -0,0 +1 @@
++export const experienceBasePath = process.env.ADMIN_EXPERIENCE_BASE_PATH ?? '';
+diff --git a/packages/experience/src/shared/utils/search-parameters.ts b/packages/experience/src/shared/utils/search-parameters.ts
+index 3b35ce450..468e3e482 100644
+--- a/packages/experience/src/shared/utils/search-parameters.ts
++++ b/packages/experience/src/shared/utils/search-parameters.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { condString } from '@silverhand/essentials';
+ 
+ export const searchKeysCamelCase = Object.freeze(['organizationId', 'appId', 'uiLocales'] as const);
+@@ -49,7 +51,7 @@ export const handleSearchParametersData = () => {
+   const parameters = new URLSearchParams(search);
+   // A social or SSO callback (`/callback/...?code=...`) resumes the same sign-in, so it keeps the
+   // stored `confirm_redirect_policy`.
+-  const isRedirectCallback = window.location.pathname.startsWith('/callback/');
++  const isRedirectCallback = window.location.pathname.startsWith(experienceBasePath + '/callback/');
+ 
+   // Store known search keys to the session storage and remove them from the URL to keep the URL
+   // clean.
+diff --git a/packages/experience/src/utils/social-connectors.ts b/packages/experience/src/utils/social-connectors.ts
+index 9b8c42dce..1da82df2b 100644
+--- a/packages/experience/src/utils/social-connectors.ts
++++ b/packages/experience/src/utils/social-connectors.ts
+@@ -1,3 +1,5 @@
++import { experienceBasePath } from '@/shared/utils/base-path';
++
+ import { GoogleConnector } from '@logto/connector-kit';
+ import type { ExperienceSocialConnector } from '@logto/schemas';
+ import { ConnectorPlatform, experienceSocialStatePrefix } from '@logto/schemas';
+@@ -95,7 +97,7 @@ export const storageCallbackLinkKeyPrefix = 'social_callback_data';
+ 
+ export const buildSocialLandingUri = (path: string, redirectTo: string) => {
+   const { origin } = window.location;
+-  const url = new URL(`${origin}${path}`);
++  const url = new URL(`${origin}${experienceBasePath}${path}`);
+   url.searchParams.set(SearchParameters.RedirectTo, redirectTo);
+ 
+   const callbackLink = getLogtoNativeSdk()?.callbackLink;
+diff --git a/packages/experience/vite.config.ts b/packages/experience/vite.config.ts
+index 15c111d92..4f5e63d70 100644
+--- a/packages/experience/vite.config.ts
++++ b/packages/experience/vite.config.ts
+@@ -7,6 +7,7 @@ import svgr from 'vite-plugin-svgr';
+ import { defaultConfig, manualChunks } from '../../vite.shared.config';
+ 
+ const buildConfig = (mode: string): UserConfig => ({
++  base: (process.env.ADMIN_EXPERIENCE_BASE_PATH ?? '') + '/',
+   server: {
+     port: 5001,
+     hmr: {
+@@ -35,10 +36,12 @@ const buildConfig = (mode: string): UserConfig => ({
+     // so we need to define the environment variables here.
+     'process.env': {
+       NODE_ENV: process.env.NODE_ENV,
++      ADMIN_EXPERIENCE_BASE_PATH: process.env.ADMIN_EXPERIENCE_BASE_PATH ?? '',
+       DEV_FEATURES_ENABLED: process.env.DEV_FEATURES_ENABLED,
+     },
+   },
+   build: {
++    outDir: process.env.ADMIN_EXPERIENCE_BASE_PATH ? 'dist-admin' : 'dist',
+     // Keep explicit iOS and Safari floors: "last 2 versions" moves with caniuse-lite data, which
+     // previously raised the target past Safari 16.4 and emitted syntax that blanks the sign-in
+     // page on older iOS devices (e.g. class static blocks).
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 6a59c80c6..75097975e 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -4725,6 +4725,9 @@ importers:
+ 
+   packages/experience:
+     devDependencies:
++      '@logto/browser':
++        specifier: 3.1.2
++        version: 3.1.2
+       '@cap.js/wasm':
+         specifier: 0.0.7
+         version: 0.0.7
