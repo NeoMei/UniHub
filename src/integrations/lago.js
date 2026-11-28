@@ -47,6 +47,8 @@ export async function syncOrderToLago(pool, orderId, lagoConfig = {}) {
   const headers = lagoConfig.apiKey ? { authorization: `Bearer ${lagoConfig.apiKey}` } : {};
   const baseUrl = String(lagoConfig.baseUrl).replace(/\/+$/, '');
   const unitCents = Math.round(Number(order.paid_minor) / Math.max(1, Number(order.quantity)));
+  const addOnCode = `unihub:${order.card_tier_id}`;
+  const displayName = `${order.snapshot_json?.card?.display?.name ?? order.card_tier_id} (${order.order_no})`;
   const invoicePayload = {
     invoice: {
       external_customer_id: order.account_id,
@@ -54,11 +56,11 @@ export async function syncOrderToLago(pool, orderId, lagoConfig = {}) {
       skip_psp: true,
       fees: [
         {
-          item_code: `unihub:${order.card_tier_id}`,
-          external_unique_id: order.id,
+          add_on_code: addOnCode,
+          description: order.order_no,
           units: order.quantity,
           unit_amount_cents: unitCents,
-          invoice_display_name: `${order.snapshot_json?.card?.display?.name ?? order.card_tier_id} (${order.order_no})`,
+          invoice_display_name: displayName,
         },
       ],
     },
@@ -72,7 +74,31 @@ export async function syncOrderToLago(pool, orderId, lagoConfig = {}) {
         name: `UniHub Account ${order.account_id.slice(0, 8)}`,
       },
     });
-    const invRes = await postJson(`${baseUrl}/api/v1/invoices`, 'POST', headers, invoicePayload);
+    let invRes;
+    try {
+      invRes = await postJson(`${baseUrl}/api/v1/invoices`, 'POST', headers, invoicePayload);
+    } catch (invErr) {
+      if (!(invErr instanceof Error && invErr.message.includes('add_on_not_found'))) {
+        throw invErr;
+      }
+      try {
+        await postJson(`${baseUrl}/api/v1/add_ons`, 'POST', headers, {
+          add_on: {
+            name: order.snapshot_json?.card?.display?.name ?? order.card_tier_id,
+            invoice_display_name: order.snapshot_json?.card?.display?.name ?? order.card_tier_id,
+            code: addOnCode,
+            amount_cents: Math.max(1, unitCents),
+            amount_currency: order.currency,
+            description: `UniHub catalog item ${order.card_tier_id}`,
+          },
+        });
+      } catch (addOnErr) {
+        if (!(addOnErr instanceof Error && addOnErr.message.startsWith('Lago HTTP 422'))) {
+          throw addOnErr;
+        }
+      }
+      invRes = await postJson(`${baseUrl}/api/v1/invoices`, 'POST', headers, invoicePayload);
+    }
     const lagoInvoiceId = invRes?.invoice?.lago_id ?? invRes?.invoice?.id ?? invRes?.lago_id ?? null;
     if (!lagoInvoiceId) throw new Error('Lago response missing invoice lago_id');
 
