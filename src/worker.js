@@ -35,7 +35,11 @@ export function startBackgroundWorkers(pool, {
     outbox: () => processPendingOutbox(pool, { limit: 25, lagoConfig }),
     holdReconcile: () => reconcileExpiredHolds(pool),
     creditExpire: () => expireCreditBatches(pool),
-    renewals: () => processRenewalCycle(pool, { region, currency }),
+    renewals: () => processRenewalCycle(pool, {
+      region,
+      currency,
+      lagoEnabled: Boolean(lagoConfig?.enabled && lagoConfig?.baseUrl),
+    }),
   };
 
   if (workerConfig.enabled !== false) {

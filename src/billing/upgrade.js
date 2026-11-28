@@ -3,7 +3,14 @@ import { resolveCommerceVersion } from '../commerce/versions.js';
 import { isUuid, transaction } from '../database.js';
 import { registerBatchSettledHook } from './credits.js';
 import { BillingError } from './errors.js';
-import { insertCreditBatch, mapOrder, mapSubscription, unitsForCredits } from './orders.js';
+import {
+  clearPendingCheckout,
+  enqueueLagoInvoiceSync,
+  insertCreditBatch,
+  mapOrder,
+  mapSubscription,
+  unitsForCredits,
+} from './orders.js';
 
 function jsonSafe(value) {
   return JSON.stringify(value, (_, item) => typeof item === 'bigint' ? item.toString() : item);
@@ -282,6 +289,7 @@ registerBatchSettledHook(finalizeUpgradeIfReady);
 
 export async function executePersonalUpgrade(pool, {
   accountId, userId, appId, targetTierId, targetVersionId = null, region, currency, autoRenew = false,
+  lagoEnabled = false,
 }) {
   if (!isUuid(accountId) || !isUuid(userId) || !isUuid(appId) || typeof targetTierId !== 'string') {
     throw new BillingError('invalid_upgrade_request', 400);
@@ -356,12 +364,15 @@ export async function executePersonalUpgrade(pool, {
     const { rows: [newOrder] } = await connection.query(`
       INSERT INTO commerce_orders (
         id, order_no, account_id, buyer_user_id, app_id, order_type, commerce_version_id,
-        card_tier_id, quantity, region, currency, paid_minor, snapshot_json, status
-      ) VALUES ($1, $2, $3, $4, $5, 'upgrade', $6, $7, 1, $8, $9, $10, $11::jsonb, 'fulfilled')
+        card_tier_id, quantity, region, currency, paid_minor, snapshot_json, status, lago_sync_status
+      ) VALUES ($1, $2, $3, $4, $5, 'upgrade', $6, $7, 1, $8, $9, $10, $11::jsonb, 'fulfilled', $12)
       RETURNING *`, [
       newOrderId, orderNo(), accountId, userId, appId, state.version.id,
       state.targetCard.tierId, region, currency, newPriceMinor.toString(), jsonSafe(snapshot),
+      lagoEnabled ? 'pending' : 'skipped',
     ]);
+    await clearPendingCheckout(connection, accountId);
+    await enqueueLagoInvoiceSync(connection, newOrderId, lagoEnabled);
 
     const afterPurchase = available - newPriceMinor;
     await connection.query(`

@@ -84,7 +84,7 @@ function validMember(update) {
     && ['canRecharge', 'canPurchase', 'hasSeat'].every((key) => typeof update[key] === 'boolean');
 }
 
-export function registerAccountRoutes(app, pool, auth, write, { isPlatformOperator = () => false, region, currency } = {}) {
+export function registerAccountRoutes(app, pool, auth, write, { isPlatformOperator = () => false, region, currency, allowSandboxSettle = true } = {}) {
   app.get('/api/session', auth, async (request) => {
     const context = await accountContext(pool, request.auth);
     const platformOp = isPlatformOperator(request.auth);
@@ -98,6 +98,7 @@ export function registerAccountRoutes(app, pool, auth, write, { isPlatformOperat
       ...context,
       region,
       currency,
+      allowSandboxSettle: Boolean(allowSandboxSettle),
       isPlatformOperator: platformOp,
       operatorApps,
     };

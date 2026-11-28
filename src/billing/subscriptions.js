@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { resolveCommerceVersion } from '../commerce/versions.js';
 import { isUuid, transaction } from '../database.js';
 import { BillingError } from './errors.js';
-import { insertCreditBatch, mapOrder, mapSubscription, unitsForCredits } from './orders.js';
+import { enqueueLagoInvoiceSync, insertCreditBatch, mapOrder, mapSubscription, unitsForCredits } from './orders.js';
 
 function jsonSafe(value) {
   return JSON.stringify(value, (_, item) => typeof item === 'bigint' ? item.toString() : item);
@@ -105,7 +105,7 @@ export async function quoteSeatExpansion(pool, {
 }
 
 export async function executeSeatExpansion(pool, {
-  accountId, userId, subscriptionId, deltaSeats, region, currency, now = new Date(),
+  accountId, userId, subscriptionId, deltaSeats, region, currency, now = new Date(), lagoEnabled = false,
 }) {
   if (!isUuid(accountId) || !isUuid(userId) || !isUuid(subscriptionId)
     || !Number.isSafeInteger(deltaSeats) || deltaSeats < 1) {
@@ -178,12 +178,14 @@ export async function executeSeatExpansion(pool, {
     const { rows: [createdOrder] } = await connection.query(`
       INSERT INTO commerce_orders (
         id, order_no, account_id, buyer_user_id, app_id, order_type, commerce_version_id,
-        card_tier_id, quantity, region, currency, paid_minor, snapshot_json, status
-      ) VALUES ($1, $2, $3, $4, $5, 'seat_expand', $6, $7, $8, $9, $10, $11, $12::jsonb, 'fulfilled')
+        card_tier_id, quantity, region, currency, paid_minor, snapshot_json, status, lago_sync_status
+      ) VALUES ($1, $2, $3, $4, $5, 'seat_expand', $6, $7, $8, $9, $10, $11, $12::jsonb, 'fulfilled', $13)
       RETURNING *`, [
       orderId, orderNo, accountId, userId, sub.app_id, sub.commerce_version_id,
       sub.tier_id, deltaSeats, region, currency, calc.deltaMinor.toString(), jsonSafe(snapshot),
+      lagoEnabled ? 'pending' : 'skipped',
     ]);
+    await enqueueLagoInvoiceSync(connection, orderId, lagoEnabled);
 
     const nextAvailable = available - calc.deltaMinor;
     await connection.query(
@@ -312,7 +314,7 @@ export async function setAutoRenew(pool, {
   });
 }
 
-export async function processRenewalCycle(pool, { now = new Date(), region, currency }) {
+export async function processRenewalCycle(pool, { now = new Date(), region, currency, lagoEnabled = false }) {
   const noticesSent = [];
   const monthlyGrants = [];
   const renewed = [];
@@ -458,11 +460,13 @@ export async function processRenewalCycle(pool, { now = new Date(), region, curr
       await connection.query(`
         INSERT INTO commerce_orders (
           id, order_no, account_id, buyer_user_id, app_id, order_type, commerce_version_id,
-          card_tier_id, quantity, region, currency, paid_minor, snapshot_json, status
-        ) VALUES ($1, $2, $3, $4, $5, 'renew', $6, $7, $8, $9, $10, $11, $12::jsonb, 'fulfilled')`, [
+          card_tier_id, quantity, region, currency, paid_minor, snapshot_json, status, lago_sync_status
+        ) VALUES ($1, $2, $3, $4, $5, 'renew', $6, $7, $8, $9, $10, $11, $12::jsonb, 'fulfilled', $13)`, [
         newOrderId, orderNo, sub.account_id, sub.owner_id, sub.app_id, version.id,
         targetCard.tierId, targetQuantity, region, currency, totalPrice.toString(), jsonSafe(snapshot),
+        lagoEnabled ? 'pending' : 'skipped',
       ]);
+      await enqueueLagoInvoiceSync(connection, newOrderId, lagoEnabled);
 
       const nextAvailable = available - totalPrice;
       await connection.query(

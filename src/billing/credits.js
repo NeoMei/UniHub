@@ -172,9 +172,10 @@ export async function holdCredits(pool, {
   });
 }
 
-async function closeHold(connection, holdId, requestedSettledUnits, mode) {
+async function closeHold(connection, holdId, requestedSettledUnits, mode, { accountId = null } = {}) {
   const hold = await readHold(connection, holdId, true);
   if (!hold) throw new BillingError('credit_hold_not_found', 404);
+  if (accountId && hold.account_id !== accountId) throw new BillingError('account_forbidden', 403);
   if (hold.status === 'settled' || hold.status === 'released') {
     return { hold: serializeHold(hold), duplicate: true, platformDifferenceUnits: '0' };
   }
@@ -256,14 +257,14 @@ async function closeHold(connection, holdId, requestedSettledUnits, mode) {
   };
 }
 
-export async function settleCredits(pool, { holdId, settledUnits: rawUnits }) {
+export async function settleCredits(pool, { holdId, settledUnits: rawUnits, accountId = null }) {
   const settledUnits = parseAmountMinor(rawUnits);
-  if (!settledUnits) throw new BillingError('invalid_settlement_units', 400);
-  return transaction(pool, (connection) => closeHold(connection, holdId, settledUnits, 'settle'));
+  if (settledUnits === null) throw new BillingError('invalid_settlement_units', 400);
+  return transaction(pool, (connection) => closeHold(connection, holdId, settledUnits, 'settle', { accountId }));
 }
 
-export async function releaseCredits(pool, holdId) {
-  return transaction(pool, (connection) => closeHold(connection, holdId, 0n, 'release'));
+export async function releaseCredits(pool, holdId, { accountId = null } = {}) {
+  return transaction(pool, (connection) => closeHold(connection, holdId, 0n, 'release', { accountId }));
 }
 
 export async function creditBalance(pool, { accountId, appId }) {
@@ -304,10 +305,10 @@ export async function expireCreditBatches(pool, { now = new Date() } = {}) {
         INSERT INTO credit_ledger_entries (
           id, batch_id, account_id, app_id, entry_type, delta_available_units,
           delta_held_units, delta_settled_units, delta_expired_units, ref_id, idempotency_key
-        ) VALUES ($1, $2, $3, $4, 'expire', $5, 0, 0, $6, $2::text, $7)
+        ) VALUES ($1, $2, $3, $4, 'expire', $5, 0, 0, $6, $7, $8)
         ON CONFLICT (idempotency_key) DO NOTHING`, [
         randomUUID(), batch.id, batch.account_id, batch.app_id,
-        (-units).toString(), units.toString(), `expire:${batch.id}`,
+        (-units).toString(), units.toString(), String(batch.id), `expire:${batch.id}:${randomUUID()}`,
       ]);
     }
     return { expiredBatches: expiredRows.length };

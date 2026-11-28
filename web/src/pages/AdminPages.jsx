@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { History, Plus, RefreshCw, ShieldAlert } from 'lucide-react';
-import { apiRequest, formatDateTime } from '../lib/api.js';
+import { apiRequest, formatDateTime, formatMoney } from '../lib/api.js';
 
 export function AdminAppsPage({ session }) {
   const [apps, setApps] = useState([]);
@@ -86,6 +86,9 @@ export function AdminCommercePage({ session }) {
   const [drafts, setDrafts] = useState([]);
   const [versions, setVersions] = useState([]);
   const [showVersions, setShowVersions] = useState(false);
+  const [productType, setProductType] = useState('membership');
+  const [billingCycle, setBillingCycle] = useState('monthly');
+  const [validDays, setValidDays] = useState(90);
   const [tierId, setTierId] = useState('custom_pro');
   const [priceMinor, setPriceMinor] = useState(9900);
   const [baseCredits, setBaseCredits] = useState(2000);
@@ -115,20 +118,39 @@ export function AdminCommercePage({ session }) {
 
   async function createCard(e) {
     e.preventDefault();
+    const isPack = productType === 'credit_pack';
+    const rule = isPack
+      ? { priceMinor: Number(priceMinor), packCredits: Number(baseCredits), validDays: Number(validDays), packEligibility: 'active_member' }
+      : { billingCycle, priceMinor: Number(priceMinor), baseCredits: Number(baseCredits), bonusCredits: Number(bonusCredits) };
+    const benefitText = isPack
+      ? `${validDays} 天有效期，到账 ${baseCredits} 积分`
+      : `每${billingCycle === 'yearly' ? '年按月' : '月'} ${baseCredits} + ${bonusCredits} 积分`;
     try {
       await apiRequest(`/api/admin/apps/${appId}/product-drafts`, {
         method: 'POST',
         csrf: session.csrf,
         body: {
           accountKind: kind,
-          productType: 'membership',
+          productType,
           tierId,
           tierRank: drafts.length * 10 + 10,
-          rule: { billingCycle: 'monthly', priceMinor: Number(priceMinor), baseCredits: Number(baseCredits), bonusCredits: Number(bonusCredits) },
-          display: { name: displayName, description: `${displayName} 订阅方案`, benefits: [`每月 ${baseCredits} + ${bonusCredits} 积分`] },
+          rule,
+          display: { name: displayName, description: `${displayName} ${isPack ? '积分包' : '订阅方案'}`, benefits: [benefitText] },
         },
       });
       setMsg('草稿已新建（未发布状态，不影响线上在售商品）。');
+      await loadDrafts();
+    } catch (err) {
+      setMsg(err.message);
+    }
+  }
+
+  async function deleteDraft(cardId) {
+    try {
+      await apiRequest(`/api/admin/apps/${appId}/product-drafts/${cardId}`, {
+        method: 'DELETE', csrf: session.csrf,
+      });
+      setMsg('草稿卡已删除。');
       await loadDrafts();
     } catch (err) {
       setMsg(err.message);
@@ -179,11 +201,32 @@ export function AdminCommercePage({ session }) {
         </div>
       )}
 
-      <form onSubmit={createCard} className="rounded-2xl border border-[#DEE8EC] bg-white p-5 grid gap-3 sm:grid-cols-5 items-end">
+      <form onSubmit={createCard} className="rounded-2xl border border-[#DEE8EC] bg-white p-5 grid gap-3 sm:grid-cols-4 items-end">
+        <div>
+          <label className="mb-1 block text-xs">商品类型</label>
+          <select value={productType} onChange={(e) => setProductType(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm">
+            <option value="membership">订阅会员</option>
+            <option value="credit_pack">加量积分包</option>
+          </select>
+        </div>
         <div><label className="mb-1 block text-xs">Tier ID</label><input value={tierId} onChange={(e) => setTierId(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm" required /></div>
         <div><label className="mb-1 block text-xs">对客名称</label><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm" required /></div>
-        <div><label className="mb-1 block text-xs">单价（分/美分）</label><input type="number" value={priceMinor} onChange={(e) => setPriceMinor(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm" required /></div>
-        <div><label className="mb-1 block text-xs">基础+赠送积分</label><input type="number" value={baseCredits} onChange={(e) => setBaseCredits(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm" required /></div>
+        <div><label className="mb-1 block text-xs">单价（最小货币单位）</label><input type="number" min="0" value={priceMinor} onChange={(e) => setPriceMinor(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm" required /></div>
+        <div><label className="mb-1 block text-xs">{productType === 'credit_pack' ? '包内积分' : '基础积分'}</label><input type="number" min="0" value={baseCredits} onChange={(e) => setBaseCredits(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm" required /></div>
+        {productType === 'membership' ? (
+          <>
+            <div><label className="mb-1 block text-xs">赠送积分</label><input type="number" min="0" value={bonusCredits} onChange={(e) => setBonusCredits(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm" required /></div>
+            <div>
+              <label className="mb-1 block text-xs">计费周期</label>
+              <select value={billingCycle} onChange={(e) => setBillingCycle(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm">
+                <option value="monthly">按月 (monthly)</option>
+                <option value="yearly">按年 (yearly)</option>
+              </select>
+            </div>
+          </>
+        ) : (
+          <div><label className="mb-1 block text-xs">有效天数</label><input type="number" min="1" value={validDays} onChange={(e) => setValidDays(e.target.value)} className="w-full rounded-xl border border-[#DEE8EC] px-2.5 py-1.5 text-sm" required /></div>
+        )}
         <button type="submit" className="rounded-xl bg-[#087F8C] px-4 py-2 text-sm font-semibold text-white">新增草稿卡</button>
       </form>
 
@@ -195,15 +238,21 @@ export function AdminCommercePage({ session }) {
               <span className="rounded-full bg-[#F3F8FA] px-2.5 py-0.5 text-xs font-semibold text-[#087F8C]">{c.publishStatus}</span>
             </div>
             <div className="text-xs text-[#142B35]/70">
-              A区规则：单价 {c.rule.priceMinor} 分 · 基础 {c.rule.baseCredits ?? c.rule.packCredits} 积分
+              本区定价：{formatMoney(c.rule.priceMinor, session.currency)} · {c.productType === 'credit_pack'
+                ? `积分 ${c.rule.packCredits} · ${c.rule.validDays}天`
+                : `基础 ${c.rule.baseCredits} + 赠送 ${c.rule.bonusCredits ?? 0} 积分 (${c.rule.billingCycle})`}
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button type="button" onClick={() => publishSingle(c.id, 'publish')} className="rounded-lg bg-[#087F8C] px-3 py-1.5 text-xs font-semibold text-white">
                 {c.publishStatus === 'published' ? '重新发布' : '单卡上架'}
               </button>
-              {c.publishStatus === 'published' && (
+              {c.publishStatus === 'published' ? (
                 <button type="button" onClick={() => publishSingle(c.id, 'unpublish')} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-700">
                   单卡下架
+                </button>
+              ) : (
+                <button type="button" onClick={() => deleteDraft(c.id)} className="rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-700">
+                  删除草稿
                 </button>
               )}
             </div>
@@ -215,11 +264,12 @@ export function AdminCommercePage({ session }) {
 }
 
 export function AdminPricingPage({ session }) {
+  const isUs = session.region === 'us';
   const [apps, setApps] = useState([]);
   const [appId, setAppId] = useState('');
   const [kind, setKind] = useState('personal');
   const [activeVer, setActiveVer] = useState(null);
-  const [cpc, setCpc] = useState(200);
+  const [cpc, setCpc] = useState(isUs ? 1500 : 200);
   const [msg, setMsg] = useState('');
 
   useEffect(() => {
@@ -234,10 +284,14 @@ export function AdminPricingPage({ session }) {
     if (!appId) return;
     const res = await apiRequest(`/api/admin/apps/${appId}/route-pricing?kind=${kind}`);
     setActiveVer(res.data.activeVersion);
-    if (res.data.activeVersion?.creditsPerCurrency) setCpc(res.data.activeVersion.creditsPerCurrency);
+    if (res.data.activeVersion?.creditsPerCurrency) {
+      setCpc(res.data.activeVersion.creditsPerCurrency);
+    } else {
+      setCpc(isUs ? 1500 : 200);
+    }
   }
 
-  useEffect(() => { loadPricing().catch(() => {}); }, [appId, kind]);
+  useEffect(() => { loadPricing().catch(() => {}); }, [appId, kind, isUs]);
 
   async function publishDefaultFiveRoutes() {
     try {
@@ -248,11 +302,11 @@ export function AdminPricingPage({ session }) {
           accountKind: kind,
           creditsPerCurrency: Number(cpc),
           routes: [
-            { modelId: 'text-embedding-v4', routeId: 'ali:text-embedding-v4', operation: 'embedding', unit: '1K tokens', minBillableQty: '0.04', meterVersion: 'm_ali_emb_v4', routerRateVersion: 'r_ali_v1', baseAmountDecimal: '0.0005', unihubMultiplier: '1.00' },
-            { modelId: 'gte-rerank-v2', routeId: 'ali:gte-rerank-v2', operation: 'rerank', unit: '1K tokens', minBillableQty: '0.1', meterVersion: 'm_ali_rerank_v2', routerRateVersion: 'r_ali_v1', baseAmountDecimal: '0.001', unihubMultiplier: '1.10' },
-            { modelId: 'seedream-4.0', routeId: 'volc:seedream-4.0', operation: 'image_generation', unit: '张', minBillableQty: '1', meterVersion: 'm_volc_seedream_v1', routerRateVersion: 'r_volc_v1', baseAmountDecimal: '0.20', unihubMultiplier: '1.15' },
-            { modelId: 'qwen3-vl-embedding', routeId: 'ali:qwen3-vl-embedding', operation: 'multimodal_embedding', unit: '1K tokens', minBillableQty: '0.1', meterVersion: 'm_ali_vl_emb_v1', routerRateVersion: 'r_ali_v1', baseAmountDecimal: '0.002', unihubMultiplier: '1.10' },
-            { modelId: 'paddleocr-vl', routeId: 'baidu:paddleocr-vl', operation: 'ocr_parse', unit: '页', minBillableQty: '1', meterVersion: 'm_baidu_ocr_vl_v1', routerRateVersion: 'r_baidu_v1', baseAmountDecimal: '0.03', unihubMultiplier: '1.20' },
+            { modelId: 'text-embedding-v4', routeId: 'ali:text-embedding-v4', operation: 'embedding', unit: '1K tokens', minBillableQty: '0.04', meterVersion: 'm_ali_emb_v4', routerRateVersion: 'r_ali_v1', baseAmountDecimal: isUs ? '0.00007' : '0.0005', unihubMultiplier: '1.00' },
+            { modelId: 'gte-rerank-v2', routeId: 'ali:gte-rerank-v2', operation: 'rerank', unit: '1K tokens', minBillableQty: '0.1', meterVersion: 'm_ali_rerank_v2', routerRateVersion: 'r_ali_v1', baseAmountDecimal: isUs ? '0.00014' : '0.001', unihubMultiplier: '1.10' },
+            { modelId: 'seedream-4.0', routeId: 'volc:seedream-4.0', operation: 'image_generation', unit: '张', minBillableQty: '1', meterVersion: 'm_volc_seedream_v1', routerRateVersion: 'r_volc_v1', baseAmountDecimal: isUs ? '0.03' : '0.20', unihubMultiplier: '1.15' },
+            { modelId: 'qwen3-vl-embedding', routeId: 'ali:qwen3-vl-embedding', operation: 'multimodal_embedding', unit: '1K tokens', minBillableQty: '0.1', meterVersion: 'm_ali_vl_emb_v1', routerRateVersion: 'r_ali_v1', baseAmountDecimal: isUs ? '0.00028' : '0.002', unihubMultiplier: '1.10' },
+            { modelId: 'paddleocr-vl', routeId: 'baidu:paddleocr-vl', operation: 'ocr_parse', unit: '页', minBillableQty: '1', meterVersion: 'm_baidu_ocr_vl_v1', routerRateVersion: 'r_baidu_v1', baseAmountDecimal: isUs ? '0.005' : '0.03', unihubMultiplier: '1.20' },
           ],
         },
       });
@@ -323,21 +377,24 @@ export function AdminOperationsPage({ session }) {
   const [overview, setOverview] = useState(null);
   const [recon, setRecon] = useState(null);
   const [diffs, setDiffs] = useState([]);
+  const [failedLago, setFailedLago] = useState([]);
   const [settings, setSettings] = useState([]);
   const [settingKey, setSettingKey] = useState('proxy_display_domain');
   const [settingVal, setSettingVal] = useState('gateway.unihub.example');
   const [msg, setMsg] = useState('');
 
   async function loadAll() {
-    const [ov, rc, df, st] = await Promise.all([
+    const [ov, rc, df, lg, st] = await Promise.all([
       apiRequest('/api/admin/overview'),
       apiRequest('/api/admin/billing/reconciliation'),
       apiRequest('/api/admin/platform-differences'),
+      apiRequest('/api/admin/lago/failed'),
       apiRequest('/api/admin/settings'),
     ]);
     setOverview(ov.data);
     setRecon(rc.data);
     setDiffs(df.data.differences ?? []);
+    setFailedLago(lg.data.orders ?? []);
     setSettings(st.data.settings ?? []);
   }
 
@@ -383,6 +440,26 @@ export function AdminOperationsPage({ session }) {
         <button type="button" onClick={() => runAction('/api/internal/billing/renewals/process', '订阅续费与按月发分')} className="rounded-xl border border-[#DEE8EC] bg-white px-4 py-2 text-xs font-semibold">执行续费检查</button>
         <button type="button" onClick={() => runAction('/api/internal/billing/holds/reconcile', '超期预扣巡检')} className="rounded-xl border border-[#DEE8EC] bg-white px-4 py-2 text-xs font-semibold">巡检超期预扣</button>
       </div>
+
+      {failedLago.length > 0 && (
+        <div className="rounded-2xl border border-[#DEE8EC] bg-white p-5 space-y-2">
+          <div className="text-sm font-bold">Lago 开票同步失败重试队列 ({failedLago.length})</div>
+          {failedLago.map((o) => (
+            <div key={o.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#F3F8FA] p-3 text-xs">
+              <div className="font-mono">
+                {o.orderNo} · {formatMoney(o.paidMinor, o.currency)} · {o.lastError || 'sync_failed'}
+              </div>
+              <button
+                type="button"
+                onClick={() => runAction(`/api/admin/lago/retry/${o.id}`, `重试开票 ${o.orderNo}`)}
+                className="rounded-lg bg-[#087F8C] px-3 py-1 text-xs font-semibold text-white"
+              >
+                重试开票
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <form onSubmit={saveSetting} className="rounded-2xl border border-[#DEE8EC] bg-white p-5 grid gap-3 sm:grid-cols-3 items-end">
         <div>
