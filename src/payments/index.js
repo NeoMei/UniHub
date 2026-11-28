@@ -14,6 +14,7 @@ import {
   verifyStripeWebhook,
   verifyWechatV3,
 } from './verifiers.js';
+import { createProviderCheckoutSession } from './providers.js';
 
 async function activeAccount(pool, session) {
   const { rows: [account] } = await pool.query(`
@@ -109,7 +110,21 @@ export function registerPaymentRoutes(app, pool, auth, write, { region, currency
         pendingCheckout: body.pendingCheckout ?? null,
         returnUrl: body.returnUrl ?? null,
       });
-      return reply.code(201).send({ paymentOrder: serializePayment(payment) });
+      const checkoutSession = await createProviderCheckoutSession(
+        payment.provider,
+        paymentConfig,
+        {
+          orderId: payment.id,
+          amountMinor: payment.amountMinor,
+          currency,
+          description: body.description ?? 'UniHub Wallet Recharge',
+          returnUrl: body.returnUrl ?? null,
+        },
+      );
+      return reply.code(201).send({
+        paymentOrder: serializePayment(payment),
+        ...(checkoutSession ? { checkoutSession } : {}),
+      });
     } catch (error) {
       return sendBillingError(reply, error);
     }
@@ -183,6 +198,9 @@ export function registerPaymentRoutes(app, pool, auth, write, { region, currency
   app.get('/api/billing/payment-orders/:paymentOrderId', auth, readPayment);
 
   async function settleSandbox(request, reply) {
+    if (paymentConfig?.allowSandboxSettle === false) {
+      return reply.code(403).send({ error: 'sandbox_disabled' });
+    }
     try {
       if (!isUuid(request.params.paymentOrderId)) throw new BillingError('invalid_payment_order', 400);
       const account = await activeAccount(pool, request.auth);

@@ -38,6 +38,7 @@ function renderSsrFallbackShell(context, failed) {
 export async function buildApp({
   origin, issuer, clientId, clientSecret, sessionKey, pool, region, currency, operatorSubjects = new Set(),
   paymentConfig = {}, gatewayServiceToken = '', allowedGatewayVersions, fxRates = null, lagoConfig = {},
+  routerAdminConfig = {},
 }) {
   await migrateDatabase(pool, region, currency);
   const execution = [oidc.enableNonRepudiationChecks];
@@ -102,7 +103,7 @@ export async function buildApp({
   registerCommerceRoutes(app, pool, auth, write, isPlatformOperator, { region, currency });
   registerPaymentRoutes(app, pool, auth, write, { region, currency, paymentConfig });
   registerBillingRoutes(app, pool, auth, write, isPlatformOperator, { region, currency, lagoConfig });
-  registerGatewayKeyRoutes(app, pool, auth, write, { region, currency });
+  registerGatewayKeyRoutes(app, pool, auth, write, { region, currency, routerAdminConfig });
   registerGatewayBillingRoutes(app, pool, { region, currency, gatewayServiceToken, allowedGatewayVersions, fxRates });
   registerAdminIntegrationRoutes(app, pool, auth, write, isPlatformOperator, { region, currency, lagoConfig });
 
