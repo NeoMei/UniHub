@@ -1,0 +1,16 @@
+--- a/router/main.go
++++ b/router/main.go
+@@ -8,11 +8,13 @@
+ 
+ 	"github.com/QuantumNous/new-api/common"
+ 	"github.com/QuantumNous/new-api/middleware"
++	unihub "github.com/QuantumNous/new-api/service/wanliubilling"
+ 
+ 	"github.com/gin-gonic/gin"
+ )
+ 
+ func SetRouter(router *gin.Engine, assets WebAssets) {
++	unihub.Register(router, unihub.NewClient(unihub.ConfigFromEnv()))
+ 	SetApiRouter(router)
+ 	SetDashboardRouter(router)
+ 	SetRelayRouter(router)
